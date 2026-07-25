@@ -11,15 +11,15 @@ from __future__ import annotations
 from datetime import date
 
 import numpy as np
-from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import (QComboBox, QDialog, QDialogButtonBox, QFormLayout,
-                             QHBoxLayout, QHeaderView, QLabel, QLineEdit,
-                             QMessageBox, QPushButton, QSizePolicy,
-                             QTableWidget, QTableWidgetItem, QVBoxLayout,
-                             QWidget)
+from PyQt6.QtCore import QDate, Qt
+from PyQt6.QtWidgets import (QComboBox, QDateEdit, QDialog, QDialogButtonBox,
+                             QFormLayout, QHBoxLayout, QHeaderView, QLabel,
+                             QLineEdit, QMessageBox, QPushButton, QScrollArea,
+                             QSizePolicy, QTableWidget, QTableWidgetItem,
+                             QVBoxLayout, QWidget)
 
-from ..goals import (GOAL, LOAN, POLICIES, build_plan, emergency_goal_amount,
-                     speedups, surplus_monthly, targets)
+from ..goals import (GOAL, LOAN, POLICIES, build_plan, deadline_plan,
+                     emergency_goal_amount, speedups, surplus_monthly, targets)
 from ..models import Goal
 from ..store import Store
 from ..util import fmt_money
@@ -80,6 +80,7 @@ class GoalsPage(QWidget):
         self.main = main
         self._plan = None
         self._keys: list[str] = []
+        self._split_boxes: dict = {}
         self._loading = False
 
         root = QVBoxLayout(self)
@@ -171,10 +172,27 @@ class GoalsPage(QWidget):
         cascade_card.body.addWidget(self.cascade, 1)
 
         faster_card = Card("Getting there sooner")
+        drow = QHBoxLayout()
+        drow.addWidget(QLabel("I want it by"))
+        self.by_date = QDateEdit()
+        self.by_date.setCalendarPopup(True)
+        self.by_date.setDisplayFormat("MMM yyyy")
+        self.by_date.setDate(QDate.currentDate().addMonths(12))
+        self.by_date.setToolTip(
+            "Pick a date and Doug works out what would have to give — by name.")
+        self.by_date.dateChanged.connect(lambda _d: self._render_faster())
+        drow.addWidget(self.by_date)
+        drow.addStretch(1)
+        faster_card.body.addLayout(drow)
         self.faster = QLabel("")
         self.faster.setWordWrap(True)
+        self.faster.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse)
         self.faster.setAlignment(Qt.AlignmentFlag.AlignTop)
-        faster_card.body.addWidget(self.faster, 1)
+        fscroll = QScrollArea()
+        fscroll.setWidgetResizable(True)
+        fscroll.setWidget(self.faster)
+        faster_card.body.addWidget(fscroll, 1)
 
         lower = hsplit(cascade_card, faster_card, sizes=[520, 400])
         right = vsplit(chart_card, lower, sizes=[420, 260])
@@ -228,7 +246,11 @@ class GoalsPage(QWidget):
     def _render_table(self) -> None:
         plan = self._plan
         allocs = plan.allocations
+        custom_mode = self.policy.currentData() == "custom"
+        stored = self.store.plan_allocations()
         self._keys = [a.target.key for a in allocs]
+        self._split_boxes = {}
+        self.table.clearContents()
         self.table.setRowCount(len(allocs))
         for r, a in enumerate(allocs):
             t = a.target
@@ -250,20 +272,76 @@ class GoalsPage(QWidget):
                  else "—"))
             per.setTextAlignment(Qt.AlignmentFlag.AlignRight
                                  | Qt.AlignmentFlag.AlignVCenter)
+            if custom_mode and not t.complete:
+                per = None      # replaced by a live editor below
             when = QTableWidgetItem(
                 "already met" if t.complete else
                 (a.eta.strftime("%b %Y") if a.eta else "beyond 30 yrs"))
             if a.eta is None and not t.complete:
                 when.setForeground(theme.qcolor(theme.RED))
             for c, item in enumerate((rank, name, kind, amt, prog, per, when)):
+                if item is None:
+                    continue
                 if t.complete:
                     item.setForeground(theme.qcolor(theme.MUTED))
                 self.table.setItem(r, c, item)
+            if per is None:
+                self.table.setCellWidget(r, 5, self._split_editor(t, stored))
+        self._sync_custom_note()
+
+    def _split_editor(self, target, stored: dict) -> QWidget:
+        """A live $/mo box for one rung, shown only under the custom policy."""
+        box = _money_spin(0, 1e6)
+        box.setValue(float(stored.get(target.key, 0.0)))
+        box.setToolTip(
+            "Your share for this target. The amounts are read as a ratio, not "
+            "a cap — whatever you enter is scaled to the spare income above, "
+            "so nothing is left unallocated.")
+        box.valueChanged.connect(self._custom_changed)
+        self._split_boxes[target.key] = box
+        return box
+
+    def _custom_changed(self) -> None:
+        if self._loading:
+            return
+        self.store.set_plan_allocations(
+            {k: b.value() for k, b in self._split_boxes.items()})
+        # Rebuild the plan, but not the editors: replacing the widget the user
+        # is typing into would steal focus on every keystroke.
+        self._plan = build_plan(self.store, policy="custom",
+                                surplus=self.surplus.value())
+        self._render_chart()
+        self._render_cascades()
+        self._render_faster()
+        self._sync_custom_note()
+        for r, key in enumerate(self._keys):
+            a = self._plan.by_key(key)
+            if a is None or key in self._split_boxes:
+                continue
+            item = self.table.item(r, 5)
+            if item is not None:
+                item.setText(fmt_money(a.monthly) if a.monthly > 0.005 else "—")
+
+    def _sync_custom_note(self) -> None:
+        if self.policy.currentData() != "custom":
+            self.custom_note.setText(POLICIES.get(self.policy.currentData(), ""))
+            return
+        total = sum(b.value() for b in self._split_boxes.values())
+        if total <= 0:
+            self.custom_note.setText(
+                "Set a monthly amount against each target in the Gets /mo "
+                "column. Everything at zero falls back to funding the top "
+                "target first.")
+            return
+        shares = "  ·  ".join(
+            f"{self._name_for(k)} {b.value() / total * 100:.0f}%"
+            for k, b in self._split_boxes.items() if b.value() > 0)
         self.custom_note.setText(
-            "Custom split: double-click a row to set its share, or switch to "
-            "Focus/Weighted for a suggested one."
-            if self.policy.currentData() == "custom" else
-            POLICIES.get(self.policy.currentData(), ""))
+            f"Splitting {fmt_money(self.surplus.value())}/mo as — {shares}")
+
+    def _name_for(self, key: str) -> str:
+        a = self._plan.by_key(key) if self._plan else None
+        return a.target.name if a else key
 
     def _render_chart(self) -> None:
         plan = self._plan
@@ -360,9 +438,49 @@ class GoalsPage(QWidget):
         if not rows:
             rows = ["<div style='color:#8B98A9'>Extra saving doesn't move this "
                     "one — it is already funded from the first month.</div>"]
-        tail = ("<div style='color:#8B98A9;margin-top:6px'>The Insights page "
-                "ranks where that money could come from.</div>")
-        self.faster.setText(head + "".join(rows) + tail)
+        self.faster.setText(head + "".join(rows) + self._deadline_html(focus))
+
+    def _deadline_html(self, focus) -> str:
+        """What hitting the user's chosen date would actually cost, by name."""
+        qd = self.by_date.date()
+        try:
+            dl = deadline_plan(self.store, self._plan, focus.target.key,
+                               date(qd.year(), qd.month(), 1))
+        except Exception as e:
+            return f"<div style='color:{theme.RED}'>Couldn't cost that date: {e}</div>"
+
+        head = (f"<hr style='border:none;border-top:1px solid {theme.BORDER}'>"
+                f"<div style='margin:6px 0'><b>By {dl.by.strftime('%b %Y')}</b> "
+                f"— {dl.target} needs "
+                f"<span style='color:{theme.ACCENT}'>"
+                f"{fmt_money(dl.needed_monthly)}/mo</span> for {dl.months} "
+                f"month{'s' if dl.months != 1 else ''}.</div>")
+        if dl.already_met or (dl.feasible and not dl.cuts):
+            return head + (f"<div style='color:{theme.ACCENT}'>{dl.note}</div>")
+        if not dl.feasible:
+            return head + (
+                f"<div style='color:{theme.RED};margin-bottom:4px'>"
+                f"Not reachable by then.</div>"
+                f"<div style='color:{theme.MUTED}'>{dl.note}</div>")
+
+        rows = [f"<div style='margin-bottom:4px'>Find "
+                f"<b>{fmt_money(dl.shortfall)}/mo</b> more. The smallest set of "
+                f"discretionary cuts that covers it:</div>"]
+        for c in dl.cuts:
+            tag = ("recurring" if c.recurring else
+                   "uncategorised — check this is really optional"
+                   if c.bucket == "unknown" else "spending")
+            colour = theme.AMBER if c.bucket == "unknown" else theme.TEXT
+            rows.append(
+                f"<div style='margin-bottom:3px'>· <span style='color:{colour}'>"
+                f"{c.name}</span> — {fmt_money(c.monthly)}/mo "
+                f"<span style='color:{theme.MUTED}'>({tag})</span></div>")
+        rows.append(
+            f"<div style='color:{theme.MUTED};margin-top:6px'>Only wants are "
+            f"listed. Essentials and loan payments are never proposed as cuts, "
+            f"so if the list above is short of the number, the date is out of "
+            f"reach rather than merely expensive.</div>")
+        return head + "".join(rows)
 
     # ---------------------------------------------------------------
     def _selected_key(self) -> str | None:

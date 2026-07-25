@@ -241,6 +241,19 @@ progress only once the ones above it are covered. The simulation is monthly and
 deterministic: this is a schedule to act on, and the Monte Carlo fan on the
 Forecast page already answers "what might happen".
 
+**Costing a deadline.** Naming a target month for a goal turns the question
+into an arithmetic one: the goal needs `remaining / months` per month, already
+receives some of that, and the gap has to come from somewhere. Doug answers
+with the smallest set of *named* discretionary items that covers it — the
+frivolous recurring charges and category totals, largest first — because "find
+another $196/month" is not an instruction anyone can act on and "the dining
+budget and two subscriptions" is. Essentials and loan payments are excluded by
+construction rather than ranked last: a plan that reaches a goal by cutting
+rent is not a plan. So when the wants on the table do not add up, the honest
+answer is that the date is unreachable, and that is what it says, with the size
+of the shortfall. Uncategorised spending is offered but marked, since some of
+it is certainly essential and the app does not know which.
+
 **Reproducibility.** The simulator uses a fixed RNG seed, so scenario and
 baseline runs share random draws (common random numbers). Differences you
 see between a scenario and its baseline overlay are therefore due to the
@@ -325,8 +338,12 @@ to be worth training a real model on (roughly 200 across 5+ categories);
 
 **Clearing the uncategorized pile.** A trained classifier is deliberately *not*
 the first move: training needs labels, and the pile exists because there are
-none. Three cheaper mechanisms come first, in descending order of value per
-click. (1) **Merchant clustering** — transactions collapse to far fewer
+none. The queue is scoped by default to the window the habits score actually
+reads — months are weighted `0.5^(age/3)`, so a merchant last seen three years
+ago carries about 1/256 of last month's weight and labelling it changes nothing
+you are looking at. The window is adjustable and reports what it hides; labels
+apply to every matching row however old. Within that window, three cheaper
+mechanisms come first, in descending order of value per click. (1) **Merchant clustering** — transactions collapse to far fewer
 merchants than rows, so **Transactions → Review uncategorized** ranks unlabelled
 merchants by how much labelling each is worth (total dollars, weighted toward
 recent and recurring spend); one decision fixes every past and future charge

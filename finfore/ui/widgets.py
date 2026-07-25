@@ -145,9 +145,32 @@ class MoneySpinBox(_SelectOnClickMixin, QDoubleSpinBox):
         return int(round(self.value() * (10 ** self.decimals())))
 
     def _fresh(self) -> bool:
-        """True when the whole field is selected, so typing starts over."""
-        le = self.lineEdit()
-        return bool(le.text()) and le.selectedText() == le.text()
+        """True when the whole number is selected, so typing starts over.
+
+        Compared against ``cleanText()`` — the value without prefix or suffix —
+        because ``QAbstractSpinBox.selectAll()`` deliberately leaves the ``"$ "``
+        prefix out of the selection. Comparing against the full line-edit text
+        instead meant this never returned True for a field showing money, so
+        typing into a populated field appended to the existing digits rather
+        than replacing them: clicking a balance of $71,520.00 and typing "500"
+        produced $71,520,005.00. It went unnoticed because a field sitting at
+        $0.00 gives the same answer either way, and zero is the common case.
+
+        A *pending* select also counts. The select-all is posted through a
+        zero-timer (Qt restores its own selection after focusIn, so doing it
+        inline gets undone), which leaves a window where the field has focus
+        but nothing is highlighted yet — a keystroke landing in that window
+        would append to the old value. Asking "has the reset been consumed?"
+        rather than "is the highlight painted?" closes the race.
+        """
+        if self._pending_select:
+            return True
+        sel = self.lineEdit().selectedText()
+        core = self.cleanText()
+        # Containment, not equality: selectAll() on the spin box yields just
+        # "71,520.00" while dragging across the field yields "$ 71,520.00", and
+        # both mean the same thing to the person doing it.
+        return bool(sel) and bool(core) and core in sel
 
     def _commit(self, units: int) -> None:
         self._pending_select = False

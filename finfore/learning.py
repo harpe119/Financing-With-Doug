@@ -386,12 +386,32 @@ class MerchantCluster:
         return base * (1.5 if self.is_recurring else 1.0)
 
 
+def scoring_window_months() -> int:
+    """How far back the Insights score actually looks.
+
+    Kept in step with ``insights.LOOKBACK_MONTHS`` so "only what affects my
+    score" means the same thing in both places.
+    """
+    from .insights import LOOKBACK_MONTHS
+    return int(LOOKBACK_MONTHS)
+
+
 def uncategorized_clusters(store, unknown_labels: set[str] | None = None,
-                           limit: int = 40) -> list[MerchantCluster]:
+                           limit: int = 40,
+                           months: int | None = None) -> list[MerchantCluster]:
     """Unlabelled merchants, ranked by how much labelling them would fix.
 
     This is the active-learning queue: work down it and the uncategorised total
     collapses far faster than transaction-by-transaction editing.
+
+    ``months`` restricts the queue to transactions inside a trailing window.
+    Labelling a merchant last seen three years ago is real work that changes
+    nothing the user is looking at: the habits score weights months by
+    ``0.5 ** (age / 3)``, so a charge two years old carries about 1/256 of last
+    month's. Cutting the queue to the window that actually feeds the score is
+    the difference between a few dozen decisions and a few hundred. Labels
+    still apply to every matching row, past and future — only which merchants
+    are *offered* changes.
     """
     unknown_labels = unknown_labels or {"Misc", "Other income", ""}
     tx = store.transactions()
@@ -402,6 +422,14 @@ def uncategorized_clusters(store, unknown_labels: set[str] | None = None,
         return []
     tx = tx.copy()
     tx["date"] = pd.to_datetime(tx["date"], errors="coerce")
+    if months:
+        since = (pd.Timestamp.today().normalize()
+                 - pd.DateOffset(months=int(months)))
+        # Undated rows are kept: they are a data problem, not an old merchant,
+        # and hiding them behind a date filter would make them unreachable.
+        tx = tx[tx["date"].isna() | (tx["date"] >= since)]
+        if tx.empty:
+            return []
     tx["norm_key"] = [feedback_key(d, a)
                       for d, a in zip(tx["description"], tx["amount"])]
 
@@ -477,15 +505,26 @@ def recategorize_all(store, extra: list[CategoryModel] | None = None,
     return len(updates)
 
 
-def uncategorized_summary(store) -> dict:
-    """Headline numbers for the review UI."""
-    clusters = uncategorized_clusters(store, limit=10_000)
+def uncategorized_summary(store, months: int | None = None) -> dict:
+    """Headline numbers for the review UI.
+
+    Also reports how much of the pile the window is hiding, so the filter can
+    say what it costs rather than silently shrinking the list.
+    """
+    clusters = uncategorized_clusters(store, limit=10_000, months=months)
     total = sum(c.total for c in clusters)
     top10 = sum(c.total for c in clusters[:10])
-    return {
+    out = {
         "merchants": len(clusters),
         "transactions": sum(c.n_tx for c in clusters),
         "total": total,
         "top10_share": (top10 / total) if total else 0.0,
         "with_suggestion": sum(1 for c in clusters if c.suggestion),
+        "hidden_merchants": 0,
+        "hidden_total": 0.0,
     }
+    if months:
+        every = uncategorized_clusters(store, limit=10_000)
+        out["hidden_merchants"] = max(0, len(every) - len(clusters))
+        out["hidden_total"] = max(0.0, sum(c.total for c in every) - total)
+    return out

@@ -395,3 +395,136 @@ def speedups(store, plan: Plan, amounts=(50.0, 100.0, 250.0, 500.0)
 def emergency_goal_amount(store, months: int = 3) -> float:
     """Suggested size for an emergency-fund goal, from real essential spend."""
     return round(emergency_fund_target(store, months), -1)
+
+
+# --------------------------------------------------------------------------
+# "I want it by this date — what would I have to give up?"
+# --------------------------------------------------------------------------
+@dataclass
+class Cut:
+    """One thing that could be reduced or dropped, and what it frees."""
+    name: str
+    monthly: float                # $/mo recovered if dropped entirely
+    bucket: str                   # 'frivolous' | 'unknown'
+    source: str                   # 'subscription' | 'category'
+    recurring: bool = False
+
+
+@dataclass
+class Deadline:
+    """What reaching one target by a chosen date would take."""
+    target: str
+    by: date
+    months: int
+    needed_monthly: float         # total $/mo the target must receive
+    shortfall: float              # extra $/mo beyond what it gets today
+    cuts: list[Cut] = field(default_factory=list)      # the ones that suffice
+    available: float = 0.0        # total discretionary $/mo that could be cut
+    feasible: bool = True
+    already_met: bool = False
+    note: str = ""
+
+
+def _cut_candidates(store) -> list[Cut]:
+    """Discretionary spending that could plausibly be reduced.
+
+    Only wants. Essentials — rent, groceries, insurance, medical, fuel — and
+    loan payments are deliberately excluded: a plan that reaches a goal by
+    cutting those is not a plan, it is a description of a crisis, and offering
+    it as advice would be worse than saying the date cannot be met.
+    Uncategorised spending is offered separately and flagged, because some of
+    it is certainly essential and the app simply does not know which.
+    """
+    from .categorize import categorize
+    from .insights import SUBSCRIPTION_CAT, bucket_of, category_monthly
+
+    cuts: list[Cut] = []
+    seen_recurring = 0.0
+    for it in store.recurring():
+        if not it.active or it.amount >= 0 or it.kind in ("ignore", "loan_payment"):
+            continue
+        cat = categorize(it.name, it.amount)
+        if bucket_of(cat) != "frivolous":
+            continue
+        amount = abs(it.monthly_equivalent)
+        if amount < 1.0:
+            continue
+        cuts.append(Cut(name=it.name.title(), monthly=amount,
+                        bucket="frivolous", source="subscription",
+                        recurring=True))
+        if cat == SUBSCRIPTION_CAT:
+            seen_recurring += amount
+
+    # Whole categories, minus whatever the named recurring items already cover,
+    # so a $16 streaming charge is not counted once by name and again inside
+    # "Subscriptions".
+    per_cat = category_monthly(store.transactions())
+    for cat, amount in sorted(per_cat.items(), key=lambda kv: -kv[1]):
+        b = bucket_of(cat)
+        if b not in ("frivolous", "unknown"):
+            continue
+        rest = amount - (seen_recurring if cat == SUBSCRIPTION_CAT else 0.0)
+        if rest < 5.0:
+            continue
+        cuts.append(Cut(name=cat, monthly=rest, bucket=b, source="category"))
+    cuts.sort(key=lambda c: -c.monthly)
+    return cuts
+
+
+def deadline_plan(store, plan: Plan, target_key: str, by: date) -> Deadline:
+    """What it would take to finish one target by ``by``.
+
+    Answers with named things to give up rather than a number, because "find
+    another $240/month" is not an instruction anyone can act on and "drop the
+    two streaming subscriptions and half the takeaway" is. If the wants on the
+    table do not add up, it says so plainly instead of quietly proposing a cut
+    into rent.
+    """
+    alloc = plan.by_key(target_key)
+    if alloc is None:
+        return Deadline(target="—", by=by, months=0, needed_monthly=0.0,
+                        shortfall=0.0, note="That target is no longer on the ladder.")
+    t = alloc.target
+    today = date.today().replace(day=1)
+    months = max(0, (by.year - today.year) * 12 + (by.month - today.month))
+    if t.complete:
+        return Deadline(target=t.name, by=by, months=months, needed_monthly=0.0,
+                        shortfall=0.0, already_met=True,
+                        note="Already met — nothing to find.")
+    if months <= 0:
+        return Deadline(
+            target=t.name, by=by, months=0, needed_monthly=t.remaining,
+            shortfall=t.remaining, feasible=False,
+            note="That date is this month or already past. Pick a later one.")
+
+    needed = t.remaining / months
+    # A loan keeps receiving its required payment whatever else happens.
+    current = alloc.monthly + (t.required if t.kind == LOAN else 0.0)
+    shortfall = max(0.0, needed - current)
+
+    cuts = _cut_candidates(store)
+    available = sum(c.monthly for c in cuts)
+    if shortfall <= 0.01:
+        return Deadline(target=t.name, by=by, months=months,
+                        needed_monthly=needed, shortfall=0.0, cuts=[],
+                        available=available,
+                        note="Already on track for that date at the current split.")
+
+    chosen: list[Cut] = []
+    running = 0.0
+    for c in cuts:
+        if running >= shortfall:
+            break
+        chosen.append(c)
+        running += c.monthly
+    feasible = running >= shortfall - 0.01
+    note = ""
+    if not feasible:
+        note = (f"Not reachable by then. Every discretionary item adds up to "
+                f"{available:,.0f}/mo, which is {shortfall - available:,.0f}/mo "
+                f"short — and the rest of the budget is essentials and loan "
+                f"payments, which this will not propose cutting. Push the date "
+                f"out, lower the target, or raise income.")
+    return Deadline(target=t.name, by=by, months=months, needed_monthly=needed,
+                    shortfall=shortfall, cuts=chosen, available=available,
+                    feasible=feasible, note=note)

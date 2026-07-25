@@ -970,14 +970,18 @@ def main() -> None:
     from PyQt6.QtGui import QKeyEvent as _QKE
     from PyQt6.QtCore import Qt as _Qt
 
-    def _type(spin, digits: str) -> float:
-        spin.lineEdit().selectAll()
+    def _type_raw(spin, digits: str) -> float:
+        """Send keystrokes without clearing the selection first."""
         for ch in digits:
             key = (_Qt.Key.Key_0 + int(ch) if ch.isdigit()
                    else _Qt.Key.Key_Period)
             spin.keyPressEvent(_QKE(_QKE.Type.KeyPress, key,
                                     _Qt.KeyboardModifier.NoModifier, ch))
         return spin.value()
+
+    def _type(spin, digits: str) -> float:
+        spin.selectAll()          # what focusing the field does for real
+        return _type_raw(spin, digits)
 
     _sb = _MSB(cents_entry=True)
     _sb.setRange(-1e9, 1e9)
@@ -994,11 +998,125 @@ def main() -> None:
     _sb.keyPressEvent(_QKE(_QKE.Type.KeyPress, _Qt.Key.Key_Backspace,
                            _Qt.KeyboardModifier.NoModifier, ""))
     check("backspace shifts one digit back out", abs(_sb.value() - 1.23) < 1e-9)
+
+    # The regression that shipped broken: a field already holding a value must
+    # be *replaced* by what is typed next, not appended to. It passed review
+    # because a field sitting at 0.00 behaves identically either way.
+    _sb.setValue(71_520.00)
+    check("typing into a populated field replaces it",
+          abs(_type(_sb, "500") - 5.00) < 1e-9)
+    _sb.setValue(71_520.00)
+    _sb.lineEdit().selectAll()      # drag-select, which includes the "$ " prefix
+    check("a selection including the prefix also counts as a fresh start",
+          _sb._fresh())
+    _sb.setValue(71_520.00)
+    _sb._pending_select = False
+    _sb.lineEdit().deselect()
+    check("with nothing selected, digits append rather than replace",
+          abs(_type_raw(_sb, "5") - 715_200.05) < 1e-6)
     _plain = _MSB(cents_entry=False)
     _plain.setRange(0, 100)
     _plain.setDecimals(4)
     check("cents entry is opt-in, so rate fields keep ordinary typing",
           not _plain._cents_entry)
+
+    print("costing a deadline in things to give up")
+    dstore = Store(tmp / "deadline.db")
+    dstore.add_account(Account(name="Chq", type=AccountType.CHECKING,
+                               balance=1_000.0, balance_date=_date.today()))
+    rows = []
+    base = _date.today().replace(day=1) - timedelta(days=1)
+    for m in range(6):
+        month = base - timedelta(days=30 * m)
+        for desc, amt, cat in (("SALARY", 4000.0, "Income"),
+                               ("RENT", -1400.0, "Housing"),
+                               ("SAFEWAY", -400.0, "Groceries"),
+                               ("NETFLIX", -16.0, "Subscriptions"),
+                               ("TACO BELL", -180.0, "Dining"),
+                               ("STEAM GAMES", -90.0, "Entertainment")):
+            rows.append({"account_id": 1, "date": pd.Timestamp(month),
+                         "description": desc, "amount": amt, "category": cat,
+                         "import_hash": f"dl-{m}-{desc}"})
+    dstore.add_transactions(pd.DataFrame(rows))
+    dgoal = dstore.add_goal(_Goal("New laptop", 3_000.0, "cash"))
+    dstore.set_plan_order([f"goal:{dgoal}"])
+    dplan = _G.build_plan(dstore, policy="focus", surplus=200.0)
+
+    from finfore.insights import FRIVOLOUS
+    cands = _G._cut_candidates(dstore)
+    names = {c.name.lower() for c in cands}
+    check("wants are offered as cuts",
+          any("dining" in n or "taco" in n for n in names))
+    check("no essential is ever offered as a cut",
+          not any(n in ("housing", "groceries", "debt payment") for n in names))
+    check("no cut is drawn from an essential bucket",
+          all(c.bucket in ("frivolous", "unknown") for c in cands))
+    # An unrecognised category is offered but marked, because some of it is
+    # certainly essential and the app cannot tell which — proposing it silently
+    # would be advice to cut something that might be rent.
+    check("an unrecognised category is offered only as 'unknown'",
+          all(c.bucket == "unknown"
+              for c in cands if c.name not in FRIVOLOUS))
+    check("cuts are ranked biggest first",
+          all(cands[i].monthly >= cands[i + 1].monthly
+              for i in range(len(cands) - 1)))
+
+    far = _G.deadline_plan(dstore, dplan, f"goal:{dgoal}",
+                           _date.today().replace(day=1) + timedelta(days=1460))
+    near = _G.deadline_plan(dstore, dplan, f"goal:{dgoal}",
+                            _date.today().replace(day=1) + timedelta(days=90))
+    check("a nearer date demands more per month",
+          near.needed_monthly > far.needed_monthly)
+    check("a comfortable date needs no cuts at all",
+          far.shortfall == 0.0 and not far.cuts)
+    check("a tight date is costed in named items",
+          near.cuts and all(c.name for c in near.cuts))
+    check("the proposed cuts cover the shortfall",
+          not near.feasible
+          or sum(c.monthly for c in near.cuts) >= near.shortfall - 0.01)
+    check("no more items are proposed than are needed",
+          not near.feasible or len(near.cuts) == 1
+          or sum(c.monthly for c in near.cuts[:-1]) < near.shortfall)
+
+    absurd = _G.deadline_plan(dstore, dplan, f"goal:{dgoal}",
+                              _date.today().replace(day=1) + timedelta(days=31))
+    check("an unreachable date says so rather than cutting into essentials",
+          not absurd.feasible and "Not reachable" in absurd.note)
+    check("and quantifies the gap", "short" in absurd.note)
+    check("a past date is refused",
+          not _G.deadline_plan(dstore, dplan, f"goal:{dgoal}",
+                               _date(2020, 1, 1)).feasible)
+    dstore.close()
+
+    print("uncategorized queue scoped to the scoring window")
+    from finfore.learning import (scoring_window_months, uncategorized_clusters,
+                                  uncategorized_summary)
+    from finfore.insights import LOOKBACK_MONTHS as _LB
+    check("the queue's window is the score's window",
+          scoring_window_months() == _LB)
+    wstore = Store(tmp / "window.db")
+    wstore.add_account(Account(name="Chq", type=AccountType.CHECKING,
+                               balance=500.0, balance_date=_date.today()))
+    wrows = [
+        {"account_id": 1, "date": pd.Timestamp(_date.today()) - pd.Timedelta(days=20),
+         "description": "RECENT CORNER STORE", "amount": -30.0,
+         "category": "Misc", "import_hash": "w-new"},
+        {"account_id": 1, "date": pd.Timestamp(_date.today()) - pd.Timedelta(days=1200),
+         "description": "ANCIENT MYSTERY SHOP", "amount": -80.0,
+         "category": "Misc", "import_hash": "w-old"},
+    ]
+    wstore.add_transactions(pd.DataFrame(wrows))
+    every = uncategorized_clusters(wstore, limit=100)
+    recent = uncategorized_clusters(wstore, limit=100, months=12)
+    check("both merchants show with no window", len(every) == 2)
+    check("the three-year-old merchant drops out of a 12-month window",
+          len(recent) == 1 and "RECENT" in recent[0].display)
+    summ = uncategorized_summary(wstore, months=12)
+    check("the summary says what the window is hiding",
+          summ["hidden_merchants"] == 1 and abs(summ["hidden_total"] - 80.0) < 1e-6)
+    check("an unfiltered summary hides nothing",
+          uncategorized_summary(wstore)["hidden_merchants"] == 0)
+    wstore.close()
 
     print("splash & chart floors")
     from finfore.ui.splash import DOUG_LINES, DOUG_FACTS, doug_fact

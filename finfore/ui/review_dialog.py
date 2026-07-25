@@ -14,11 +14,20 @@ from PyQt6.QtWidgets import (QComboBox, QDialog, QDialogButtonBox, QHBoxLayout,
                              QTableWidget, QTableWidgetItem, QVBoxLayout,
                              QWidget)
 
-from ..learning import (label_cluster, recategorize_all, uncategorized_clusters,
-                        uncategorized_summary)
+from ..learning import (label_cluster, recategorize_all, scoring_window_months,
+                        uncategorized_clusters, uncategorized_summary)
 from ..store import Store
 from ..util import fmt_money
 from .widgets import hint
+
+# Trailing windows the queue can be narrowed to. The default matches the span
+# the Insights habits score actually reads, because clearing the pile in order
+# to fix that score is the reason most people open this dialog.
+_WINDOWS = [("Last 3 months", 3), ("Last 6 months", 6), ("Last 12 months", 12),
+            (f"Scoring window ({scoring_window_months()} months)",
+             scoring_window_months()),
+            ("Everything", None)]
+_DEFAULT_WINDOW = 3          # index of the scoring-window entry
 
 
 class ReviewUncategorizedDialog(QDialog):
@@ -43,6 +52,24 @@ class ReviewUncategorizedDialog(QDialog):
             "is ordered by how much each decision is worth, so the top of the "
             "list clears the most. Suggested categories come from merchants you "
             "have already labelled; blank means no confident match."))
+
+        wrow = QHBoxLayout()
+        wrow.addWidget(QLabel("Only merchants seen in the"))
+        self.window = QComboBox()
+        for label, months in _WINDOWS:
+            self.window.addItem(label, months)
+        self.window.setCurrentIndex(_DEFAULT_WINDOW)
+        self.window.setToolTip(
+            "The habits score weights each month by 0.5^(age/3), so a charge "
+            "two years old counts about 1/256 of last month's. Labelling those "
+            "merchants is real work that barely moves the score. Labels you do "
+            "apply still cover every matching row, however old.")
+        self.window.currentIndexChanged.connect(self._reload)
+        wrow.addWidget(self.window)
+        wrow.addStretch(1)
+        self.hidden_note = hint("")
+        wrow.addWidget(self.hidden_note)
+        lay.addLayout(wrow)
 
         self.table = QTableWidget(0, len(self.COLS))
         self.table.setHorizontalHeaderLabels(self.COLS)
@@ -79,15 +106,24 @@ class ReviewUncategorizedDialog(QDialog):
 
     # ---------------------------------------------------------------
     def _reload(self) -> None:
-        self._clusters = uncategorized_clusters(self.store, limit=60)
-        s = uncategorized_summary(self.store)
+        months = self.window.currentData()
+        self._clusters = uncategorized_clusters(self.store, limit=60,
+                                                months=months)
+        s = uncategorized_summary(self.store, months=months)
         if s["merchants"]:
             self.summary.setText(
                 f"{s['merchants']} unlabelled merchants · {s['transactions']} "
                 f"transactions · {fmt_money(s['total'])} total — the top 10 "
                 f"merchants alone are {s['top10_share'] * 100:.0f}% of it")
+        elif months:
+            self.summary.setText("Nothing uncategorized in this window.")
         else:
             self.summary.setText("Nothing uncategorized. ")
+        self.hidden_note.setText(
+            f"{s['hidden_merchants']} older merchant"
+            f"{'s' if s['hidden_merchants'] != 1 else ''} "
+            f"({fmt_money(s['hidden_total'])}) not shown"
+            if s["hidden_merchants"] else "")
         self.table.setRowCount(len(self._clusters))
         self._boxes = []
         for r, c in enumerate(self._clusters):

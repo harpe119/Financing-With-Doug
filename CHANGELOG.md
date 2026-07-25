@@ -6,6 +6,44 @@ intended to hand to someone else. The running version is shown in the app
 header and under **Help → About**, so a downloaded copy always identifies
 itself.
 
+## 1.4.1 — entry fix, scoped review queue, custom splits
+
+- **Right-to-left amount entry was broken on any field that already held a
+  value.** Clicking a balance of $71,520.00 and typing `500` gave
+  $71,520,005.00 — the digits appended instead of replacing. The "is the whole
+  field selected?" test compared the selection against the full line-edit text,
+  but `QAbstractSpinBox.selectAll()` deliberately leaves the `"$ "` prefix out
+  of the selection, so it never matched. It shipped because a field sitting at
+  `0.00` behaves identically either way, and the tests only covered that case.
+  Now compared against `cleanText()`, and a drag-selection that *does* include
+  the prefix counts too. A second, subtler bug went with it: the select-all is
+  posted through a zero-timer, leaving a window where the field has focus but
+  nothing is highlighted — a keystroke landing there also appended. Regression
+  tests drive real `QTest` keystrokes into real dialogs rather than calling the
+  handler directly, which is what let the original slip through.
+- **Review uncategorized can be scoped to the window the score actually reads.**
+  Defaults to it. The habits score weights months by `0.5^(age/3)`, so a
+  merchant last seen three years ago carries about 1/256 of last month's weight
+  — labelling it is real work that moves nothing. The picker offers 3/6/12
+  months, the scoring window, or everything, and reports how many older
+  merchants (and how many dollars) the window is hiding. Labels still apply to
+  every matching row however old; only which merchants are *offered* changes.
+- **Custom distributions are now actually settable.** The custom policy was
+  wired through the engine and the store but had no UI, so it silently behaved
+  like focus. Selecting it puts a live $/mo box on every incomplete rung; the
+  amounts are read as a ratio rather than a cap, so the whole spare pool is
+  always allocated, and the note shows the resulting percentages.
+- **"Getting there sooner" now answers a date with named things to give up.**
+  Pick a target month and Doug works out what the goal must receive per month,
+  what it already gets, and the smallest set of discretionary items that covers
+  the gap — "Dining $180/mo, Subscriptions $16/mo" rather than "find another
+  $196". Only wants are ever proposed: essentials and loan payments are
+  excluded by construction, so if the listed cuts fall short the answer is that
+  the date is out of reach, said plainly and with the size of the gap, rather
+  than a suggestion to cut into rent. Unrecognised categories are offered but
+  flagged, because some of that is certainly essential and the app cannot tell
+  which.
+
 ## 1.4.0 — the goal ladder
 
 - **New Goals page: one priority ladder over debts *and* savings goals.** The
