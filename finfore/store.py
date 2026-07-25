@@ -71,6 +71,33 @@ CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+-- One row per import: the state of things, and the projection being made at
+-- that moment. The forecast is stored rather than recomputed because a
+-- projection refitted later with the outcome already in the data is not a
+-- prediction, and the score is stored because it is recency-weighted and
+-- therefore cannot be reconstructed for a past date once newer months exist.
+CREATE TABLE IF NOT EXISTS checkpoints (
+    id INTEGER PRIMARY KEY,
+    when_date TEXT NOT NULL,
+    label TEXT NOT NULL DEFAULT '',
+    n_transactions INTEGER NOT NULL DEFAULT 0,
+    latest_tx TEXT,
+    networth REAL NOT NULL DEFAULT 0,
+    cash REAL NOT NULL DEFAULT 0,
+    investments REAL NOT NULL DEFAULT 0,
+    debt REAL NOT NULL DEFAULT 0,
+    score REAL,
+    grade TEXT NOT NULL DEFAULT '',
+    fesr REAL,
+    savings_rate REAL,
+    income REAL NOT NULL DEFAULT 0,
+    spending REAL NOT NULL DEFAULT 0,
+    essential REAL NOT NULL DEFAULT 0,
+    frivolous REAL NOT NULL DEFAULT 0,
+    unknown REAL NOT NULL DEFAULT 0,
+    forecast TEXT NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS idx_checkpoints_when ON checkpoints(when_date);
 -- Every manual re-categorisation the user makes. This is the labelled corpus
 -- a classifier will train on later; it is deliberately append-only and keeps
 -- the raw description (not just the normalised key) so richer features can be
@@ -510,6 +537,53 @@ class Store:
         self.set_setting("plan_allocations",
                          {str(k): float(v) for k, v in alloc.items()})
 
+    # ---------------- checkpoints ----------------
+    _CP_COLS = ("when_date", "label", "n_transactions", "latest_tx", "networth",
+                "cash", "investments", "debt", "score", "grade", "fesr",
+                "savings_rate", "income", "spending", "essential", "frivolous",
+                "unknown", "forecast")
+
+    def add_checkpoint(self, cp) -> int:
+        vals = (cp.when.isoformat(), cp.label, int(cp.n_transactions),
+                cp.latest_tx.isoformat() if cp.latest_tx else None,
+                cp.networth, cp.cash, cp.investments, cp.debt, cp.score,
+                cp.grade, cp.fesr, cp.savings_rate, cp.income, cp.spending,
+                cp.essential, cp.frivolous, cp.unknown,
+                json.dumps(cp.forecast or {}))
+        cur = self.con.execute(
+            f"INSERT INTO checkpoints ({','.join(self._CP_COLS)}) "
+            f"VALUES ({','.join('?' * len(self._CP_COLS))})", vals)
+        self.con.commit()
+        cp.id = cur.lastrowid
+        return cp.id
+
+    def checkpoints(self) -> list:
+        """Every checkpoint, oldest first."""
+        from .progress import Checkpoint
+        rows = self.con.execute(
+            "SELECT * FROM checkpoints ORDER BY when_date, id").fetchall()
+        out = []
+        for r in rows:
+            try:
+                fc = json.loads(r["forecast"] or "{}")
+            except (TypeError, ValueError):
+                fc = {}
+            out.append(Checkpoint(
+                id=r["id"], when=_d(r["when_date"]), label=r["label"],
+                n_transactions=r["n_transactions"],
+                latest_tx=_d(r["latest_tx"]) if r["latest_tx"] else None,
+                networth=r["networth"], cash=r["cash"],
+                investments=r["investments"], debt=r["debt"], score=r["score"],
+                grade=r["grade"], fesr=r["fesr"],
+                savings_rate=r["savings_rate"], income=r["income"],
+                spending=r["spending"], essential=r["essential"],
+                frivolous=r["frivolous"], unknown=r["unknown"], forecast=fc))
+        return out
+
+    def delete_checkpoint(self, checkpoint_id: int) -> None:
+        self.con.execute("DELETE FROM checkpoints WHERE id=?", (checkpoint_id,))
+        self.con.commit()
+
     # ---------------- misc ----------------
     def set_setting(self, key: str, value) -> None:
         self.con.execute(
@@ -525,7 +599,7 @@ class Store:
 
     def clear_all(self) -> None:
         for t in ("snapshots", "transactions", "recurring", "goals", "accounts",
-                  "settings", "category_feedback", "events"):
+                  "settings", "category_feedback", "events", "checkpoints"):
             self.con.execute(f"DELETE FROM {t}")
         self.con.commit()
 

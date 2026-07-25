@@ -69,9 +69,17 @@ def reimport_with_saved_mapping(store: Store, account_id: int,
     return import_with_config(store, cfg)
 
 
-def refresh_derived(store: Store) -> int:
+def refresh_derived(store: Store, checkpoint: bool = True,
+                    label: str = "") -> int:
     """Re-run transfer pairing + recurring detection over the full ledger.
-    Preserves user overrides on recurring items. Returns pattern count."""
+    Preserves user overrides on recurring items. Returns pattern count.
+
+    Also records a checkpoint, unless told not to. This has to happen here
+    rather than on the Progress page, because the two things worth comparing
+    later — the score and the projection — are both recency-weighted and cannot
+    be reconstructed for a past date once newer months exist. A projection is
+    only a claim if it is written down before the outcome is known.
+    """
     tx = store.transactions()
     if tx.empty:
         return 0
@@ -86,4 +94,13 @@ def refresh_derived(store: Store) -> int:
     items = detect(tx)
     store.merge_recurring(items)
     auto_link_loans(store)
+    if checkpoint:
+        try:
+            from .progress import capture, should_capture
+            if should_capture(store):
+                capture(store, label=label)
+        except Exception:
+            # A checkpoint is a nicety; failing to take one must never cost the
+            # user the import they actually asked for.
+            pass
     return len(store.recurring())

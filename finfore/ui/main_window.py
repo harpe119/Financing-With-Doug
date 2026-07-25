@@ -17,6 +17,7 @@ from .forecast_page import ForecastPage
 from .goals_page import GoalsPage
 from .insights_page import InsightsPage
 from .import_dialog import ImportDialog
+from .progress_page import ProgressPage
 from .recurring import RecurringPage
 from .transactions import TransactionsPage
 
@@ -100,7 +101,7 @@ class MainWindow(QMainWindow):
         self.nav.setObjectName("nav")
         self.nav.setFixedWidth(184)
         for name in ("Dashboard", "Accounts", "Transactions", "Recurring",
-                     "Insights", "Goals", "Forecast"):
+                     "Insights", "Goals", "Forecast", "Progress"):
             self.nav.addItem(name)
         self.stack = QStackedWidget()
         # Ignored: take whatever room is going, and do not report a size hint
@@ -116,6 +117,7 @@ class MainWindow(QMainWindow):
             InsightsPage(store, self),
             GoalsPage(store, self),
             ForecastPage(store, self),
+            ProgressPage(store, self),
         ]
         for p in self.pages:
             p.setSizePolicy(QSizePolicy.Policy.Ignored,

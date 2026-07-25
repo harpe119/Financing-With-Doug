@@ -245,6 +245,40 @@ progress only once the ones above it are covered. The simulation is monthly and
 deterministic: this is a schedule to act on, and the Monte Carlo fan on the
 Forecast page already answers "what might happen".
 
+**Progress over time.** Every import records a *checkpoint*: the balance sheet,
+the habits score with its components, and the forecast fan as it stood at that
+moment. All three are unrecoverable after the fact — the score is
+recency-weighted and so cannot be recomputed for a past date once newer months
+exist, and a projection refitted later with the outcome already in the data is
+not a prediction. Writing the claim down before the answer is known is the only
+way the model can be caught being wrong.
+
+The Progress page then draws an old fan against what actually happened, and
+reports the share of days that landed inside the 80% and 50% bands. Those are
+the numbers to read: a well-calibrated forecast should sit near 80% and 50%.
+Much higher means it was too timid; much lower means it was overconfident. Cash
+that ends outside the band entirely is flagged in either direction, because a
+projection your behaviour broke is more informative than one it satisfied.
+
+**Is the change real?** Weekly discretionary spending before a checkpoint is
+compared with after by a **permutation test**: reshuffle which weeks belong to
+which period 20,000 times and ask how often chance alone produces a gap this
+large. Permutation rather than Welch's *t* because it assumes only
+exchangeability — weekly spend is right-skewed with an occasional very large
+week, which is exactly the shape that makes a *t*-test's p-value fiction at
+$n = 8$. Recurring bills are excluded: a rent rise is not a change of habit, and
+its fixed monthly timing would violate the independence the test needs.
+
+Beside the p-value sits a bootstrap 95% interval on the dollar difference,
+because that is the number that answers the question — a p-value says only
+"distinguishable from noise", the interval says how much and how sure. A
+non-significant result is **never** reported as "no change"; it reports instead
+the smallest shift this many weeks could have resolved, so *"it may not feel
+like I improved, but I did"* stays distinguishable from *"there isn't enough
+data yet."* Per-category movement is shown but deliberately untested: twenty
+categories at 5% yields a false positive every run, and printing that beside a
+real finding would undermine the one defensible number on the page.
+
 **Costing a deadline.** Naming a target month for a goal turns the question
 into an arithmetic one: the goal needs `remaining / months` per month, already
 receives some of that, and the gap has to come from somewhere. Doug answers
@@ -386,6 +420,7 @@ finfore/
   categorize.py           keyword rules + internal-transfer pairing
   insights.py             taxonomy, habits score, composition, suggestions
   goals.py                priority ladder over debts + goals, snowball cascade
+  progress.py             checkpoints, path adherence, permutation test
   learning.py             correction capture, merchant clustering, similarity, ML seam
   recurrence.py           normalization, cadence classification, occurrences
   history.py              balance reconstruction and headline statistics

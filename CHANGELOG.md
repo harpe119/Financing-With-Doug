@@ -6,6 +6,53 @@ intended to hand to someone else. The running version is shown in the app
 header and under **Help → About**, so a downloaded copy always identifies
 itself.
 
+## 1.6.0 — Progress: was the forecast right, and did anything improve?
+
+Every other page answers a question about *now*. This one is about the gap
+between two nows, which is the only place the app can be caught being wrong and
+the only place a slow improvement becomes visible.
+
+- **Checkpoints, recorded automatically on every import.** Each one stores the
+  balance sheet, the habits score and its components, and — the part that
+  matters — **the forecast fan as it stood at that moment**. None of this is
+  recoverable after the fact: the score is recency-weighted, so it cannot be
+  recomputed for a past date once newer months exist, and a projection refitted
+  later with the outcome already in the data is not a prediction. A projection
+  is only a claim if you write it down before you know the answer.
+- **Then-and-now chart.** The old fan, drawn against what actually happened
+  since. Reports what share of days landed inside the 80% and 50% bands, and
+  says plainly what that means: a well-calibrated forecast should be near 80%
+  and 50% — much higher and it was too timid, much lower and it was
+  overconfident. Cash that ends up outside the band entirely is called *off the
+  map*, in either direction, because that is the interesting case.
+- **Is the change real, or is it noise?** A permutation test on weekly
+  discretionary spending, before the checkpoint against after. Twenty thousand
+  reshuffles of which weeks belong to which period, asking how often chance
+  alone produces a gap this large. A permutation test rather than a t-test
+  because it assumes only exchangeability — weekly spend is right-skewed with
+  the occasional very large week, exactly the shape that makes a t-test's
+  p-value fiction at n = 8. Recurring bills are excluded: a rent rise is not a
+  change of habit, and its monthly timing would break the independence the test
+  needs.
+  - Reported alongside is a **bootstrap confidence interval on the dollar
+    difference**, which is the number that actually answers the question. A
+    p-value only says "distinguishable from noise"; the interval says how much,
+    and how sure.
+  - **A non-significant result is never reported as "no change."** That is the
+    classic error and it would be the wrong answer to the exact question this
+    page exists for. It says instead how large a shift this many weeks could
+    have detected at all — so "it may not feel like I improved, but I did" and
+    "there isn't enough data to tell yet" stay distinguishable.
+  - Per-category movement is shown but explicitly **not** tested. Twenty
+    categories at 5% yields a false positive every run, and presenting that
+    beside a real finding would undermine the one defensible number here.
+- **Score history** across every checkpoint, and a table of them all.
+- Under the hood: `finfore/progress.py`, a `checkpoints` table, and capture
+  wired into `refresh_derived`, throttled so re-importing the same export twice
+  in an afternoon doesn't create two checkpoints a day apart in name only.
+  Statistics run on numpy alone — scipy is in the bundle exclude list, and a
+  permutation test needs no special functions anyway.
+
 ## 1.5.0 — "Explain me"
 
 - **An explainer video on the Forecast page.** The fan is the least

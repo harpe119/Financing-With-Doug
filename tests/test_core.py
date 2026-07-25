@@ -20,7 +20,7 @@ import pandas as pd
 from finfore.categorize import pair_transfers
 from finfore.demo import SAMPLE_DIR, load_demo
 from finfore.forecast import run_forecast
-from finfore.history import cash_history
+from finfore.history import cash_history, networth_history
 from finfore.ingest import guess_mapping, read_raw, sniff_delimiter
 from finfore.models import Account, AccountType, RecurringItem, Scenario
 from finfore.pipeline import import_csv
@@ -1147,6 +1147,157 @@ def main() -> None:
                  / "packaging" / "doug.spec").read_text(encoding="utf-8")
     check("the spec bundles assets/ so the video survives a build",
           "assets" in _spec_txt)
+
+    print("progress: checkpoints, path adherence, significance")
+    from finfore import progress as _P
+
+    def _ledger(before, after, cut_weeks=10, weeks=30, seed=3):
+        rng = np.random.default_rng(seed)
+        s = Store(Path(tempfile.mkdtemp()) / "p.db")
+        s.add_account(Account(name="Chq", type=AccountType.CHECKING,
+                              balance=6000.0, balance_date=_date.today()))
+        rws, start = [], _date.today() - timedelta(weeks=weeks)
+        cut = _date.today() - timedelta(weeks=cut_weeks)
+        for w in range(weeks):
+            wk = start + timedelta(weeks=w)
+            rws.append({"account_id": 1, "date": pd.Timestamp(wk),
+                        "description": "PAYROLL", "amount": 1200.0,
+                        "category": "Income", "import_hash": f"i{w}"})
+            base = before if wk < cut else after
+            for d in range(4):
+                rws.append({"account_id": 1,
+                            "date": pd.Timestamp(wk + timedelta(days=d + 1)),
+                            "description": f"SHOP {d}",
+                            "amount": -abs(float(rng.normal(base / 4, base / 14))),
+                            "category": "Dining" if d % 2 else "Shopping",
+                            "import_hash": f"s{w}-{d}"})
+        s.add_transactions(pd.DataFrame(rws))
+        return s, cut
+
+    pstore, pcut = _ledger(200.0, 120.0)
+    pcp = _P.capture(pstore, label="t", horizon_days=180, n_paths=120)
+    check("a checkpoint records the score and balance sheet",
+          pcp.score is not None and pcp.cash != 0.0)
+    check("a checkpoint stores the projection being made at the time",
+          pcp.has_forecast)
+    _fan = pcp.forecast_frame()
+    check("the stored fan reads back with all five percentiles",
+          _fan is not None
+          and set(_fan.columns) == {"p10", "p25", "p50", "p75", "p90"})
+    check("its percentiles are ordered everywhere",
+          bool((_fan["p10"] <= _fan["p50"]).all()
+               and (_fan["p50"] <= _fan["p90"]).all()))
+    check("it round-trips through SQLite",
+          len(pstore.checkpoints()) == 1
+          and pstore.checkpoints()[0].has_forecast)
+    check("a same-day re-import does not stack another checkpoint",
+          not _P.should_capture(pstore))
+
+    _sig = _P.significance_since(pstore, _P.Checkpoint(when=pcut))
+    check("a real spending drop is detected",
+          _sig.enough_data and _sig.diff < 0)
+    check("and called significant", _sig.significant)
+    check("and labelled an improvement", _sig.direction == "improved")
+    check("its confidence interval excludes zero", _sig.ci_high < 0)
+    check("the interval brackets the point estimate",
+          _sig.ci_low <= _sig.diff <= _sig.ci_high)
+
+    _rise, _rcut = _ledger(120.0, 220.0, seed=5)
+    _s3 = _P.significance_since(_rise, _P.Checkpoint(when=_rcut))
+    check("a real rise is called significant and worsening",
+          _s3.significant and _s3.direction == "worsened")
+
+    # The test must not manufacture findings. On identical distributions it
+    # should reject at roughly the nominal 5%, and it must never dress a
+    # non-result up as proof that nothing changed.
+    _rng = np.random.default_rng(0)
+    _fp = sum(1 for t in range(40)
+              if _P.compare_periods(_rng.normal(200, 45, 14),
+                                    _rng.normal(200, 45, 14),
+                                    seed=t).significant)
+    check(f"false positives stay near 5% on identical data ({_fp}/40)",
+          _fp <= 8)
+    _null = _P.compare_periods(np.full(10, 200.0) + _rng.normal(0, 30, 10),
+                               np.full(10, 200.0) + _rng.normal(0, 30, 10),
+                               seed=1)
+    check("a null result is not reported as proof of no change",
+          "not evidence nothing happened" in _null.note)
+    check("a null result quotes the minimum detectable effect",
+          _null.detectable > 0)
+    check("too few weeks refuses to test at all",
+          not _P.compare_periods(np.array([1.0, 2.0, 3.0]),
+                                 np.array([1.0, 2.0, 3.0])).enough_data)
+    _a, _b = _rng.normal(200, 40, 12), _rng.normal(140, 40, 12)
+    check("identical inputs and seed give an identical p-value",
+          _P.compare_periods(_a, _b, seed=1).p_value
+          == _P.compare_periods(_a, _b, seed=1).p_value)
+
+    def _fan_cp(store_, days_back=60, offset=0.0, width=900.0):
+        _h = networth_history(store_)
+        anchor = float(_h["cash"].iloc[-1])
+        made = _date.today() - timedelta(days=days_back)
+        ds = [made + timedelta(days=i) for i in range(days_back + 120)]
+        mid = np.linspace(anchor - offset - 200, anchor - offset + 200, len(ds))
+        c = _P.Checkpoint(when=made)
+        c.forecast = {"dates": [d.isoformat() for d in ds],
+                      "p10": list(mid - width), "p25": list(mid - width / 2),
+                      "p50": list(mid), "p75": list(mid + width / 2),
+                      "p90": list(mid + width)}
+        return c
+
+    check("a projection with no elapsed time yet cannot be scored",
+          _P.check_path(pstore, pcp) is None)
+    _chk = _P.check_path(pstore, _fan_cp(pstore))
+    check("a projection made in the past is scored against reality",
+          _chk is not None)
+    check("coverage figures are proper fractions",
+          0.0 <= _chk.inside_80 <= 1.0 and _chk.inside_50 <= _chk.inside_80 + 1e-9)
+    _above = _P.check_path(pstore, _fan_cp(pstore, offset=40_000.0, width=500.0))
+    check("cash far above the old fan is reported as off the map",
+          _above.status == "broken" and _above.inside_80 < 0.5)
+    _below = _P.check_path(pstore, _fan_cp(pstore, offset=-40_000.0, width=500.0))
+    check("cash far below it is also off the map", _below.status == "broken")
+    check("percentile placement stays within 0-100 either side",
+          0 <= _above.percentile_now <= 100 and 0 <= _below.percentile_now <= 100)
+    check("above the band ranks higher than below it",
+          _above.percentile_now > _below.percentile_now)
+
+    _mv = _P.score_move(_P.Checkpoint(when=_date.today(), score=4.0, grade="D"),
+                        _P.Checkpoint(when=_date.today(), score=6.5, grade="B"))
+    check("a score rise is flagged as an improvement",
+          _mv.improved and abs(_mv.delta - 2.5) < 1e-9)
+    check("the grade change is narrated", "D" in _mv.note and "B" in _mv.note)
+    check("a score fall is not flagged as improvement",
+          not _P.score_move(
+              _P.Checkpoint(when=_date.today(), score=6.5, grade="B"),
+              _P.Checkpoint(when=_date.today(), score=4.0, grade="D")).improved)
+
+    _shifts = _P.category_shifts(pstore, _P.Checkpoint(when=pcut), top=4)
+    check("category attribution is ordered by size of move",
+          _shifts and all(abs(_shifts[i].diff) >= abs(_shifts[i + 1].diff)
+                          for i in range(len(_shifts) - 1)))
+    pstore.close()
+    _rise.close()
+
+    _auto = Store(Path(tempfile.mkdtemp()) / "auto.db")
+    _auto.add_account(Account(name="Chq", type=AccountType.CHECKING,
+                              balance=500.0, balance_date=_date.today()))
+    _auto.add_transactions(pd.DataFrame([
+        {"account_id": 1,
+         "date": pd.Timestamp(_date.today() - timedelta(days=i * 3)),
+         "description": "SHOP", "amount": -25.0, "category": "Dining",
+         "import_hash": f"a{i}"} for i in range(40)]))
+    from finfore.pipeline import refresh_derived as _rd
+    _rd(_auto)
+    check("importing records a checkpoint automatically",
+          len(_auto.checkpoints()) == 1)
+    _rd(_auto)
+    check("a second import moments later does not stack another",
+          len(_auto.checkpoints()) == 1)
+    _rd(_auto, checkpoint=False)
+    check("automatic capture can be switched off",
+          len(_auto.checkpoints()) == 1)
+    _auto.close()
 
     print("splash & chart floors")
     from finfore.ui.splash import DOUG_LINES, DOUG_FACTS, doug_fact
