@@ -144,6 +144,115 @@ def capture(store: Store, label: str = "", horizon_days: int = 365,
     return cp
 
 
+def capture_as_of(store: Store, when: date, label: str = "",
+                  horizon_days: int = 365, n_paths: int = 200,
+                  with_forecast: bool = True) -> Checkpoint | None:
+    """Record the checkpoint that *would* have been taken on a past date.
+
+    Every figure is computed from data that existed then, by the same three
+    exclusions the backtest makes: recurring patterns are re-detected from
+    transactions on or before the date rather than reusing today's (which were
+    fitted knowing how the period turned out), the behavioural bootstrap is
+    truncated the same way, and starting cash comes from the reconstructed
+    history rather than today's balance. The score is recomputed from the
+    truncated ledger, where the recency weighting anchors on the newest month
+    that existed rather than on this one.
+
+    That care matters because a backfilled checkpoint is indistinguishable from
+    a real one once stored. A retroactive "projection" built with hindsight
+    would make the Progress page report the model as far better than it is,
+    which is the one thing that page exists to prevent.
+    """
+    from .forecast import run_forecast
+    from .insights import essential_monthly
+    from .recurrence import detect
+
+    ts = pd.Timestamp(when)
+    tx = store.transactions()
+    past = tx[tx["date"] <= ts] if not tx.empty else tx
+    if len(past) < 20:
+        return None
+
+    agg = monthly_aggregates(past)
+    sc = spending_score(agg) if agg is not None else None
+
+    hist = networth_history(store)
+    row = None
+    if not hist.empty:
+        upto = hist[hist.index <= ts]
+        if not upto.empty:
+            row = upto.iloc[-1]
+
+    cp = Checkpoint(
+        when=when, label=label, n_transactions=int(len(past)),
+        latest_tx=(past["date"].max().date()
+                   if not past.empty and past["date"].notna().any() else None),
+        networth=float(row["networth"]) if row is not None else 0.0,
+        cash=float(row["cash"]) if row is not None else 0.0,
+        investments=float(row["investments"]) if row is not None else 0.0,
+        debt=float(row["debt"]) if row is not None else 0.0,
+        score=(float(sc.value) if sc else None),
+        grade=(sc.letter if sc else ""),
+        fesr=(float(sc.fesr) if sc else None),
+        savings_rate=(float(agg.savings_rate)
+                      if agg is not None and agg.savings_rate is not None else None),
+        income=(float(agg.income) if agg else 0.0),
+        spending=(float(agg.spending) if agg else 0.0),
+        essential=(float(agg.essential) if agg else 0.0),
+        frivolous=(float(agg.frivolous) if agg else 0.0),
+        unknown=(float(agg.unknown) if agg else 0.0),
+    )
+
+    if with_forecast and store.accounts():
+        try:
+            items = detect(past)
+            ess = essential_monthly(store)
+            res = run_forecast(store, horizon_days, n_paths, as_of=when,
+                               recurring_override=items,
+                               emergency_target=max(0.0, ess * 3),
+                               essential_monthly=ess)
+            cp.forecast = {
+                "dates": [d.isoformat() for d in res.dates],
+                **{f"p{p}": [float(v) for v in res.cash_pct[p]]
+                   for p in (10, 25, 50, 75, 90)},
+                "horizon_days": horizon_days,
+            }
+        except Exception:
+            cp.forecast = {}
+    store.add_checkpoint(cp)
+    return cp
+
+
+def backfill(store: Store, n: int = 4, spacing_days: int = 60,
+             n_paths: int = 200, label: str = "backfilled") -> int:
+    """Reconstruct checkpoints a ledger should already have had.
+
+    Someone importing a couple of years of history on their first run has all
+    the data needed for the Progress page and none of the checkpoints, and
+    would otherwise wait months for it to say anything. Each reconstructed
+    point is built only from data that existed at its own date, so the
+    calibration figures it later produces stay honest.
+
+    Existing checkpoints are never duplicated: a date already covered is
+    skipped rather than written twice.
+    """
+    tx = store.transactions()
+    if tx.empty or tx["date"].notna().sum() < 30:
+        return 0
+    first = tx["date"].min().date()
+    today = date.today()
+    have = {c.when for c in store.checkpoints()}
+    made = 0
+    for k in range(n, 0, -1):
+        when = today - timedelta(days=spacing_days * k)
+        if when <= first + timedelta(days=45) or when in have:
+            continue          # too little history behind it to mean anything
+        if capture_as_of(store, when, label=label, n_paths=n_paths) is not None:
+            made += 1
+            have.add(when)
+    return made
+
+
 def should_capture(store: Store, min_days: int = 3,
                    min_new_tx: int = 5) -> bool:
     """Is a new checkpoint worth taking?

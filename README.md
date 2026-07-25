@@ -27,10 +27,14 @@ pip install -r requirements.txt
 python run.py
 ```
 
-Then use **File → Load demo dataset** to explore immediately with a bundled
-synthetic 18-month ledger (two CSV dialects, a car loan, a brokerage
-account, and three goals). Your data lives at `~/.ledgerline/ledgerline.db`
-by default; pass `--db path.db` to use another file. Python ≥ 3.10.
+Then use **File → Load demo dataset** to explore immediately. Four situations
+are offered — *Balanced* (a bundled 18-month ledger in two CSV dialects, a car
+loan, a brokerage and three goals), *Struggling*, *Thriving*, and *Turnaround*,
+which is built to show the Progress page a real behaviour change. Each opens in
+its **own database file**, so a demo never touches your ledger and **File →
+Return to my own data** puts you back where you were; a banner marks demo data
+while you are in it. Your data lives at `~/.ledgerline/ledgerline.db` by
+default; pass `--db path.db` to use another file. Python ≥ 3.10.
 
 Run the test suite with `python tests/test_core.py`.
 
@@ -252,6 +256,15 @@ recency-weighted and so cannot be recomputed for a past date once newer months
 exist, and a projection refitted later with the outcome already in the data is
 not a prediction. Writing the claim down before the answer is known is the only
 way the model can be caught being wrong.
+
+**Reconstruct history…** builds those checkpoints retroactively for a ledger
+that already has the data, so the page works on a first import rather than in
+two months. Each reconstructed point is computed only from data that existed at
+its own date — patterns re-detected as of then, the bootstrap truncated, cash
+read from the reconstructed history — because a backfilled checkpoint is
+indistinguishable from a real one once stored, and a projection built knowing
+how it turned out would make this page report the model as far better than it
+is.
 
 The Progress page then draws an old fan against what actually happened, and
 reports the share of days that landed inside the 80% and 50% bands. Those are

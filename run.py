@@ -74,7 +74,7 @@ def main() -> int:
     store = Store(args.db)
     if splash:
         splash.status()
-    win = MainWindow(store)
+    win = MainWindow(store, real_db_path=args.db)
     if splash:
         splash.hold(win)          # keep it up long enough to actually read
     win.show()

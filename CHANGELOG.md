@@ -6,6 +6,41 @@ intended to hand to someone else. The running version is shown in the app
 header and under **Help → About**, so a downloaded copy always identifies
 itself.
 
+## 1.7.0 — four demo datasets, and demos that don't cost you your data
+
+- **Demos open in their own database file.** Loading one used to write sample
+  accounts into whatever database was open, which for anyone with real data in
+  it was a one-way door: you could look at the demo or keep your ledger, not
+  both. Each profile now lives at `demos/<name>.db` beside your real file, so
+  a demo is a detour — **File → Return to my own data** puts you back exactly
+  where you were, and a loud amber banner makes sure nobody mistakes an
+  $86,000 demo brokerage balance for their own. Pages are handed the new store
+  rather than rebuilt, so splitter positions, filters and chart toggles survive
+  the trip.
+- **Four situations to choose from**, each a complete worked example:
+  - **Balanced** — the original CSV-based demo. Still the only path that
+    exercises the import mapper end to end, which is why it stays as it was.
+  - **Struggling** (D+, −15% savings) — a deficit *and* wants above the
+    50/30/20 ceiling. Both were needed: the habits score deliberately grades a
+    low earner with modest wants a B, "squeezed, not careless", so a profile
+    meant to look bad has to be bad on the axis the score actually measures.
+  - **Thriving** (A+, 53% savings) — investments compounding, debts nearly gone.
+  - **Turnaround** — built for the Progress page. Discretionary spending halves
+    five months in; the page detects it at p < 0.0001, the score climbs
+    **C− → C− → C+ → B+ → B+** across the checkpoints, and the old projections
+    show cash running clean above what they predicted.
+- **Every demo arrives with checkpoint history**, so the Progress page has
+  something to show the moment it is opened rather than after two months of
+  waiting.
+- **`Reconstruct history…` on the Progress page**, for real ledgers. Importing
+  two years of history on the first run gives you everything that page needs
+  and none of the checkpoints. This builds them retroactively — and builds each
+  one *only from data that existed at its own date*, refitting the projection
+  as of then rather than with hindsight. A backfilled checkpoint is
+  indistinguishable from a real one once stored, so a retroactive projection
+  built knowing the answer would make the page report the model as far better
+  than it is, which is the one thing that page exists to prevent.
+
 ## 1.6.0 — Progress: was the forecast right, and did anything improve?
 
 Every other page answers a question about *now*. This one is about the gap

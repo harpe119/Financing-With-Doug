@@ -55,6 +55,13 @@ class ProgressPage(QWidget):
                         "records one on demand")
         snap.clicked.connect(self._manual_capture)
         bar.addWidget(snap)
+        self.fill_btn = QPushButton("Reconstruct history…")
+        self.fill_btn.setObjectName("small")
+        self.fill_btn.setToolTip(
+            "Build checkpoints for dates already in your ledger, so this page "
+            "works now instead of in a few months")
+        self.fill_btn.clicked.connect(self._backfill)
+        bar.addWidget(self.fill_btn)
         bar.addStretch(1)
         root.addLayout(bar)
 
@@ -172,6 +179,41 @@ class ProgressPage(QWidget):
             return
         self.refresh()
         self.main.status("Checkpoint recorded.")
+
+    def _backfill(self) -> None:
+        """Reconstruct the checkpoints a ledger already has the data for.
+
+        Someone who imports two years of history on their first run owns
+        everything this page needs and none of the checkpoints, and would
+        otherwise wait months for it to say anything. Each reconstructed point
+        is built only from data that existed at its own date, so the
+        calibration figures stay honest.
+        """
+        ok = QMessageBox.question(
+            self, "Reconstruct history",
+            "Build checkpoints for dates already covered by your ledger?\n\n"
+            "Each one is computed only from the data that existed on its own "
+            "date — the projections are refitted as of then, not with "
+            "hindsight — so the calibration figures here stay meaningful.\n\n"
+            "This takes a few seconds and adds nothing that already exists.")
+        if ok != QMessageBox.StandardButton.Yes:
+            return
+        from PyQt6.QtWidgets import QApplication
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            from ..progress import backfill
+            made = backfill(self.store, n=6, spacing_days=55)
+        except Exception as e:
+            QMessageBox.warning(self, "Couldn't reconstruct", str(e))
+            return
+        finally:
+            QApplication.restoreOverrideCursor()
+        self.refresh()
+        self.main.status(
+            f"Reconstructed {made} checkpoint{'s' if made != 1 else ''}."
+            if made else
+            "Nothing to reconstruct — your ledger doesn't reach far enough "
+            "back, or those dates already have checkpoints.")
 
     def _selected(self):
         cid = self.pick.currentData()

@@ -1,11 +1,13 @@
 """Main window: sidebar navigation over stacked pages."""
 from __future__ import annotations
 
+from pathlib import Path
+
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QAction
-from PyQt6.QtWidgets import (QHBoxLayout, QLabel, QListWidget, QMainWindow,
-                             QMessageBox, QSizePolicy, QStackedWidget, QVBoxLayout,
-                             QWidget)
+from PyQt6.QtWidgets import (QApplication, QHBoxLayout, QLabel, QListWidget,
+                             QMainWindow, QMessageBox, QSizePolicy,
+                             QStackedWidget, QVBoxLayout, QWidget)
 
 from ..history import headline_stats
 from ..store import Store
@@ -48,9 +50,13 @@ history — not financial advice.</p>
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, store: Store):
+    def __init__(self, store: Store, real_db_path=None):
         super().__init__()
         self.store = store
+        # Remembered so a demo can be a detour rather than a destination: the
+        # window can always find its way back to the file it started on.
+        self.real_db_path = Path(real_db_path or store.path)
+        self.demo_key: str | None = None
         self.setWindowTitle("Financing with Doug")
         self.resize(1280, 850)
         # An explicit minimum takes precedence over minimumSizeHint, which is
@@ -93,6 +99,12 @@ class MainWindow(QMainWindow):
         hl.addStretch(1)
         hl.addWidget(self.header_nw)
         outer.addWidget(header)
+
+        self.banner = QLabel("")
+        self.banner.setObjectName("demoBanner")
+        self.banner.setVisible(False)
+        self.banner.setWordWrap(True)
+        outer.addWidget(self.banner)
 
         body = QHBoxLayout()
         body.setContentsMargins(0, 0, 0, 0)
@@ -141,14 +153,33 @@ class MainWindow(QMainWindow):
         a_imp.triggered.connect(self.open_import)
         a_bal = QAction("Import balance history (loan / investment)…", self)
         a_bal.triggered.connect(self.import_balance_history)
-        a_demo = QAction("Load demo dataset", self)
-        a_demo.triggered.connect(self._load_demo)
+        for a in (a_imp, a_bal):
+            m_file.addAction(a)
+        m_file.addSeparator()
+
+        # Demos live in their own database files. Loading one used to mean
+        # writing sample accounts into whatever database was open, which for
+        # anybody with real data in it was a one-way door — you could look at
+        # the demo or keep your ledger, not both. Switching files instead makes
+        # it a view, and going back is instant.
+        from ..demo import PROFILES
+        m_demo = m_file.addMenu("Load demo dataset")
+        for p in PROFILES:
+            act = QAction(p.name, self)
+            act.setToolTip(p.blurb)
+            act.triggered.connect(lambda _c=False, k=p.key: self._load_demo(k))
+            m_demo.addAction(act)
+        self.a_back = QAction("Return to my own data", self)
+        self.a_back.triggered.connect(self.return_to_real)
+        self.a_back.setEnabled(False)
+        m_file.addAction(self.a_back)
+        m_file.addSeparator()
+
         a_reset = QAction("Reset all data…", self)
         a_reset.triggered.connect(self._reset)
         a_quit = QAction("Quit", self)
         a_quit.triggered.connect(self.close)
-        for a in (a_imp, a_bal, a_demo, a_reset):
-            m_file.addAction(a)
+        m_file.addAction(a_reset)
         m_file.addSeparator()
         m_file.addAction(a_quit)
 
@@ -255,29 +286,96 @@ class MainWindow(QMainWindow):
             return self.store.account(combo.currentData())
         return None
 
-    def _load_demo(self) -> None:
-        if self.store.accounts() or not self.store.transactions().empty:
-            ok = QMessageBox.question(
-                self, "Load demo",
-                "This database already has data. Load the demo on top of it?\n"
-                "(For a clean demo, use File → Reset all data first.)")
-            if ok != QMessageBox.StandardButton.Yes:
+    # ---------------- demo datasets ----------------
+    def demo_db_path(self, key: str) -> Path:
+        """Where a demo profile's own database lives, beside the real one."""
+        return self.real_db_path.parent / "demos" / f"{key}.db"
+
+    def _load_demo(self, key: str, confirm: bool = True) -> None:
+        from ..demo import load_demo, profile
+        prof = profile(key)
+        path = self.demo_db_path(key)
+        fresh = not path.exists()
+        if fresh and confirm:
+            box = QMessageBox(self)
+            box.setWindowTitle(prof.name)
+            box.setText(f"<b>{prof.name}</b><p>{prof.detail}</p>"
+                        f"<p style='color:#8B98A9'>This opens in its own "
+                        f"separate file. Your own data is untouched and one "
+                        f"menu click away.</p>"
+                        f"<p style='color:#8B98A9'>Building it takes a few "
+                        f"seconds the first time.</p>")
+            box.setTextFormat(Qt.TextFormat.RichText)
+            box.setStandardButtons(QMessageBox.StandardButton.Ok
+                                   | QMessageBox.StandardButton.Cancel)
+            if box.exec() != QMessageBox.StandardButton.Ok:
                 return
-        from ..demo import load_demo
         try:
-            info = load_demo(self.store)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            store = Store(path)
+            if fresh or not store.accounts():
+                QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+                try:
+                    load_demo(store, key)
+                finally:
+                    QApplication.restoreOverrideCursor()
         except Exception as e:
             QMessageBox.warning(self, "Demo failed", str(e))
             return
-        self.status(f"Demo loaded — {info['transactions']} transactions, "
-                    f"{info['recurring']} recurring patterns.")
+        self._switch_store(store, demo_key=key)
+        self.status(f"Viewing the “{prof.name}” demo — your own data is safe. "
+                    f"File → Return to my own data to go back.")
+
+    def return_to_real(self) -> None:
+        if self.demo_key is None:
+            return
+        self._switch_store(Store(self.real_db_path), demo_key=None)
+        self.status("Back on your own data.")
+
+    def _switch_store(self, store: Store, demo_key: str | None) -> None:
+        """Point the whole window at a different database.
+
+        The pages are handed the new store rather than rebuilt, so splitter
+        positions, filters and chart toggles survive a trip through a demo —
+        losing all of that every time someone glanced at an example would make
+        the feature annoying enough not to use.
+        """
+        old = self.store
+        self.store = store
+        self.demo_key = demo_key
+        for p in self.pages:
+            p.store = store
+        try:
+            old.close()
+        except Exception:
+            pass
+        self.a_back.setEnabled(demo_key is not None)
+        self._sync_banner()
         self.refresh_current()
+        self.statusBar().showMessage(f"Database: {store.path}")
+
+    def _sync_banner(self) -> None:
+        """A demo has to look like a demo.
+
+        Someone glancing at a screen showing an $86,000 brokerage balance
+        should never have to wonder whether it is theirs.
+        """
+        if self.demo_key is None:
+            self.banner.setVisible(False)
+            return
+        from ..demo import profile
+        self.banner.setText(
+            f"  DEMO DATA — “{profile(self.demo_key).name}”. Nothing here is "
+            f"yours; your own data is untouched. "
+            f"File → Return to my own data.")
+        self.banner.setVisible(True)
 
     def _reset(self) -> None:
+        what = ("this demo" if self.demo_key else "your")
         ok = QMessageBox.question(
             self, "Reset all data",
-            "Delete all accounts, transactions, patterns, and goals from this "
-            "database? This cannot be undone.")
+            f"Delete all accounts, transactions, patterns, and goals from "
+            f"{what} database? This cannot be undone.")
         if ok == QMessageBox.StandardButton.Yes:
             self.store.clear_all()
             self.refresh_current()

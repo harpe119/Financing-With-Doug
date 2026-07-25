@@ -162,6 +162,13 @@ QScrollBar::handle:horizontal {{
     background: {BORDER}; border-radius: 5px; min-width: 28px;
 }}
 
+/* Demo banner. Deliberately loud: a screen full of someone else's money must
+   never be mistakable for your own, and a subtle grey note would be. */
+QLabel#demoBanner {{
+    background: {AMBER}; color: #1A1206; font-weight: 700; font-size: 12px;
+    padding: 6px 14px; border-bottom: 1px solid #8A6415;
+}}
+
 /* Splitter handles have to look grabbable or nobody discovers they can drag.
    A flat gap reads as padding; a centred grip line reads as a control. */
 QSplitter::handle {{ background: transparent; }}

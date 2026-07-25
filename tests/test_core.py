@@ -1299,6 +1299,114 @@ def main() -> None:
           len(_auto.checkpoints()) == 1)
     _auto.close()
 
+    print("demo profiles")
+    from finfore import demo as _demo
+    from finfore.insights import monthly_aggregates as _ma, spending_score as _ss
+    _loaded, _scores, _aggs = {}, {}, {}
+    for _p in _demo.PROFILES:
+        _s = Store(tmp / f"demo_{_p.key}.db")
+        _info = _demo.load_demo(_s, _p.key, checkpoints=3)
+        _loaded[_p.key] = _s
+        _a = _ma(_s.transactions())
+        _aggs[_p.key] = _a
+        _scores[_p.key] = _ss(_a).value
+        check(f"{_p.key}: has a ledger and recurring patterns",
+              _info["transactions"] > 50 and _info["recurring"] > 0)
+        check(f"{_p.key}: is scoreable", _a is not None and _a.income > 0)
+        check(f"{_p.key}: arrives with checkpoints to compare",
+              _info["checkpoints"] >= 2)
+        check(f"{_p.key}: has goals for the ladder", len(_s.goals()) >= 2)
+
+    # The profiles have to actually differ, or three of the four are decoration.
+    check("struggling runs a deficit", _aggs["struggling"].surplus < 0)
+    check("thriving runs a large surplus", _aggs["thriving"].surplus > 1500)
+    check("struggling grades badly, not merely below average",
+          _scores["struggling"] < 5.0)
+    check("thriving grades well", _scores["thriving"] > 8.0)
+    check("balanced sits between the two",
+          _scores["struggling"] < _scores["balanced"] < _scores["thriving"])
+    # A low earner with modest wants is a deliberate B ("squeezed, not
+    # careless"), so a profile meant to look bad must be over the 50/30/20
+    # wants ceiling as well as in deficit — otherwise it grades the good news.
+    check("struggling is over the wants-to-needs ceiling",
+          _aggs["struggling"].fesr > 0.45)
+    check("struggling carries card debt",
+          any(a.type == AccountType.CREDIT and a.balance < 0
+              for a in _loaded["struggling"].accounts()))
+    check("thriving holds investments",
+          any(a.type == AccountType.INVESTMENT and a.balance > 10_000
+              for a in _loaded["thriving"].accounts()))
+
+    _ts = _loaded["turnaround"]
+    _cps = _ts.checkpoints()
+    _sig = _P.significance_since(_ts, _cps[0])
+    check("turnaround's habit change is detected as a real reduction",
+          _sig.enough_data and _sig.diff < 0 and _sig.significant)
+    check("and is reported as an improvement", _sig.direction == "improved")
+    _sc_seq = [c.score for c in _cps if c.score is not None]
+    check("its score climbs across the checkpoints",
+          len(_sc_seq) >= 2 and _sc_seq[-1] > _sc_seq[0] + 1.0)
+    check("turnaround's older projection can be scored against reality",
+          _P.check_path(_ts, _cps[0]) is not None)
+
+    # Backfilled checkpoints must be built from data that existed then, or the
+    # Progress page reports the model as better than it is.
+    _hist = [c for c in _loaded["balanced"].checkpoints() if c.label == "history"]
+    check("backfilled checkpoints are dated in the past",
+          _hist and all(c.when < _date.today() for c in _hist))
+    check("each projection starts at its own checkpoint's date",
+          all(c.forecast_frame().index.min().date() == c.when
+              for c in _hist if c.has_forecast))
+    check("and looks forward from there",
+          all(c.forecast_frame().index.max().date() > c.when
+              for c in _hist if c.has_forecast))
+    check("an early checkpoint saw fewer transactions than the full ledger",
+          _hist[0].n_transactions < len(_loaded["balanced"].transactions()))
+    _n_before = len(_loaded["balanced"].checkpoints())
+    check("backfilling twice does not duplicate checkpoints",
+          _P.backfill(_loaded["balanced"], n=3, spacing_days=55, n_paths=60) == 0
+          and len(_loaded["balanced"].checkpoints()) == _n_before)
+    for _s in _loaded.values():
+        _s.close()
+
+    print("demos never touch real data")
+    from finfore.ui.main_window import MainWindow as _MW
+    _real_path = tmp / "mine.db"
+    _real = Store(_real_path)
+    _real.add_account(Account(name="My Real Checking",
+                              type=AccountType.CHECKING, balance=1234.56,
+                              balance_date=_date.today()))
+    _real.add_transactions(pd.DataFrame([{
+        "account_id": 1,
+        "date": pd.Timestamp(_date.today() - timedelta(days=i)),
+        "description": "MY REAL PURCHASE", "amount": -12.0,
+        "category": "Dining", "import_hash": f"real{i}"} for i in range(25)]))
+    _real_tx = len(_real.transactions())
+    _real_names = {a.name for a in _real.accounts()}
+    _win = _MW(_real, real_db_path=_real_path)
+    check("the window starts on the real database", _win.demo_key is None)
+    _win._load_demo("thriving", confirm=False)
+    check("a demo opens in its own separate file",
+          _win.demo_key == "thriving" and Path(_win.store.path) != _real_path)
+    check("and is flagged loudly as demo data",
+          not _win.banner.isHidden() and "untouched" in _win.banner.text())
+    check("every page is repointed at the demo store",
+          all(p.store is _win.store for p in _win.pages))
+    check("the demo contains none of the real accounts",
+          not any(n in {a.name for a in _win.store.accounts()}
+                  for n in _real_names))
+    _win._load_demo("struggling", confirm=False)
+    _win.return_to_real()
+    check("returning lands back on the real database",
+          _win.demo_key is None and Path(_win.store.path) == _real_path)
+    check("the real accounts survived the round trip",
+          {a.name for a in _win.store.accounts()} == _real_names)
+    check("the real transactions survived intact",
+          len(_win.store.transactions()) == _real_tx)
+    check("the real balance is untouched",
+          abs(_win.store.accounts()[0].balance - 1234.56) < 1e-9)
+    check("the demo banner is gone", _win.banner.isHidden())
+
     print("splash & chart floors")
     from finfore.ui.splash import DOUG_LINES, DOUG_FACTS, doug_fact
     check("Doug has things to say",
