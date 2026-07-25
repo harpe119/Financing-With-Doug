@@ -1,0 +1,362 @@
+# Changelog
+
+Versioning is `MAJOR.MINOR.PATCH`. While Ledgerline is a personal tool still
+gaining features it stays in the `0.x` line; `1.0.0` marks the first release
+intended to hand to someone else. The running version is shown in the app
+header and under **Help → About**, so a downloaded copy always identifies
+itself.
+
+## 1.4.0 — the goal ladder
+
+- **New Goals page: one priority ladder over debts *and* savings goals.** The
+  debt snowball — minimums everywhere, everything spare at one target, roll the
+  payment into the next when it clears — normally stops at the last loan, and
+  the freed money quietly disperses back into ordinary spending. Here loans and
+  goals sit in a single ordered list and the same mechanism runs past the end of
+  the debts: the car payment becomes the emergency fund, which becomes the new
+  computer. Reorder with ▲/▼; the ladder is what decides where money goes.
+  - Three splits, because the honest answer depends on temperament rather than
+    arithmetic. **Focus** puts every spare dollar on the top rung (fastest to
+    clear, the classic advice). **Weighted** splits by 1/rank so lower goals
+    still visibly move — slower overall, but a goal that hasn't moved in two
+    years is a goal people abandon, and an abandoned plan returns nothing.
+    **Custom** takes explicit amounts.
+  - **Goals share one pot and fill in priority order.** Three cash goals against
+    one balance used to be three goals all reporting themselves part-funded off
+    the same money. The top goal consumes the cash first now, which is what
+    having a priority means.
+  - **The snowball panel** dates each hand-off: *Mar 2028 — Card debt paid off →
+    $150/mo rolls into Emergency fund*. **Getting there sooner** costs extra
+    saving in months off the next target rather than dollars, because "save
+    $100/mo more" is an instruction nobody follows and "seven months sooner" is
+    a reason to.
+  - **Add emergency fund…** sizes the goal from your own essential spending and
+    puts it at the top — the one target mainstream guidance is unanimous about.
+  - Loan minimums keep flowing whatever their rung: a small loan can retire
+    before a large top-priority goal, and that is correct, not a bug.
+- **Amounts are entered right-to-left, like a card terminal.** Typed digits fill
+  in from the right against a fixed decimal point: `1234` is `$12.34`, `123456`
+  is `$1,234.56`. There is no longer a moment where the field holds a
+  half-finished number wrong by a factor of a hundred — which is how `71520.00`
+  went in wrong repeatedly. Typing the amount out in full still works: the
+  decimal key is ignored rather than rejected, so `1234.56` delivers the same
+  six digits. Rate fields keep ordinary typing; entering `6.4875` as an APR is
+  not the same task.
+- **Elements within a page can be dragged to resize.** Dashboard, Insights,
+  Goals and Forecast are built on splitters now, so the divider between any two
+  panels is grabbable — shrink the notes to give the chart the room, then drag
+  it back. Handles highlight on hover, and panes have a minimum size so a stray
+  drag cannot make one vanish with no way to get it back.
+
+## 1.3.0 — first round of family feedback
+
+Everything here came from watching someone who did not write the app try to
+use it.
+
+- **Charts no longer scroll into nowhere.** Every timeline is now bounded to
+  its own data: you cannot pan past the first balance or the end of the
+  horizon, cannot zoom out into empty space, and cannot zoom in past a
+  three-week window. The tester got lost scrolling and had no way back, because
+  once the data is off screen nothing on the axes says which direction it went.
+  Reference floors are pulled into the bounds when they are near the data and
+  left out when they are a full chart-height away — a $0 line below a $500k
+  projection costs every pixel of detail and tells you nothing.
+- **Forecast charts lead with the projection.** History was pinned at a year
+  regardless of horizon, so a 6-month projection was drawn at a third of the
+  width with two thirds given to the past. History now scales with the horizon
+  (30%, floor 45 days, cap 366), so the thing being asked about is the thing
+  you see.
+- **APR takes four decimal places.** Real loan paperwork quotes 6.4875%, and
+  rounding that to 6.49% moves a long balance visibly. Entry and display both
+  keep four places and trim trailing zeros, so 7% still shows as `7%`.
+  Return/volatility assumptions stay at two — they are guesses, not statements.
+- **Forecast page survives a narrow window.** The control column was pinned at
+  374px, so shrinking the window took the space out of the charts alone until
+  the cards could not shrink further and overlapped the column beside them. The
+  two columns are now a splitter, and chart legends wrap onto extra rows via a
+  new `FlowLayout` instead of forcing their parent wider — a nine-entry legend
+  in a `QHBoxLayout` was on its own enough to overflow the page.
+- **Transactions loads 25 rows, then more on request.** Every row carries a
+  live category picker, so rendering thousands meant building thousands of
+  widgets before the page would paint — and a list that long is not readable
+  anyway. There is a *Show N more* / *Show all* pair and a **Show** filter
+  (30 days / 90 days / 12 months / all time / since a date you pick). Changing
+  any filter returns to the first page.
+- **Loans and investments can be imported from a CSV like every other account
+  — and the real reason they couldn't.** `open_import` routed on "are there any
+  cash accounts?", so owning a chequing account made every loan and investment
+  unreachable from File → Import CSV: the cash importer opened and its account
+  list, cash-like only, simply did not contain them. The account picker now
+  comes first and routing follows the type. *Update from CSV…* on the Accounts
+  page routes the same way instead of claiming the account has never been
+  imported.
+- **…and those accounts now accept an activity export, not just balances.**
+  Lenders mostly export what a bank exports — dated payments and charges, not
+  a balance column. `ingest.balances_from_activity` integrates the balance
+  history out of those flows and pins it to the balance you entered, the same
+  way a cash ledger is anchored. The importer auto-detects which shape of file
+  it was handed, previews the reconstruction, and offers a direction toggle for
+  exports that sign amounts the other way. Principal-only: interest that never
+  appears as a row is not invented, and the preview says so.
+- **Clicking an amount field selects what's in it.** A spin box showing `0.00`
+  behaved like a text field — clicking dropped a caret next to a zero the user
+  then had to notice and delete, which is how `71520.00` got entered several
+  times and landed wrong. Focus or first click now selects the value so typing
+  replaces it. Clicks on the step arrows still step.
+
+## 1.2.0 — Financing with Doug
+
+- **Renamed to Financing with Doug.** Window, splash, About dialog, entry point
+  and PyInstaller spec (`packaging/doug.spec`). Doug's origin story is in the
+  About box; clicking the version number in the header gets Doug's opinion on
+  something; the splash cycles through what Doug is currently doing. Doug is
+  still not a financial advisor.
+- **Splash now stays up long enough to read.** It was flashing past because
+  startup is fast. `Splash.hold()` keeps it for a minimum lifetime (2.6s,
+  `--splash-seconds` to change) while turning the event loop, so the window
+  paints and the status line animates instead of the thread blocking on sleep.
+- **Window no longer resizes itself.** `minimumSizeHint` was computing to
+  ~2139x1194 — a `QStackedWidget` adopts the largest size hint among its pages,
+  and the charts and cards added up — so the window was forced open past
+  whatever size you set, and moved again on every page or view change. Fixed
+  with an explicit `setMinimumSize(980, 620)` (an explicit minimum takes
+  precedence over the hint), `Ignored` size policies on the stack and pages, and
+  by driving the view switch with layout stretch factors rather than changing
+  chart minimum heights. Verified stable across all six pages, all four chart
+  views and the series toggles.
+- **Floor labels were being clipped.** They sat at 3% along the line, directly
+  on top of the y-axis tick labels. The three floors are now staggered at 90%,
+  66% and 42% so they clear the axis and cannot overlap each other, and are
+  anchored above the line rather than straddling it.
+- **Emergency-fund and starter-buffer lines toggle independently** from the
+  chart legend, on both the forecast cash chart and the dashboard history
+  chart, with the state surviving a re-run.
+
+## 1.1.0 — chart controls & packaging readiness
+
+- **Every chart series can be switched off.** The legend is now the control:
+  each entry has a checkbox beside its swatch, covering the two Monte Carlo
+  bands, the median, history, the baseline overlay, all three floors, and goal
+  lines. Choices survive a re-run — `SeriesRegistry` re-asserts them after the
+  clear-and-redraw. The same toggles are on the dashboard history chart.
+- **Forecast page decluttered.** A view picker switches between cash + net
+  worth, either alone, or analysis only; the analysis panel has its own
+  checkbox. A chart shown on its own grows to fill the column instead of
+  sitting in a third of it.
+- **Control column folds.** Scenario, debt, what-if events and goals are now
+  collapsible cards — debt, events and goals start collapsed, since most people
+  set them once. As a side effect the `&&` in two card titles now renders as a
+  single ampersand, which it never did in a QLabel.
+- **Packaging: fixed a latent blocker.** `demo.py` located `sample_data/`
+  relative to `__file__`, which breaks in a frozen bundle. `util.resource_path`
+  now resolves through `sys._MEIPASS` when present, so the same call works from
+  source and from an executable. Verified by simulating a bundle.
+- **Startup splash.** Drawn in code rather than loaded from an image, so the
+  build needs no extra asset. Reports progress while the database opens and the
+  interface is built, and hands off from PyInstaller's bootloader splash if one
+  is present. `--no-splash` disables it.
+- **`packaging/ledgerline.spec`** ships ready to build, with the data-file
+  mapping, pyqtgraph hidden imports and a bundle-size exclude list already
+  worked out. Argument parsing is now tolerant of OS-supplied flags, which
+  macOS passes to bundled apps.
+
+## 1.0.0 — forecast analytics
+
+- **Backtest.** `File`-free, on the Forecast page: refit the projection at a
+  past date using *only* data that existed then, and score it against what
+  actually happened. Three lookahead leaks are closed explicitly — recurring
+  patterns are re-detected as of the cut-off, the behavioural bootstrap is
+  truncated, and starting cash comes from the reconstructed history rather than
+  today's balance. Only cash is scored, because cash is exactly reconstructable
+  from the ledger while loan/investment balances aren't retained historically.
+  Reports coverage of the 80% and 50% bands, typical miss, and bias.
+- **Bootstrap now carries parameter uncertainty — found by the backtest.**
+  Resampling weeks independently made week-to-week noise average out like
+  √t, so the one-year band collapsed to a few percent: it implicitly asserted
+  the historical mean weekly net was known exactly. It is estimated from a
+  finite sample, with standard error s/√n. Drawing one drift offset per path
+  and holding it adds the term that grows *linearly* in t. Before the fix,
+  reality fell inside the nominal 80% band **1%** of the time; after, **92%**
+  on a well-trained window.
+- **Sensitivity (tornado).** Nudges each lever ±20% independently and ranks by
+  swing in ending net worth. Deterministic-only, so it runs in well under a
+  second. On the demo data: income $83k swing, housing $26k, groceries $11k,
+  dining $6k — an honest ordering of what actually moves the outcome.
+- **What-if events.** Dated one-off shocks (new car, medical bill, bonus, job
+  gap) applied to cash on the day they land, with per-event enable/disable.
+  A $28k car 200 days out moves the demo from 0% to 100% probability of going
+  negative — the kind of question a smooth trend cannot answer.
+- **Runway counter.** "Cash covers 5.4 months of essentials at today's
+  balance", shown beside the shortfall risk.
+- **Fat-tailed investment shocks.** Student-t (ν=5) innovations rescaled to
+  preserve each account's calibrated volatility. Mass beyond 3σ rises from
+  0.26% to 1.19% — roughly 4.5× — so the bad paths are no longer quietly
+  understated by the Gaussian assumption.
+
+## 0.9.0
+
+- **New category: Charitable donation.** Keyword rules cover named charities,
+  religious giving, crowdfunding and pledge drives. Bare "FOUNDATION" and
+  "OFFERING" were deliberately left out — they catch bookshops and cosmetics —
+  so only anchored variants ("COMMUNITY FOUNDATION", "RELIEF FUND") match.
+  Giving gets its **own taxonomy bucket** rather than being folded into wants:
+  calling a tithe or a monthly charity commitment "frivolous" is a value
+  judgement most people would reject, and it would drag the habits grade down
+  for behaviour nobody considers a spending problem. It counts toward total
+  spending and shows as its own slice in the composition chart, but stays out
+  of the frivolous-to-essential ratio.
+- **Forecast charts swapped.** Net cash is now the large chart on top, net
+  worth the shorter one below. Cash is the account that actually runs out, and
+  every floor below is a cash concept — net worth can look healthy while the
+  chequing account is empty.
+- **Reference floors on the money charts.** A thick red line at $0 (the line
+  not to cross), a dashed amber line at the $1,000 starter buffer, and a dashed
+  teal line at the emergency fund. The fund is **computed from your own
+  essential spending** — bills, groceries, insurance, medical, fuel and loan
+  payments, recency-weighted — not a generic figure, and the month count is
+  adjustable (1–12, default 3).
+- **Monte Carlo shading is now labelled.** A legend under each chart spells out
+  that the outer band is 80% of outcomes (P10–P90), the inner band 50%
+  (P25–P75), and the solid line the median — plus the floors and history. An
+  unlabelled gradient invites people to read the median as a prediction rather
+  than as the middle of a distribution.
+- **Shortfall risk.** `run_forecast` now reports the probability that cash dips
+  below each floor *at any point* in the horizon, the worst-dip percentiles,
+  and the first date at which 1 in 10 paths are underwater. A median line that
+  never goes negative can sit on top of a distribution where a quarter of paths
+  do; percentiles answer "where do I end up", this answers "how likely am I to
+  run out on the way".
+- **Taller table rows** on Transactions (38px), Recurring and Review
+  uncategorized (36px), so descriptions and inline pickers are no longer
+  clipped.
+
+## 0.8.0
+
+- **Score rebuilt as a benchmarked quadrant model.** Two sub-scores, each
+  piecewise-linear through published-guidance anchors: habits from the
+  frivolous-to-essential ratio (FESR), where the 50/30/20 ceiling of 0.60 scores
+  exactly 5/10, and means from the savings rate, where the 20% target scores
+  8.5/10. Combined 60/40 with an interaction penalty that only bites when both
+  are poor. The four cases now land where they should:
+  high FESR + deficit → F; high FESR + high net → B−; low FESR + low net → B;
+  low FESR + high net → A. A deepening deficit keeps lowering the score instead
+  of plateauing.
+- **Uncategorized spending no longer counts as frivolous.** It was inflating the
+  ratio and punishing people for spending the app had simply failed to label —
+  some of which is genuinely essential. It is now excluded from both sides of
+  the ratio and reported separately, with the grade marked *provisional* above
+  25% unknown.
+- **Recency weighting everywhere.** The hard "last 3 complete months" window is
+  replaced by exponential decay with a 3-month half-life over 24 months, so
+  last month dominates, six months ago counts a quarter, and two years ago is
+  noise. No more cliff where a large purchase silently stops counting.
+- **Suggestions ranked by real dollars.** Every lever is costed first and
+  ordered afterwards, and nothing is described by position unless it holds that
+  position. Fixes prose like "your second-largest after subscriptions" attached
+  to $500/mo of travel when subscriptions were $35/mo.
+- **Review uncategorized (active-learning queue).** Transactions collapse to far
+  fewer merchants than rows, so the new dialog lists unlabelled *merchants*
+  ranked by how much labelling each is worth — total dollars, weighted toward
+  recent and recurring spend. One decision fixes every past and future charge
+  from that merchant.
+- **Merchant-similarity propagation.** Character 3-gram Jaccard with a leading-
+  token gate and payment-processor prefix stripping, so "SQ *BLUE BOTTLE 0042"
+  matches "BLUE BOTTLE COFFEE" while "BLUE BOTTLE" stays apart from "BLUE
+  CROSS". Calibrated on realistic pairs; Jaccard was the only measure of three
+  that separated cleanly. Runs after labelling to reach merchants never touched.
+
+## 0.7.0
+
+- **Snapshots button fixed.** `SnapshotManagerDialog._reload()` was called five
+  times — including from `__init__` — but never defined; its body had been
+  absorbed into `_import_csv`. Constructing the dialog raised `AttributeError`
+  immediately, so the button did nothing. Add / edit / delete now work, and the
+  dialog is available for **every** account type rather than only loans and
+  investments.
+- **Snapshots mean something on cash accounts.** The newest snapshot at or after
+  the account's balance date becomes the anchor the transaction ledger is
+  reconstructed from (`history.cash_anchor`), so a snapshot is how you correct
+  drift after an import that didn't reach far enough back.
+- **Manual re-categorisation on the Transactions page**, three ways: a picker in
+  each row's Category cell, a right-click menu on a selection, and the footer
+  batch control. All routes go through one method.
+- **Corrections are learned.** New `category_feedback` table and `learning.py`.
+  Every correction is stored as a training label (normalised key, raw
+  description, amount, account type, old and new label, timestamp).
+  `LearnedRules` applies them immediately as an exact-match memory ahead of the
+  keyword rules, so re-importing a merchant you have already fixed keeps your
+  label. `CategoryModel` is the seam a trained classifier drops into;
+  `training_frame()` and `coverage()` expose the corpus and report when there is
+  enough of it to be worth modelling. See `ml_notes` in `learning.py`.
+- **Transactions page crash fixed.** A stored date not matching the column's
+  inferred format read back as `NaT`, and `_render` called `.strftime()` on it
+  unguarded. `NaT.strftime()` raises, and an exception escaping a Qt slot aborts
+  the process — clicking "Transactions" killed the app. Hardened at four levels:
+  `store.transactions()` parses with `errors="coerce"`; `add_transactions`
+  normalises on write and skips unparseable rows; `util.fmt_date` degrades to a
+  placeholder; and page refresh/render are wrapped so a bad row shows a message
+  instead of taking the page down.
+- **`sys.excepthook` in `run.py`** shows a dialog with the traceback instead of
+  letting the window vanish silently.
+- **Balance-history CSV import for loans and investments** is reachable from the
+  main import path: `File → Import CSV` routes by account type, and
+  `File → Import balance history` is a dedicated entry.
+- **Habits score rebuilt** around the non-essential-to-essential ratio
+  ρ = (discretionary + incidental) / essential, with net income as a bounded
+  ±2-point adjustment. Uncategorised spending now counts as non-essential.
+  Replaces the old discretionary-over-income measure, which ignored incidental
+  spending and compared wants to income rather than to what life actually costs.
+- **`finfore/__init__.py` was empty** but `main_window` imports `__version__`
+  from it — the app could not start at all. Now defines it.
+
+## 0.6.1 — correctness fixes
+Seven bugs, four of which silently produced wrong numbers rather than failing.
+
+- **Uncategorized income was lost and cancelled real spending.** `categorize()`
+  assigns `Other income` to every inflow that matches no keyword rule
+  (freelance, reimbursements, gifts), but the Insights taxonomy didn't list it
+  as income. That money was dropped from income *and* netted against
+  uncategorized outflows in the incidental bucket, so income, spending, savings
+  rate, discretionary burden, the habits score, and the donut were all wrong for
+  anyone with irregular inflows. The taxonomy now derives from
+  `categorize.INCOME_CATEGORIES`, and incidental counts outflows only.
+- **Credit-card balances counted as both cash and debt** on the dashboard, so
+  `cash + investments − debt` didn't equal the reported net worth.
+- **Unlinked loan payments were charged twice** — once by the amortization
+  engine and again as a generic recurring outflow — overstating monthly cash
+  burn by the full payment. Now charged once, with a warning prompting the user
+  to link it.
+- **Deactivating a recurring pattern barely changed the forecast.** Only active
+  patterns were withheld from the behavioral bootstrap, so a deactivated item's
+  history was readmitted as variable spending. All known patterns are now
+  withheld.
+- **Month-end bills were anchored to mid-month.** Day-of-month clustering took a
+  plain median across the 31→1 wraparound, so days `{1, 2, 30, 31}` yielded day
+  16. The median is now taken in a shifted frame.
+- **A single malformed amount aborted an entire import.** `parse_amount` raised
+  on trailing-minus (`45.00-`) and other odd cells, and silently misread
+  comma-decimal locales (`1.234,56` → 1.23456). It now handles both conventions
+  and returns `nan` for anything unparseable, dropping the row instead.
+- `update_recurring()` with no fields raised a SQL syntax error; now a no-op.
+  `update_snapshot()` rolls back after a constraint violation.
+- Suggestions no longer label the second-largest category "your largest"; the
+  housing-note threshold is a named constant.
+- Regression tests added for all of the above.
+
+## 0.6.0
+- **Insights page** — spending composition donut (essential / discretionary /
+  incidental, subscriptions carved out), a habits score (0–10 + letter grade,
+  weighted toward habits so circumstances aren't penalized), and dollar-ranked,
+  non-judgmental reduction suggestions.
+- **Snapshot history import** — bulk-import a balance-over-time CSV for a loan
+  or investment account (date + balance columns), upserting by date and
+  advancing the account's current balance to the newest row.
+- **One-click re-import** — the column mapping used for an account's CSV is
+  remembered; "Update from CSV…" imports a newer export with no re-setup
+  (idempotent, so only new rows are added).
+- Snapshot edit/delete, recurring-pattern delete, and goal ETAs (from prior work).
+
+## Earlier (unversioned)
+Accounts and balance-sheet modeling, CSV transaction import with debit/credit
+and credit-debit-indicator sign handling, recurring detection, Monte Carlo net-
+worth forecast with scenarios and goals, dark instrument-panel UI.
