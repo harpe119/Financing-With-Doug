@@ -1118,6 +1118,36 @@ def main() -> None:
           uncategorized_summary(wstore)["hidden_merchants"] == 0)
     wstore.close()
 
+    print("explainer video")
+    from finfore.ui import video as _video
+    _vp = _video.video_path("monte_carlo")
+    check("the Monte Carlo explainer ships with the project",
+          _vp is not None and _vp.exists())
+    check("has_video agrees with video_path", _video.has_video("monte_carlo"))
+    check("an unknown key resolves to nothing",
+          _video.video_path("nope") is None
+          and not _video.has_video("nope"))
+    _saved2 = getattr(sys, "_MEIPASS", None)
+    try:
+        _fake2 = Path(tempfile.mkdtemp())
+        (_fake2 / "assets").mkdir()
+        (_fake2 / "assets" / "monte_carlo.mp4").write_bytes(b"x")
+        sys._MEIPASS = str(_fake2)
+        check("the video resolves inside a frozen bundle",
+              _video.video_path("monte_carlo")
+              == _fake2 / "assets" / "monte_carlo.mp4")
+    finally:
+        if _saved2 is None:
+            delattr(sys, "_MEIPASS")
+        else:
+            sys._MEIPASS = _saved2
+    check("and returns to the source tree when not frozen",
+          _video.video_path("monte_carlo") == _vp)
+    _spec_txt = (Path(__file__).resolve().parent.parent
+                 / "packaging" / "doug.spec").read_text(encoding="utf-8")
+    check("the spec bundles assets/ so the video survives a build",
+          "assets" in _spec_txt)
+
     print("splash & chart floors")
     from finfore.ui.splash import DOUG_LINES, DOUG_FACTS, doug_fact
     check("Doug has things to say",

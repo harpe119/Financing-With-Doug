@@ -23,7 +23,7 @@ from ..history import category_spending, networth_history
 from ..models import Goal, OneOffEvent, Scenario
 from ..store import Store
 from ..util import fmt_money
-from . import charts, theme
+from . import charts, theme, video
 from .widgets import (Card, CollapsibleCard, IntSpinBox, LegendToggles,
                       SeriesRegistry, fan_entries, hint, vsplit)
 from .account_dialog import _money_spin
@@ -262,6 +262,18 @@ class ForecastPage(QWidget):
         self.show_analysis.stateChanged.connect(lambda _s: self._apply_view())
         picker.addWidget(self.show_analysis)
         picker.addStretch(1)
+        # The fan is the least self-explanatory thing in the app: a band of
+        # shaded outcomes is easy to misread as a prediction that got fuzzy.
+        # The button sits on the page it explains rather than under Help,
+        # because that is where the confusion happens.
+        self.explain_btn = QPushButton("▶  Explain me")
+        self.explain_btn.setObjectName("small")
+        self.explain_btn.setToolTip(
+            "Watch a short video on what the shaded bands mean and how the "
+            "Monte Carlo projection is built")
+        self.explain_btn.clicked.connect(self._explain)
+        self.explain_btn.setVisible(video.has_video("monte_carlo"))
+        picker.addWidget(self.explain_btn)
         right.addLayout(picker)
         # Cash leads. It is the account that actually runs out, and the floors
         # below (zero, starter buffer, emergency fund) are cash concepts — net
@@ -524,6 +536,9 @@ class ForecastPage(QWidget):
                 zip(weights, (show_cash, show_nw, show_analysis))]
         s = sum(live) or 1
         self.chart_split.setSizes([int(total * w / s) for w in live])
+
+    def _explain(self) -> None:
+        video.play("monte_carlo", self)
 
     # ---------------- analysis panel ----------------
     def _set_analysis(self, which: str) -> None:

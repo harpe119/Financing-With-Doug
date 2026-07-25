@@ -12,8 +12,16 @@
 #   faster, because onefile unpacks the whole bundle to a temp directory on
 #   every launch. For handing to family, zip the folder — or flip ONEFILE to
 #   True below if a single icon matters more than startup speed.
-# * The sample CSVs are the only data files, and finfore.util.resource_path
-#   already resolves them through sys._MEIPASS, so they work in both modes.
+# * Data files are the sample CSVs and the explainer videos in assets/, both
+#   resolved through finfore.util.resource_path, which follows sys._MEIPASS —
+#   so they work in onedir and onefile alike.
+# * Qt Multimedia is NOT force-collected here. PyInstaller picks up the backend
+#   plugins when it can, but they are the classic thing to go missing from a
+#   bundle, and the failure is silent — a black rectangle, no traceback.
+#   finfore.ui.video therefore falls back to the system video player whenever
+#   in-app playback is unavailable or errors, so a bundle without the codecs
+#   still shows the video. If you would rather guarantee in-app playback, add
+#   `collect_all("PyQt6.QtMultimedia")` and test the built app, not the source.
 # * excludes matter more than usual here: pandas drags in matplotlib and
 #   friends if they happen to be installed, which can double the bundle.
 # * Icon: drop your icon file directly in this packaging/ folder, named
@@ -46,7 +54,7 @@ a = Analysis(
     ["../run.py"],
     pathex=[".."],
     binaries=[],
-    datas=[("../sample_data", "sample_data")],
+    datas=[("../sample_data", "sample_data"), ("../assets", "assets")],
     hiddenimports=hiddenimports,
     hookspath=[],
     runtime_hooks=[],

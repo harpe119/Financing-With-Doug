@@ -61,7 +61,11 @@ chart** ranking every lever by how much a ±20% move changes the outcome, and a
 then and scores it against what really happened — the one check that says
 whether the fan deserves to be believed. **What-if events** add dated one-off
 shocks so the projection can answer "can I absorb this, and when is the worst
-moment?".
+moment?". The ▶ **Explain me** button plays a short video on what the shaded
+bands actually mean — it sits on the forecast page rather than under Help
+because that is where the misreading happens. If this build's multimedia
+backend cannot decode it, the file is handed to the system's own video player
+rather than failing silently.
 
 Investment shocks are Student-t (ν=5) rescaled to unit variance rather than
 Gaussian, because real returns have fatter tails than a normal admits. The
@@ -390,6 +394,8 @@ finfore/
   store.py                SQLite persistence
   demo.py                 one-click demo loader
   ui/                     PyQt6 theme, charts, dialogs, seven pages
+  ui/video.py             bundled explainer videos, with a system-player fallback
+assets/                   explainer videos (bundled into the build)
 scripts/generate_sample_data.py   seeded synthetic bank exports
 sample_data/              bundled demo CSVs + meta.json
 tests/test_core.py        core-logic test suite

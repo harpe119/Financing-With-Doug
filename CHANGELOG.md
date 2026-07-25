@@ -6,6 +6,22 @@ intended to hand to someone else. The running version is shown in the app
 header and under **Help → About**, so a downloaded copy always identifies
 itself.
 
+## 1.5.0 — "Explain me"
+
+- **An explainer video on the Forecast page.** The fan is the least
+  self-explanatory thing in the app — a band of shaded outcomes reads as a
+  prediction that got fuzzy, rather than as a distribution — so the ▶ **Explain
+  me** button sits on the page where that confusion happens rather than under
+  Help. Plays in a small dialog with play/pause, a scrubber and a clock.
+- **Playback degrades instead of failing.** Qt's multimedia stack is a separate
+  backend whose plugins are the classic thing to go missing from a PyInstaller
+  bundle, and the failure mode is a black rectangle with no error. If the
+  backend is absent or reports a decode error, the video is handed to whatever
+  app normally opens `.mp4` files — automatically, not behind a second button.
+  The button hides itself entirely if no video is bundled.
+- `packaging/doug.spec` now ships `assets/`, resolved through
+  `util.resource_path`, so the video works from source and from a frozen build.
+
 ## 1.4.1 — entry fix, scoped review queue, custom splits
 
 - **Right-to-left amount entry was broken on any field that already held a
