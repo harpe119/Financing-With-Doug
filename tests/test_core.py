@@ -195,13 +195,43 @@ def main() -> None:
     check("q2 high-FESR + high net is average, not dire",
           4.5 <= q2.value <= 7.0 and q2.quadrant == "comfortable but loose")
     check("q3 low-FESR + low net is okay, not punished for circumstances",
-          5.5 <= q3.value <= 7.5 and q3.quadrant == "squeezed, not careless")
+          5.5 <= q3.value <= 7.5 and q3.quadrant.startswith("squeezed"))
     check("q4 low-FESR + high net is the best case",
           q4.value >= 8.5 and q4.quadrant == "disciplined and saving")
     check("the four quadrants rank q1 < q2 < q3 < q4",
           q1.value < q2.value < q3.value < q4.value)
     check("a bad situation still beats bad habits at the same net income",
           q3.value > q1.value)
+
+    # FESR compares wants to *needs*, so it is blind to both sides inflating
+    # together: someone can sit inside the 0.60 ceiling while spending well
+    # past their income. The verdict must not absolve spending in that case.
+    from finfore.insights import (NEEDS_INCOME_TARGET, WANTS_INCOME_TARGET,
+                                  spending_score as _sscore)
+    both_high = _sscore(mk(3000, 2050, 1150))     # 68% needs, 38% wants, deficit
+    check("both shares inflated still reads as inside the wants:needs ceiling",
+          both_high.fesr < FESR_TARGET)
+    check("but wants are over the 30%-of-income guideline",
+          1150 / 3000 > WANTS_INCOME_TARGET)
+    check("so the verdict blames the spending rather than absolving it",
+          "over guideline" in both_high.quadrant
+          and "partly the spending" in both_high.headline)
+    fixed = _sscore(mk(3000, 2600, 500))          # 87% needs, 17% wants, deficit
+    check("genuinely modest wants are still absolved",
+          fixed.quadrant == "squeezed by fixed costs"
+          and "isn't the problem" in fixed.headline)
+    check("and the fixed-cost case is named as such",
+          500 / 3000 < WANTS_INCOME_TARGET and 2600 / 3000 > NEEDS_INCOME_TARGET)
+    textbook = _sscore(mk(3000, 1500, 900))       # exactly 50 / 30 / 20
+    check("textbook 50/30/20 is not called squeezed at all",
+          textbook.quadrant == "disciplined and saving")
+    check("the detail line quotes all three shares of income, not just the ratio",
+          "50/30/20" in textbook.detail and "needs" in textbook.detail
+          and "wants" in textbook.detail and "saved" in textbook.detail)
+    _tb = mk(3000, 1500, 900)
+    check("shares are computed against income, not against spending",
+          abs(_tb.wants_share - 0.30) < 1e-9
+          and abs(_tb.needs_share - 0.50) < 1e-9)
 
     # deepening a deficit keeps making it worse (no plateau)
     deficits = [spending_score(mk(4000, 1600, F, 300)).value

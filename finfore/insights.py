@@ -58,6 +58,16 @@ SUBSCRIPTION_CAT = "Subscriptions"
 FESR_TARGET = 0.60          # 30 wants / 50 needs — the recommended ceiling
 SAVINGS_TARGET = 0.20       # the recommended savings rate
 FESR_CAP = 4.0              # beyond this the ratio carries no more information
+# The same rule read as shares of income. FESR compares wants to *needs*, which
+# is deliberate — grading someone against their income punishes a low earner for
+# a circumstance rather than a habit — but it is scale-free, so wants and needs
+# can inflate together and the ratio still reads as fine. Someone spending 69%
+# of income on essentials and 39% on wants has an FESR of 0.57, comfortably
+# "within guideline", while being 8% of income underwater. These two shares are
+# what catch that, and they are what the verdict consults before blaming or
+# absolving spending habits.
+WANTS_INCOME_TARGET = 0.30      # the "30"
+NEEDS_INCOME_TARGET = 0.50      # the "50"
 HALF_LIFE_MONTHS = 3.0      # recency decay: 6mo ago counts 1/4, 24mo ago 1/256
 LOOKBACK_MONTHS = 24        # complete months considered at all
 HOUSING_NOTE_THRESHOLD = 0.35   # housing share of income that earns a note
@@ -150,6 +160,16 @@ class Aggregates:
     def unknown_share(self) -> float:
         """Fraction of total spending that is still uncategorised."""
         return self.unknown / self.spending if self.spending > 0 else 0.0
+
+    @property
+    def wants_share(self) -> float | None:
+        """Wants as a fraction of income — the '30' of 50/30/20."""
+        return self.frivolous / self.income if self.income > 0 else None
+
+    @property
+    def needs_share(self) -> float | None:
+        """Essentials as a fraction of income — the '50' of 50/30/20."""
+        return self.essential / self.income if self.income > 0 else None
 
 
 def monthly_aggregates(tx: pd.DataFrame, window: int | None = None,
@@ -402,6 +422,21 @@ _QUADRANTS = {
         "You're saving about as well as your income allows."),
 }
 
+# The (low FESR, low means) verdict absolves spending outright, and that is only
+# true when spending really is modest against income. A wants:needs ratio inside
+# the guideline says the *shape* of spending is sensible; it says nothing about
+# the *scale*, because both sides can be inflated together. When wants are over
+# the 30%-of-income guideline as well, the shortfall is at least partly the
+# spending, and telling someone otherwise is bad advice dressed as reassurance.
+_SQUEEZED_BUT_SPENDING = (
+    "squeezed, and wants are over guideline too",
+    "Your wants are modest next to your bills, but both are large against your "
+    "income — the shortfall is partly the spending.")
+_SQUEEZED_HIGH_NEEDS = (
+    "squeezed by fixed costs",
+    "Your essentials alone eat more of your income than the guideline allows. "
+    "Spending discipline isn't the problem here; the fixed costs are.")
+
 
 def _means_descriptor(r: float, surplus: float) -> str:
     s = round(surplus)
@@ -435,12 +470,34 @@ def spending_score(agg: Aggregates) -> Score | None:
     means_side = "low" if r < 0.05 else "high"
     quadrant, headline = _QUADRANTS[(fesr_side, means_side)]
 
+    # Refine the one verdict that makes a causal claim. "Not your spending
+    # habits" is only honest if spending is actually modest against income.
+    wants_sh, needs_sh = agg.wants_share, agg.needs_share
+    if (fesr_side, means_side) == ("low", "low") and wants_sh is not None:
+        if wants_sh > WANTS_INCOME_TARGET:
+            quadrant, headline = _SQUEEZED_BUT_SPENDING
+        elif needs_sh is not None and needs_sh > NEEDS_INCOME_TARGET:
+            quadrant, headline = _SQUEEZED_HIGH_NEEDS
+
     pct_of_target = fesr / FESR_TARGET * 100 if FESR_TARGET else 0.0
+    # Report the rule as the rule is actually written — three shares of income —
+    # then the ratio the habit sub-score is read from. Quoting only the ratio
+    # let someone 8% of income underwater read "within the 50/30/20 guideline"
+    # and conclude they were following it.
+    if wants_sh is not None and needs_sh is not None:
+        shares = (
+            f"Against 50/30/20, your income splits "
+            f"{needs_sh * 100:.0f}% needs / {wants_sh * 100:.0f}% wants / "
+            f"{r * 100:.0f}% saved — the guideline is 50 / 30 / 20. ")
+    else:
+        shares = ""
     detail = (
+        shares +
         f"You spend {fmt_money(agg.frivolous)}/mo on wants against "
         f"{fmt_money(agg.essential)}/mo of essentials — a ratio of {fesr:.2f}, "
-        f"{'above' if fesr > FESR_TARGET else 'within'} the 50/30/20 guideline "
-        f"of {FESR_TARGET:.2f} ({pct_of_target:.0f}% of it). Net income is "
+        f"{'above' if fesr > FESR_TARGET else 'within'} the wants-to-needs "
+        f"ceiling of {FESR_TARGET:.2f} ({pct_of_target:.0f}% of it), which is "
+        f"what the habits half of the score reads. Net income is "
         f"{fmt_money(agg.surplus, signed=True)}/mo, a "
         f"{'savings' if r >= 0 else 'deficit'} rate of {abs(r) * 100:.0f}% "
         f"against the 20% target.")

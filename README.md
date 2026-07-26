@@ -346,6 +346,30 @@ cases land as:
 | **high $\rho$** | F — overspending | B− — comfortable but loose |
 | **low $\rho$** | B — squeezed, not careless | A — disciplined and saving |
 
+**Why $\rho$ compares wants to needs, and what that misses.** Measuring wants
+against *income* would grade a low earner down for a circumstance rather than a
+habit, which is the thing this score is trying not to do. But $\rho$ is
+scale-free: both sides can inflate together and the ratio still reads as
+disciplined. Someone spending 69% of income on essentials and 39% on wants has
+$\rho = 0.57$ — inside the ceiling — while being 15% of income underwater.
+
+The sub-scores are left alone, because the arithmetic is doing what it was
+designed to do and the resulting grade is appropriately bad either way. What is
+*not* left alone is the verdict. The bottom-left quadrant used to say flatly
+"it isn't your spending habits causing it", and that claim is only true when
+spending really is modest against income. It is now split three ways by the
+shares of income the rule is actually written in:
+
+- wants over 30% of income → *"your wants are modest next to your bills, but
+  both are large against your income — the shortfall is partly the spending"*;
+- wants inside 30% but essentials over 50% → *"squeezed by fixed costs"*, which
+  does absolve spending, correctly;
+- both inside guideline → not squeezed at all.
+
+The detail line now quotes all three shares (needs / wants / saved against
+50 / 30 / 20) before the ratio, so nobody can read "within the guideline" off a
+ratio while being 8% of income in deficit.
+
 A deepening deficit keeps lowering the score rather than plateauing. Two people
 $600/mo underwater can land at F and B respectively, which is the entire point.
 

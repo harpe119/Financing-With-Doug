@@ -6,6 +6,36 @@ intended to hand to someone else. The running version is shown in the app
 header and under **Help → About**, so a downloaded copy always identifies
 itself.
 
+## 1.7.2 — the score no longer absolves spending it shouldn't
+
+Found by reading the `struggling` demo and disbelieving it: someone spending 39%
+of income on wants against a guideline of 30%, and 15% of income underwater, was
+told *"it isn't your spending habits causing it."*
+
+- **The cause.** The habits sub-score reads FESR = wants ÷ needs against a
+  ceiling of 0.60, which is the 50/30/20 rule expressed as a ratio (30 ÷ 50) —
+  that part was right and consistent. But a ratio is scale-free: both sides can
+  inflate together and it still reads as disciplined. 69% of income on needs and
+  39% on wants gives FESR 0.57, comfortably "within guideline", while spending
+  108% of income.
+- **What changed.** Not the arithmetic — the sub-scores are doing what they were
+  designed to do, and that profile already graded D+. What changed is the
+  *verdict*, which made a causal claim the numbers didn't support. The
+  bottom-left quadrant is now split three ways using the shares of income the
+  rule is actually written in: wants over 30% of income → the shortfall is
+  partly the spending; wants inside 30% but essentials over 50% → *squeezed by
+  fixed costs*, which absolves spending correctly; both inside → not squeezed.
+- **The detail line now leads with all three shares** — needs / wants / saved
+  against 50 / 30 / 20 — before quoting the ratio, so "within the guideline" can
+  no longer be read off a ratio by someone who is 8% of income in deficit.
+- `Aggregates.wants_share` and `.needs_share` added; regression tests cover all
+  three branches plus a textbook 50/30/20 case.
+
+## 1.7.1 — forecast page defaults
+
+- The Forecast page opens on **Cash only** with the analysis panel off, rather
+  than showing all three charts at once.
+
 ## 1.7.0 — four demo datasets, and demos that don't cost you your data
 
 - **Demos open in their own database file.** Loading one used to write sample
