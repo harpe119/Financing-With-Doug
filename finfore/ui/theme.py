@@ -162,6 +162,13 @@ QScrollBar::handle:horizontal {{
     background: {BORDER}; border-radius: 5px; min-width: 28px;
 }}
 
+/* Ledger reconciliation warning. Amber, not red: the data is suspect, nothing
+   is broken, and the user is not in trouble. */
+QLabel#ledgerWarning {{
+    background: #2A2010; color: {TEXT}; border: 1px solid {AMBER};
+    border-radius: 6px; padding: 9px 12px; font-size: 12px;
+}}
+
 /* Demo banner. Deliberately loud: a screen full of someone else's money must
    never be mistakable for your own, and a subtle grey note would be. */
 QLabel#demoBanner {{

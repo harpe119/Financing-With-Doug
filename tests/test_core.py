@@ -1269,6 +1269,62 @@ def main() -> None:
     _late.close()
     _hstore.close()
 
+    print("a ledger that cannot reconcile is reported, not hidden")
+    from finfore.history import reconcile as _reconcile
+    # B(start) = B(today) - net_flow is exact, so net-positive flows against a
+    # near-zero balance *force* a deeply negative opening. The numbers are
+    # right and an input is wrong; drawing it silently reads as the program
+    # being broken rather than the export being incomplete.
+    _rec = Store(tmp / "reconcile.db")
+    _rec.add_account(Account(name="Savings", type=AccountType.SAVINGS,
+                             balance=0.71, balance_date=_date.today()))
+    _rrows = []
+    for _i in range(24):
+        _d = _date.today() - timedelta(days=30 * _i)
+        _rrows.append({"account_id": 1, "date": pd.Timestamp(_d),
+                       "description": "PAYCHECK DEPOSIT", "amount": 800.0,
+                       "category": "Income", "import_hash": f"ri{_i}"})
+        _rrows.append({"account_id": 1,
+                       "date": pd.Timestamp(_d + timedelta(days=3)),
+                       "description": "TRANSFER TO CHECKING", "amount": -740.0,
+                       "category": "Transfer", "import_hash": f"ro{_i}"})
+    _rec.add_transactions(pd.DataFrame(_rrows))
+    _issues = _reconcile(_rec)
+    check("an impossible opening balance is detected", len(_issues) == 1)
+    check("it names the account", _issues[0].account == "Savings")
+    check("it reports the implied opening balance", _issues[0].opening < -1000)
+    check("and the net flow that forces it", _issues[0].net_flow > 1000)
+    check("the message explains rather than just flagging",
+          "current balance" in _issues[0].message
+          and "started at" in _issues[0].message)
+
+    # The same event posted twice under different wording is what the row hash
+    # cannot collapse, because the description is part of the hash.
+    _rec.add_transactions(pd.DataFrame([
+        {"account_id": 1, "date": pd.Timestamp(_date.today() - timedelta(days=45)),
+         "description": "COSTCO DEPOSIT", "amount": 500.0,
+         "category": "Income", "import_hash": "dup-a"},
+        {"account_id": 1, "date": pd.Timestamp(_date.today() - timedelta(days=45)),
+         "description": "ACH CREDIT - COSTCO DEPOSIT", "amount": 500.0,
+         "category": "Income", "import_hash": "dup-b"}]))
+    _issues2 = _reconcile(_rec)
+    check("same-day same-amount rows with different wording are counted",
+          _issues2[0].duplicates >= 1)
+    check("and their dollar value is reported",
+          abs(_issues2[0].duplicate_value) >= 500.0)
+
+    _ok = Store(tmp / "reconcile_ok.db")
+    _ok.add_account(Account(name="Chq", type=AccountType.CHECKING,
+                            balance=2_500.0, balance_date=_date.today()))
+    _ok.add_transactions(pd.DataFrame([
+        {"account_id": 1,
+         "date": pd.Timestamp(_date.today() - timedelta(days=30 * i)),
+         "description": "PAY", "amount": 1_000.0 if i % 2 else -1_000.0,
+         "category": "Income", "import_hash": f"ok{i}"} for i in range(12)]))
+    check("a ledger that does reconcile raises nothing", _reconcile(_ok) == [])
+    _rec.close()
+    _ok.close()
+
     print("categorisation accuracy")
     from finfore.categorize import categorize as _cz
     # Anchored keywords. Bare "UNITED" put United Way under Travel because the

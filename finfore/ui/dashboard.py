@@ -2,11 +2,12 @@
 from __future__ import annotations
 
 import numpy as np
-from PyQt6.QtWidgets import (QHBoxLayout, QPushButton, QSizePolicy,
+from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import (QHBoxLayout, QLabel, QPushButton, QSizePolicy,
                              QVBoxLayout, QWidget)
 
 from ..history import (category_spending, headline_stats, monthly_cashflow,
-                       networth_history)
+                       networth_history, reconcile)
 from ..insights import emergency_fund_target
 from ..store import Store
 from ..util import fmt_money
@@ -52,6 +53,18 @@ class DashboardPage(QWidget):
         empty_row.addWidget(self.guide_btn)
         lay.addLayout(empty_row)
 
+        # A reconstruction that has been forced somewhere impossible must say
+        # so. The alternative is a chart that quietly shows a savings account
+        # at −$1,469 for three years, which reads as the program being broken
+        # rather than as the export being incomplete.
+        self.warn = QLabel("")
+        self.warn.setObjectName("ledgerWarning")
+        self.warn.setWordWrap(True)
+        self.warn.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.warn.setVisible(False)
+        lay.addWidget(self.warn)
+
         hist_card = Card("Net worth history")
         self.plot_hist = charts.new_plot(legend=True)
         self.hist_series = SeriesRegistry()
@@ -88,6 +101,43 @@ class DashboardPage(QWidget):
         lay.addWidget(vsplit(hist_card, bottom, sizes=[430, 300]), 1)
 
     # ---------------------------------------------------------------
+    def _render_warnings(self) -> None:
+        """Explain a history the arithmetic has forced somewhere impossible."""
+        try:
+            issues = reconcile(self.store)
+        except Exception:
+            issues = []
+        if not issues:
+            self.warn.setVisible(False)
+            return
+        rows = ["<b>This history doesn't add up, and the chart is showing it "
+                "honestly rather than hiding it.</b>"]
+        for i in issues:
+            rows.append(
+                f"<div style='margin-top:5px'>· <b>{i.account}</b>: the "
+                f"imported rows total <b>{fmt_money(i.net_flow, signed=True)}</b> "
+                f"since {i.since:%b %Y}, against a current balance of "
+                f"{fmt_money(i.entered)}. Those only fit if the account started "
+                f"at <b>{fmt_money(i.opening)}</b>.</div>")
+            if i.duplicates:
+                rows.append(
+                    f"<div style='margin-left:12px'>{i.duplicates} row"
+                    f"{'s' if i.duplicates != 1 else ''} look like the same "
+                    f"transaction posted twice under different wording "
+                    f"({fmt_money(i.duplicate_value, signed=True)} between "
+                    f"them) — banks often do this around a system change, and "
+                    f"the duplicate check can't catch it because the "
+                    f"descriptions differ.</div>")
+        rows.append(
+            "<div style='margin-top:5px'>Usual causes, in order: the export is "
+            "missing withdrawals or doesn't reach back far enough; the same "
+            "transaction was exported twice; or the balance / as-of date on "
+            "the Accounts page needs correcting. Adding a "
+            "<b>Snapshot</b> with a known past balance re-anchors the history "
+            "from that date.</div>")
+        self.warn.setText("".join(rows))
+        self.warn.setVisible(True)
+
     def refresh(self) -> None:
         store = self.store
         st = headline_stats(store)
@@ -108,6 +158,7 @@ class DashboardPage(QWidget):
         has_data = bool(store.accounts()) or not tx.empty
         self.empty.setVisible(not has_data)
         self.guide_btn.setVisible(not has_data)
+        self._render_warnings()
 
         # history
         p = self.plot_hist

@@ -13,6 +13,7 @@ snapshot.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import date
 
 import numpy as np
@@ -125,6 +126,88 @@ def snapshot_history(store: Store, account: Account,
     full = s.reindex(index.union(s.index)).interpolate(method="time")
     full = full.ffill().bfill()
     return full.reindex(index)
+
+
+@dataclass
+class LedgerIssue:
+    """A cash account whose ledger and entered balance don't agree."""
+    account: str
+    opening: float          # balance the ledger + entered balance imply at the start
+    entered: float          # what the user said the balance is now
+    net_flow: float         # sum of every imported flow
+    since: date
+    duplicates: int = 0     # rows that look like the same event posted twice
+    duplicate_value: float = 0.0
+
+    @property
+    def message(self) -> str:
+        return (
+            f"{self.account}: the imported rows add up to "
+            f"{self.net_flow:+,.2f} since {self.since:%b %Y}, and you entered a "
+            f"current balance of {self.entered:,.2f}. Those two only fit "
+            f"together if the account started at {self.opening:,.2f} — which "
+            f"for a deposit account is almost certainly wrong.")
+
+
+def reconcile(store: Store, tolerance: float = 25.0) -> list[LedgerIssue]:
+    """Find cash accounts whose history is arithmetically forced to be absurd.
+
+    The reconstruction is not a guess: B(start) = B(today) − ΣF is exact, so if
+    the imported flows are net positive while the balance today is near zero,
+    the account *must* have started deeply negative. When it does, the numbers
+    are right and one of the inputs is wrong.
+
+    Saying so is the only honest option. Silently drawing a savings account at
+    −$1,469 for three years invites the reader to distrust the whole chart,
+    when the actual fault is upstream — most often a bank export that posts the
+    same transaction twice in two formats (common around a core conversion,
+    where the row hash cannot dedupe them because the descriptions differ), a
+    partial export missing withdrawals, or a stale balance / as-of date.
+    """
+    tx = store.transactions()
+    out: list[LedgerIssue] = []
+    for a in store.accounts():
+        if a.type not in (AccountType.CHECKING, AccountType.SAVINGS):
+            continue
+        sub = tx[tx["account_id"] == a.id] if not tx.empty else tx
+        if len(sub) < 5:
+            continue
+        net = float(sub["amount"].sum())
+        start = known_from(tx, a, pd.Timestamp(a.balance_date))
+        index = pd.date_range(start, pd.Timestamp(date.today()), freq="D")
+        if len(index) < 2:
+            continue
+        series = cash_history(tx, a, index, anchor=cash_anchor(store, a))
+        opening = float(series.iloc[0])
+        if opening >= -tolerance:
+            continue
+        n_dup, dup_val = _double_postings(sub)
+        out.append(LedgerIssue(
+            account=a.name, opening=opening, entered=float(a.balance),
+            net_flow=net, since=start.date(), duplicates=n_dup,
+            duplicate_value=dup_val))
+    return out
+
+
+def _double_postings(sub: pd.DataFrame) -> tuple[int, float]:
+    """Rows that look like one event posted twice under different wording.
+
+    Same account, same day, same amount, but a different description — which
+    is exactly what the import hash cannot collapse, because the description is
+    part of it. Two genuine identical purchases on one day look the same from
+    here, so this counts *candidates* and is only ever used to explain a
+    discrepancy that has already been detected some other way.
+    """
+    if sub.empty:
+        return 0, 0.0
+    n = 0
+    total = 0.0
+    for (_d, amt), grp in sub.groupby([sub["date"].dt.normalize(), "amount"]):
+        if len(grp) < 2 or grp["description"].nunique() < 2:
+            continue
+        n += len(grp) - 1
+        total += float(amt) * (len(grp) - 1)
+    return n, total
 
 
 def networth_history(store: Store) -> pd.DataFrame:

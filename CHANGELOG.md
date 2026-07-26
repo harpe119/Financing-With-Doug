@@ -6,6 +6,33 @@ intended to hand to someone else. The running version is shown in the app
 header and under **Help → About**, so a downloaded copy always identifies
 itself.
 
+## 1.10.2 — when the ledger can't reconcile, say so
+
+Follow-up to the −$1,500 report, using the actual CSVs. The 1.10.1 fixes were
+real but were not this case. Running the numbers:
+
+- imported flows: **+$22,882.92 in, −$21,412.76 out, net +$1,470.16**
+- entered balance today: **$0.71**
+- ⟹ the account is *forced* to have opened at **−$1,469.45**
+
+`B(start) = B(today) − ΣF` is exact arithmetic, not an estimate. There is no
+reconstruction bug: the inputs are mutually inconsistent, and one of them is
+wrong. In this export the same transaction is posted twice under two different
+descriptions (an ACH row and a legacy row for one Purdue deposit, one Costco
+deposit, and several transfers) — a bank system-change artefact that the import
+hash *cannot* dedupe, because the description is part of the hash.
+
+- **New: `history.reconcile()` and a Dashboard warning.** Any cash account whose
+  ledger and entered balance imply an impossible opening balance now says so
+  in plain numbers — the net flow, the balance entered, the opening it forces,
+  and how many rows look like the same event posted twice. Drawing a savings
+  account at −$1,469 for three years without comment reads as the program being
+  broken; it isn't, and the fault is upstream where the user can fix it.
+- The warning lists the usual causes in likelihood order — an export missing
+  withdrawals or not reaching far enough back, a duplicated export, or a stale
+  balance / as-of date — and points at **Snapshots** as the way to re-anchor
+  history from a known past balance.
+
 ## 1.10.1 — two bugs in the dashboard history charts
 
 Reported as "it puts my brother at about −$1,500 several years ago, which
