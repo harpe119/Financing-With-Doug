@@ -105,7 +105,16 @@ indicator column (values like `Credit`/`Debit` or `CR`/`DR`), which is
 auto-detected by header name or by inspecting the column's values. Parenthesized negatives like `(45.10)` are handled, running
 balance columns are ignored, and dates can be parsed day-first. Each row is
 hashed on (account, date, description, amount, occurrence index), so
-legitimate same-day duplicates survive while re-imports deduplicate.
+legitimate same-day duplicates survive while re-imports deduplicate — the
+occurrence index is what keeps two identical charges on one day, and it is also
+why the hash cannot collapse one transaction a bank exported *twice under
+different wording*. That case (common around a core conversion, where an ACH row
+and a legacy row describe one event) is handled separately and advisorily by
+**Accounts → Check my balances → Find duplicate rows**: candidates are matched
+on amount, date and merchant similarity, but the decision is driven by the
+reconciliation gap, since only the balance can distinguish one payment posted
+twice from two identical payments. Removals are recorded so a later re-import
+does not restore them.
 Matching opposite-amount rows across your own accounts within four days are
 paired and categorized as transfers so internal movements never count as
 income or spending. Categorization is keyword-based and correctable from the

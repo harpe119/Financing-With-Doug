@@ -6,6 +6,41 @@ intended to hand to someone else. The running version is shown in the app
 header and under **Help → About**, so a downloaded copy always identifies
 itself.
 
+## 1.12.0 — finding a transaction the bank posted twice
+
+**Same-day transactions were already handled correctly** and this confirms it
+with tests: five rows on one date all survive import (the row hash carries an
+occurrence index, so two byte-identical charges on one day are both kept), the
+day's net is their sum, and re-importing the file adds nothing.
+
+What was *not* handled is one event exported twice under different wording —
+which no hash can catch, because the description is part of the hash, and
+loosening it would start silently discarding genuine identical purchases.
+
+- **New `finfore/dedup.py` and Accounts → Check my balances → `Find duplicate
+  rows…`.** Candidates are rows in one account with the same signed amount,
+  within a day of each other, whose descriptions look like the same merchant by
+  the 3-gram similarity the categoriser already uses. On the reported data it
+  scores the two Purdue rows at **0.79** and correctly refuses *Transfer To
+  Certificate* against *Transfer To Savings -2507* at **0.29** — same day, same
+  $1,000, genuinely different destinations.
+- **The reconciliation gap is the oracle, not the similarity score.** Nothing is
+  suggested for an account that already reconciles: two identical $250 transfers
+  on one day are usually two real transfers, and only the balance can tell.
+  Where the opening balance *is* impossible, the rows proposed are the ones
+  whose removal moves it toward zero, largest first, stopping before
+  overshooting. On the reported savings account that ticks exactly two rows and
+  moves the opening from **−$1,469.45 to −$488.87**, leaving the rest listed but
+  untouched.
+- **Nothing is removed without being looked at.** The dialog shows every
+  candidate with the projected opening balance updating live as boxes are
+  ticked, and says plainly that a still-negative result means rows are missing
+  or the balance is wrong — *"removing more rows will not fix that, it will only
+  hide it."*
+- **Removals stick.** A new `suppressed` table holds the row hashes, because
+  deleting a row alone frees its hash and the next **Update from CSV** would
+  import it straight back. **Restore removed rows** undoes this.
+
 ## 1.11.0 — Accounts → Check my balances…
 
 Continuing the −$1,500 investigation. Running all four of the reported CSVs

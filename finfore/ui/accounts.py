@@ -468,12 +468,43 @@ class BalanceCheckDialog(QDialog):
         self.note = hint("")
         self.note.setWordWrap(True)
         lay.addWidget(self.note)
+        self.removed_note = hint("")
+        lay.addWidget(self.removed_note)
 
-        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        bb = QDialogButtonBox()
+        self.dup_btn = bb.addButton("Find duplicate rows…",
+                                    QDialogButtonBox.ButtonRole.ActionRole)
+        self.dup_btn.setToolTip(
+            "Look for one transaction that the bank exported twice")
+        self.dup_btn.clicked.connect(self._find_duplicates)
+        self.undo_btn = bb.addButton("Restore removed rows",
+                                     QDialogButtonBox.ButtonRole.ResetRole)
+        self.undo_btn.setToolTip(
+            "Forget every duplicate removal, so the next import brings them back")
+        self.undo_btn.clicked.connect(self._unsuppress)
+        bb.addButton(QDialogButtonBox.StandardButton.Close)
         bb.rejected.connect(self.reject)
-        bb.accepted.connect(self.accept)
         lay.addWidget(bb)
         self._reload()
+
+    def _find_duplicates(self) -> None:
+        DuplicateDialog(self.store, self).exec()
+        self._reload()
+
+    def _unsuppress(self) -> None:
+        n = len(self.store.suppressed_hashes())
+        if not n:
+            QMessageBox.information(self, "Nothing to restore",
+                                    "No rows have been removed as duplicates.")
+            return
+        ok = QMessageBox.question(
+            self, "Restore removed rows",
+            f"Forget {n} duplicate removal{'s' if n != 1 else ''}?\n\n"
+            f"The rows themselves come back the next time you import the CSV "
+            f"they came from.")
+        if ok == QMessageBox.StandardButton.Yes:
+            self.store.unsuppress_all()
+            self._reload()
 
     def _reload(self) -> None:
         from ..history import reconcile_all
@@ -500,6 +531,10 @@ class BalanceCheckDialog(QDialog):
                 self.table.setItem(r, c, it)
             if not i.ok:
                 bad.append(i)
+        n_sup = len(self.store.suppressed_hashes())
+        self.removed_note.setText(
+            f"{n_sup} row{'s' if n_sup != 1 else ''} previously removed as "
+            f"duplicates and held out of future imports." if n_sup else "")
         if not rows:
             self.note.setText("No cash accounts with imported transactions yet.")
         elif not bad:
@@ -525,6 +560,142 @@ class BalanceCheckDialog(QDialog):
                         f"different wording "
                         f"({fmt_money(i.duplicate_value, signed=True)}).")
             self.note.setText(" ".join(parts))
+
+
+class DuplicateDialog(QDialog):
+    """Review and remove rows that look like one transaction posted twice.
+
+    Nothing is removed without being looked at. Similarity finds candidates;
+    the opening-balance figure at the bottom is what decides between them, and
+    it updates as boxes are ticked so the effect of a choice is visible before
+    it is made rather than after.
+    """
+
+    COLS = ["", "Account", "Date", "Amount", "Keeping", "Removing", "Match"]
+
+    def __init__(self, store: Store, parent=None):
+        super().__init__(parent)
+        self.store = store
+        self.setWindowTitle("Possible duplicate rows")
+        self.setMinimumSize(1000, 520)
+        self._rows: list = []          # (checkbox, pair, report)
+
+        lay = QVBoxLayout(self)
+        lay.addWidget(hint(
+            "Banks sometimes export one transaction twice — commonly around a "
+            "system change, where the same event appears in both an old and a "
+            "new format. The import can't collapse those on its own, because "
+            "the wording differs and two genuine identical purchases on one day "
+            "must be kept.<br><br>Ticked rows are the ones whose removal moves "
+            "an impossible opening balance back toward zero. Everything else is "
+            "listed but left alone — two identical transfers on the same day "
+            "are usually two real transfers. Removed rows are remembered, so a "
+            "later <b>Update from CSV</b> will not bring them back."))
+
+        self.table = QTableWidget(0, len(self.COLS))
+        self.table.setHorizontalHeaderLabels(self.COLS)
+        self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.table.setAlternatingRowColors(True)
+        self.table.verticalHeader().setVisible(False)
+        self.table.verticalHeader().setDefaultSectionSize(34)
+        h = self.table.horizontalHeader()
+        for c, mode in enumerate([QHeaderView.ResizeMode.ResizeToContents,
+                                  QHeaderView.ResizeMode.ResizeToContents,
+                                  QHeaderView.ResizeMode.ResizeToContents,
+                                  QHeaderView.ResizeMode.ResizeToContents,
+                                  QHeaderView.ResizeMode.Stretch,
+                                  QHeaderView.ResizeMode.Stretch,
+                                  QHeaderView.ResizeMode.ResizeToContents]):
+            h.setSectionResizeMode(c, mode)
+        lay.addWidget(self.table, 1)
+
+        self.effect = QLabel("")
+        self.effect.setWordWrap(True)
+        lay.addWidget(self.effect)
+
+        bb = QDialogButtonBox()
+        self.go = bb.addButton("Remove ticked rows",
+                               QDialogButtonBox.ButtonRole.AcceptRole)
+        self.go.setObjectName("danger")
+        bb.addButton("Close", QDialogButtonBox.ButtonRole.RejectRole)
+        bb.accepted.connect(self._apply)
+        bb.rejected.connect(self.reject)
+        lay.addWidget(bb)
+        self._reload()
+
+    def _reload(self) -> None:
+        from ..dedup import suggest
+        self._reports = suggest(self.store)
+        self._rows = []
+        total = sum(len(r.pairs) for r in self._reports)
+        self.table.setRowCount(total)
+        r = 0
+        for rep in self._reports:
+            for p in rep.pairs:
+                box = QCheckBox()
+                box.setChecked(p.drop_id in rep.suggested)
+                box.stateChanged.connect(lambda _s: self._sync_effect())
+                self.table.setCellWidget(r, 0, box)
+                cells = [rep.account, p.when.isoformat(),
+                         f"{'+' if p.amount > 0 else '-'}${abs(p.amount):,.2f}",
+                         p.keep_desc, p.drop_desc, f"{p.score:.2f}"]
+                for c, v in enumerate(cells, start=1):
+                    it = QTableWidgetItem(v)
+                    if c == 3:
+                        it.setTextAlignment(Qt.AlignmentFlag.AlignRight
+                                            | Qt.AlignmentFlag.AlignVCenter)
+                    self.table.setItem(r, c, it)
+                self._rows.append((box, p, rep))
+                r += 1
+        self.go.setEnabled(total > 0)
+        self._sync_effect()
+
+    def _sync_effect(self) -> None:
+        if not self._rows:
+            self.effect.setText("No candidate duplicates found.")
+            return
+        parts = []
+        for rep in self._reports:
+            picked = [p.drop_id for b, p, rp in self._rows
+                      if rp is rep and b.isChecked()]
+            after = rep.opening_after(picked)
+            colour = (theme.POSITIVE if after >= -25 else theme.AMBER)
+            parts.append(
+                f"<div><b>{rep.account}</b>: opening balance "
+                f"${rep.opening:,.2f} → <span style='color:{colour}'>"
+                f"${after:,.2f}</span> if the ticked rows go "
+                f"({len(picked)} of {len(rep.pairs)}).</div>")
+        parts.append(
+            f"<div style='color:{theme.MUTED};margin-top:4px'>An opening near "
+            f"zero means the ledger and the balance finally agree. If it is "
+            f"still a long way below, some rows are missing from the export or "
+            f"the balance itself needs correcting — removing more rows will "
+            f"not fix that, it will only hide it.</div>")
+        self.effect.setText("".join(parts))
+
+    def _apply(self) -> None:
+        drop = [p.drop_id for b, p, _ in self._rows if b.isChecked()]
+        if not drop:
+            QMessageBox.information(self, "Nothing ticked",
+                                    "Tick the rows you want removed first.")
+            return
+        ok = QMessageBox.question(
+            self, "Remove rows",
+            f"Permanently remove {len(drop)} transaction"
+            f"{'s' if len(drop) != 1 else ''}?\n\n"
+            f"They will also be remembered as removed, so importing the same "
+            f"CSV again will not bring them back. You can undo that from "
+            f"Accounts → Check my balances if you change your mind.")
+        if ok != QMessageBox.StandardButton.Yes:
+            return
+        from ..dedup import apply as apply_dedup
+        n = apply_dedup(self.store, drop)
+        from ..pipeline import refresh_derived
+        refresh_derived(self.store, checkpoint=False)
+        QMessageBox.information(
+            self, "Removed",
+            f"Removed {n} row{'s' if n != 1 else ''}.")
+        self.accept()
 
 
 class AccountsPage(QWidget):

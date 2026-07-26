@@ -71,6 +71,16 @@ CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+-- Rows the user has deliberately removed as double-postings. Without this a
+-- later "Update from CSV" would import them straight back: the row hash is
+-- what makes imports idempotent, so deleting the row alone just frees the hash
+-- to be used again. Suppressing the hash makes the removal stick.
+CREATE TABLE IF NOT EXISTS suppressed (
+    import_hash TEXT PRIMARY KEY,
+    account_id INTEGER,
+    note TEXT NOT NULL DEFAULT '',
+    removed_on TEXT NOT NULL
+);
 -- One row per import: the state of things, and the projection being made at
 -- that moment. The forecast is stored rather than recomputed because a
 -- projection refitted later with the outcome already in the data is not a
@@ -282,8 +292,11 @@ class Store:
             rows.append((int(r["account_id"]), d.date().isoformat(),
                          str(r["description"]), float(r["amount"]),
                          str(r.get("category", "Misc")), str(r["import_hash"])))
+        blocked = self.suppressed_hashes()
         added = 0
         for row in rows:
+            if row[5] in blocked:
+                continue          # deliberately removed as a double-posting
             cur = self.con.execute(
                 """INSERT OR IGNORE INTO transactions
                    (account_id, date, description, amount, category, import_hash)
@@ -307,6 +320,44 @@ class Store:
         # strings), which then blows up every consumer that calls .strftime().
         df["date"] = pd.to_datetime(df["date"], format="ISO8601", errors="coerce")
         return df
+
+    # ---------------- removing rows ----------------
+    def suppressed_hashes(self) -> set[str]:
+        return {r["import_hash"] for r in
+                self.con.execute("SELECT import_hash FROM suppressed")}
+
+    def delete_transactions(self, tx_ids: list[int], note: str = "",
+                            suppress: bool = True) -> int:
+        """Delete rows, optionally remembering them so re-import won't restore.
+
+        Suppression is on by default because the only reason to delete a row
+        here is that it should never have existed — and the next update from
+        the same bank would otherwise bring it straight back, since the row
+        hash that makes imports idempotent is freed along with the row.
+        """
+        if not tx_ids:
+            return 0
+        marks = ",".join("?" * len(tx_ids))
+        rows = self.con.execute(
+            f"SELECT id, account_id, import_hash FROM transactions "
+            f"WHERE id IN ({marks})", tx_ids).fetchall()
+        if suppress:
+            stamp = date.today().isoformat()
+            self.con.executemany(
+                "INSERT OR REPLACE INTO suppressed "
+                "(import_hash, account_id, note, removed_on) VALUES (?,?,?,?)",
+                [(r["import_hash"], r["account_id"], note, stamp) for r in rows])
+        self.con.execute(
+            f"DELETE FROM transactions WHERE id IN ({marks})", tx_ids)
+        self.con.commit()
+        return len(rows)
+
+    def unsuppress_all(self) -> int:
+        """Forget every suppression, so a re-import restores those rows."""
+        n = self.con.execute("SELECT COUNT(*) c FROM suppressed").fetchone()["c"]
+        self.con.execute("DELETE FROM suppressed")
+        self.con.commit()
+        return int(n)
 
     def set_category(self, tx_ids: list[int], category: str) -> None:
         self.con.executemany(
@@ -599,7 +650,8 @@ class Store:
 
     def clear_all(self) -> None:
         for t in ("snapshots", "transactions", "recurring", "goals", "accounts",
-                  "settings", "category_feedback", "events", "checkpoints"):
+                  "settings", "category_feedback", "events", "checkpoints",
+                  "suppressed"):
             self.con.execute(f"DELETE FROM {t}")
         self.con.commit()
 

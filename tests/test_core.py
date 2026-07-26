@@ -1353,6 +1353,102 @@ def main() -> None:
     _rec.close()
     _ok.close()
 
+    print("same-day transactions, and finding one posted twice")
+    from finfore import dedup as _dd
+    _sd = Store(tmp / "sameday.db")
+    _sd.add_account(Account(name="Savings", type=AccountType.SAVINGS,
+                            balance=0.71, balance_date=_date.today()))
+    _day = pd.Timestamp(_date.today() - timedelta(days=400))
+    _sdrows = [
+        # Five rows on one day, including two genuinely identical transfers and
+        # two same-amount transfers to *different* destinations.
+        {"description": "Interest Income", "amount": 0.25},
+        {"description": "Transfer To Savings -2507", "amount": -1_000.00},
+        {"description": "Transfer To Certificate", "amount": -1_000.00},
+        {"description": "Transfer To Checking -0781", "amount": -250.00},
+        {"description": "Transfer To Checking -0781", "amount": -250.00},
+    ]
+    _sd.add_transactions(pd.DataFrame([
+        {"account_id": 1, "date": _day, "category": "Transfer",
+         "import_hash": f"sd{i}", **r} for i, r in enumerate(_sdrows)]))
+    _got = _sd.transactions()
+    check("every same-day row survives import", len(_got) == 5)
+    check("including two byte-identical rows",
+          (_got["description"] == "Transfer To Checking -0781").sum() == 2)
+    check("the day's net is the sum of all of them",
+          abs(_got["amount"].sum() - (-2_499.75)) < 0.01)
+    _n0 = len(_sd.transactions())
+    _sd.add_transactions(pd.DataFrame([
+        {"account_id": 1, "date": _day, "category": "Transfer",
+         "import_hash": f"sd{i}", **r} for i, r in enumerate(_sdrows)]))
+    check("re-importing the same rows adds nothing",
+          len(_sd.transactions()) == _n0)
+
+    _pairs = _dd.find_pairs(_sd)
+    _descs = {(p.keep_desc, p.drop_desc) for p in _pairs}
+    check("two identical same-day transfers are offered as a candidate",
+          any(a == b == "Transfer To Checking -0781" for a, b in _descs))
+    check("but different destinations at the same amount are not",
+          not any({"Transfer To Certificate", "Transfer To Savings -2507"}
+                  == {a, b} for a, b in _descs))
+    # Similarity finds candidates; the balance identity decides between them.
+    # An account that already reconciles has no evidence of a problem, so two
+    # identical charges on one day stay two identical charges.
+    _sd.add_transactions(pd.DataFrame([
+        {"account_id": 1, "date": pd.Timestamp(_date.today() - timedelta(days=10)),
+         "description": "BIG DEPOSIT", "amount": 2_500.46,
+         "category": "Income", "import_hash": "sd-fix"}]))
+    _reps = _dd.suggest(_sd)
+    check("a reconciling account gets candidates but no suggestions",
+          _reps and all(not r.suggested for r in _reps))
+
+    # Now break it: a real double-posting of an inflow.
+    _dup = Store(tmp / "dupfix.db")
+    _dup.add_account(Account(name="Sav", type=AccountType.SAVINGS,
+                             balance=10.0, balance_date=_date.today()))
+    _dup.add_transactions(pd.DataFrame([
+        {"account_id": 1,
+         "date": pd.Timestamp(_date.today() - timedelta(days=300)),
+         "description": "PURDUE UNIVERSITY DEPOSIT", "amount": 843.92,
+         "category": "Income", "import_hash": "d1"},
+        {"account_id": 1,
+         "date": pd.Timestamp(_date.today() - timedelta(days=300)),
+         "description": "Deposit - PURDUE UNIVERSIT PURDUE UNIVERSIT DEPOSIT",
+         "amount": 843.92, "category": "Income", "import_hash": "d2"},
+        {"account_id": 1,
+         "date": pd.Timestamp(_date.today() - timedelta(days=200)),
+         "description": "TRANSFER TO CHECKING", "amount": -833.92,
+         "category": "Transfer", "import_hash": "d3"}]))
+    _rep = _dd.suggest(_dup)[0]
+    check("a double-posted inflow is detected", len(_rep.pairs) == 1)
+    check("and suggested, because removing it closes the gap",
+          len(_rep.suggested) == 1)
+    check("the projected opening after removal is reported",
+          abs(_rep.opening_after(_rep.suggested)) < 1.0)
+    _dd.apply(_dup, _rep.suggested)
+    check("removing it makes the account reconcile",
+          all(i.ok for i in _reconcile_all(_dup)))
+    # Deleting alone would free the row hash, so the next update from the same
+    # bank would import the duplicate straight back.
+    _dup.add_transactions(pd.DataFrame([
+        {"account_id": 1,
+         "date": pd.Timestamp(_date.today() - timedelta(days=300)),
+         "description": "Deposit - PURDUE UNIVERSIT PURDUE UNIVERSIT DEPOSIT",
+         "amount": 843.92, "category": "Income", "import_hash": "d2"}]))
+    check("re-importing does not resurrect a removed duplicate",
+          all(i.ok for i in _reconcile_all(_dup)))
+    check("the removal is remembered", len(_dup.suppressed_hashes()) == 1)
+    _dup.unsuppress_all()
+    _dup.add_transactions(pd.DataFrame([
+        {"account_id": 1,
+         "date": pd.Timestamp(_date.today() - timedelta(days=300)),
+         "description": "Deposit - PURDUE UNIVERSIT PURDUE UNIVERSIT DEPOSIT",
+         "amount": 843.92, "category": "Income", "import_hash": "d2"}]))
+    check("restoring lets a later import bring it back",
+          not all(i.ok for i in _reconcile_all(_dup)))
+    _sd.close()
+    _dup.close()
+
     print("categorisation accuracy")
     from finfore.categorize import categorize as _cz
     # Anchored keywords. Bare "UNITED" put United Way under Travel because the
