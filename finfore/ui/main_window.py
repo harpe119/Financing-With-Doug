@@ -184,6 +184,11 @@ class MainWindow(QMainWindow):
         m_file.addAction(a_quit)
 
         m_help = self.menuBar().addMenu("&Help")
+        a_guide = QAction("Getting started", self)
+        a_guide.setShortcut("F1")
+        a_guide.triggered.connect(self.show_guide)
+        m_help.addAction(a_guide)
+        m_help.addSeparator()
         a_meth = QAction("Methodology", self)
         a_meth.triggered.connect(self._methodology)
         m_help.addAction(a_meth)
@@ -388,6 +393,10 @@ class MainWindow(QMainWindow):
         box.setTextFormat(Qt.TextFormat.RichText)
         box.setText(f"<p style='min-width:320px'>{doug_fact()}</p>")
         box.exec()
+
+    def show_guide(self) -> None:
+        from .guide import show_guide
+        show_guide(self)
 
     def _about(self) -> None:
         from .. import __version__

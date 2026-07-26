@@ -43,6 +43,10 @@ Each opens in its **own database file**, so a demo never touches your ledger and
 demo data while you are in it. Your data lives at `~/.ledgerline/ledgerline.db`
 by default; pass `--db path.db` to use another file. Python ≥ 3.10.
 
+New to it? **Help → Getting started** (or `F1`) opens a walkthrough that
+covers importing a CSV, fixing categories, setting goals and reading the
+forecast — the same file is at [`docs/getting-started.md`](docs/getting-started.md).
+
 Run the test suite with `python tests/test_core.py`.
 
 ## Workflow
@@ -498,6 +502,8 @@ finfore/
   demo.py                 one-click demo loader
   ui/                     PyQt6 theme, charts, dialogs, seven pages
   ui/video.py             bundled explainer videos, with a system-player fallback
+  ui/guide.py             renders docs/getting-started.md in-app
+docs/getting-started.md   the user-facing walkthrough (Help -> Getting started)
 assets/                   explainer videos (bundled into the build)
 scripts/generate_sample_data.py   seeded synthetic bank exports
 sample_data/              bundled demo CSVs + meta.json

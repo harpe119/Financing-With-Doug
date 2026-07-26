@@ -12,9 +12,12 @@
 #   faster, because onefile unpacks the whole bundle to a temp directory on
 #   every launch. For handing to family, zip the folder — or flip ONEFILE to
 #   True below if a single icon matters more than startup speed.
-# * Data files are the sample CSVs and the explainer videos in assets/, both
-#   resolved through finfore.util.resource_path, which follows sys._MEIPASS —
-#   so they work in onedir and onefile alike.
+# * Data files are the sample CSVs, the explainer videos in assets/, and the
+#   Getting started guide in docs/ — all resolved through
+#   finfore.util.resource_path, which follows sys._MEIPASS, so they work in
+#   onedir and onefile alike. docs/ has to ship: Help → Getting started reads
+#   the Markdown at runtime rather than embedding a copy, so a build without it
+#   opens a window that apologises.
 # * Qt Multimedia is NOT force-collected here. PyInstaller picks up the backend
 #   plugins when it can, but they are the classic thing to go missing from a
 #   bundle, and the failure is silent — a black rectangle, no traceback.
@@ -54,7 +57,8 @@ a = Analysis(
     ["../run.py"],
     pathex=[".."],
     binaries=[],
-    datas=[("../sample_data", "sample_data"), ("../assets", "assets")],
+    datas=[("../sample_data", "sample_data"), ("../assets", "assets"),
+           ("../docs", "docs")],
     hiddenimports=hiddenimports,
     hookspath=[],
     runtime_hooks=[],

@@ -6,6 +6,30 @@ intended to hand to someone else. The running version is shown in the app
 header and under **Help → About**, so a downloaded copy always identifies
 itself.
 
+## 1.9.0 — a Getting started guide, in the app
+
+- **`docs/getting-started.md`**, written for someone who has just unzipped the
+  folder and does not know what a CSV export is. Covers the SmartScreen prompt,
+  where the data lives and that nothing leaves the machine, trying a demo first,
+  adding accounts, getting a CSV out of a bank, importing it and what to check
+  before pressing the button, clearing the uncategorised pile, setting goals and
+  the snowball, reading the fan (the band is the answer, not the line), the
+  habits score, the monthly five-minute routine, and a troubleshooting section
+  for the four things that actually confuse people.
+- **Readable in the app: Help → Getting started, or F1.** Qt renders Markdown
+  natively, so the file that ships is the file that displays — one source, no
+  conversion step, and it stays legible in a text editor and on GitHub. There is
+  an *Open in my text editor* button for reading or printing it outside the app.
+- **Offered where it is needed.** The empty Dashboard now has a **Show me how**
+  button beside the "no data yet" line, which disappears once there is data.
+- The guide is **tested against the interface**: the suite checks that every
+  button label it quotes still exists in the UI, that all eight pages and all
+  five demo profiles are covered, and that it renders as formatted text rather
+  than raw Markdown. A guide naming a button the app no longer has is worse
+  than no guide, and that drift is silent otherwise.
+- `packaging/doug.spec` ships `docs/`; a build without it opens a window that
+  says so rather than a blank one.
+
 ## 1.8.1 — the forecast now notices when your habits change
 
 Reported from the turnaround demo: someone who halved their discretionary

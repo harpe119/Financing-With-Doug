@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 import numpy as np
-from PyQt6.QtWidgets import QHBoxLayout, QSizePolicy, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import (QHBoxLayout, QPushButton, QSizePolicy,
+                             QVBoxLayout, QWidget)
 
 from ..history import (category_spending, headline_stats, monthly_cashflow,
                        networth_history)
@@ -37,9 +38,19 @@ class DashboardPage(QWidget):
             row.addWidget(c)
         lay.addLayout(row)
 
+        # The empty dashboard is the first thing a new user sees, and "add
+        # accounts and import a CSV" assumes they know what either means. The
+        # guide is one click away from exactly the moment it is needed.
+        empty_row = QHBoxLayout()
         self.empty = hint("No data yet — add accounts and import a bank CSV, "
-                          "or load the demo dataset from the File menu.")
-        lay.addWidget(self.empty)
+                          "or load a demo dataset from the File menu.")
+        empty_row.addWidget(self.empty, 1)
+        self.guide_btn = QPushButton("Show me how")
+        self.guide_btn.setObjectName("primary")
+        self.guide_btn.setToolTip("Open the Getting started guide (F1)")
+        self.guide_btn.clicked.connect(lambda: self.main.show_guide())
+        empty_row.addWidget(self.guide_btn)
+        lay.addLayout(empty_row)
 
         hist_card = Card("Net worth history")
         self.plot_hist = charts.new_plot(legend=True)
@@ -96,6 +107,7 @@ class DashboardPage(QWidget):
         tx = store.transactions()
         has_data = bool(store.accounts()) or not tx.empty
         self.empty.setVisible(not has_data)
+        self.guide_btn.setVisible(not has_data)
 
         # history
         p = self.plot_hist

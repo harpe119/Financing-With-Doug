@@ -5,6 +5,7 @@ day-of-month clamping), history reconstruction, and forecast invariants.
 """
 from __future__ import annotations
 
+import os
 import sys
 import tempfile
 from datetime import date, timedelta
@@ -1148,6 +1149,59 @@ def main() -> None:
     check("an unfiltered summary hides nothing",
           uncategorized_summary(wstore)["hidden_merchants"] == 0)
     wstore.close()
+
+    print("getting-started guide")
+    from finfore.ui import guide as _guide
+    _gp = _guide.guide_path()
+    check("the guide ships with the project", _gp is not None and _gp.exists())
+    _gt = _gp.read_text(encoding="utf-8")
+    check("it is a real guide, not a stub", len(_gt) > 6000)
+    # A guide that names a button the app does not have is worse than no guide,
+    # and the drift happens silently when the UI is renamed. Check the labels
+    # it quotes still exist in the interface.
+    _ui_src = "\n".join(
+        (Path(__file__).resolve().parent.parent / "finfore" / "ui" / f)
+        .read_text(encoding="utf-8")
+        for f in os.listdir(Path(__file__).resolve().parent.parent
+                            / "finfore" / "ui") if f.endswith(".py"))
+    for _lbl in ("Add account", "Import CSV…", "Review uncategorized…",
+                 "Add goal…", "Add emergency fund…", "Update from CSV…",
+                 "Reconstruct history…", "Load demo dataset",
+                 "Return to my own data", "Take a checkpoint now"):
+        check(f"guide and app agree on {_lbl!r}",
+              _lbl in _gt and _lbl in _ui_src)
+    for _pg in ("Dashboard", "Accounts", "Transactions", "Recurring",
+                "Insights", "Goals", "Forecast", "Progress"):
+        check(f"the guide explains the {_pg} page", _pg in _gt)
+    for _pr in _demo.PROFILES:
+        check(f"the guide lists the {_pr.key} demo",
+              _pr.name.split("—")[0].strip() in _gt)
+    check("it says where the data lives", ".ledgerline" in _gt)
+    check("it warns about the SmartScreen prompt", "SmartScreen" in _gt)
+    check("it states this is not financial advice",
+          "not financial advice" in _gt)
+    _gspec = (Path(__file__).resolve().parent.parent / "packaging"
+              / "doug.spec").read_text(encoding="utf-8")
+    check("the build bundles docs/", '"../docs"' in _gspec)
+    _gsaved = getattr(sys, "_MEIPASS", None)
+    try:
+        _gfake = Path(tempfile.mkdtemp())
+        (_gfake / "docs").mkdir()
+        (_gfake / "docs" / "getting-started.md").write_text("# x",
+                                                            encoding="utf-8")
+        sys._MEIPASS = str(_gfake)
+        check("the guide resolves inside a frozen bundle",
+              _guide.guide_path() == _gfake / "docs" / "getting-started.md")
+    finally:
+        if _gsaved is None:
+            delattr(sys, "_MEIPASS")
+        else:
+            sys._MEIPASS = _gsaved
+    _gd = _guide.GuideDialog()
+    _grendered = _gd.view.toPlainText()
+    check("it renders as formatted text, not raw markdown",
+          len(_grendered) > 4000 and "##" not in _grendered)
+    _gd.close()
 
     print("explainer video")
     from finfore.ui import video as _video
