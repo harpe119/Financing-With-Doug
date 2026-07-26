@@ -1367,6 +1367,43 @@ def main() -> None:
           any(a.type == AccountType.INVESTMENT and a.balance > 10_000
               for a in _loaded["thriving"].accounts()))
 
+    # The worst case the score can express. An F needs both sub-scores on the
+    # floor, because the interaction penalty is what pulls the total under 1.2
+    # and it only bites when habits *and* means are poor together.
+    from finfore.history import headline_stats as _headline
+    from finfore.insights import essential_monthly as _ess_monthly
+    _sp = _loaded["spiralling"]
+    _spa, _spsc = _aggs["spiralling"], _ss(_aggs["spiralling"])
+    check("spiralling grades F", _spsc.letter == "F" and _spsc.value < 1.2)
+    check("both sub-scores are on the floor",
+          _spsc.habit_component < 5.0 and _spsc.means_component < 1.0)
+    check("the verdict names the spending as the cause",
+          _spsc.quadrant == "overspending")
+    check("it spends far past income", _spa.savings_rate < -0.4)
+    check("wants exceed the 30%-of-income guideline several times over",
+          _spa.wants_share > 0.60)
+    check("it carries several high-interest debts",
+          sum(1 for a in _sp.accounts()
+              if a.type in (AccountType.LOAN, AccountType.CREDIT)) >= 3)
+    check("net worth is deeply negative",
+          _headline(_sp)["networth"] < -20_000)
+    check("debt payments appear in the ledger, not just on the accounts",
+          any("PMT" in str(d).upper()
+              for d in _sp.transactions()["description"].unique()))
+    _essential = _ess_monthly(_sp)
+    _spf = run_forecast(_sp, 365, 200, emergency_target=_essential * 3,
+                        essential_monthly=_essential)
+    check("the projection puts cash deep into debt within a year",
+          _spf.cash_pct[50][-1] < -20_000)
+    check("shortfall is a near-certainty, not a risk",
+          _spf.cash_breach.get("zero", 0.0) > 0.95)
+    check("the runway is effectively nil",
+          _spf.runway_months is not None and _spf.runway_months < 0.5)
+    _spplan = _G.build_plan(_sp)
+    check("there is no spare income to allocate", _spplan.surplus <= 0.01)
+    check("and the plan says so rather than inventing a schedule",
+          any("spare income" in w for w in _spplan.warnings))
+
     _ts = _loaded["turnaround"]
     _cps = _ts.checkpoints()
     _sig = _P.significance_since(_ts, _cps[0])

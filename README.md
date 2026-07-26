@@ -27,14 +27,21 @@ pip install -r requirements.txt
 python run.py
 ```
 
-Then use **File → Load demo dataset** to explore immediately. Four situations
-are offered — *Balanced* (a bundled 18-month ledger in two CSV dialects, a car
-loan, a brokerage and three goals), *Struggling*, *Thriving*, and *Turnaround*,
-which is built to show the Progress page a real behaviour change. Each opens in
-its **own database file**, so a demo never touches your ledger and **File →
-Return to my own data** puts you back where you were; a banner marks demo data
-while you are in it. Your data lives at `~/.ledgerline/ledgerline.db` by
-default; pass `--db path.db` to use another file. Python ≥ 3.10.
+Then use **File → Load demo dataset** to explore immediately. Five situations
+are offered:
+
+| | grade | what it shows |
+|---|---|---|
+| **Balanced** | A− | The bundled 18-month ledger in two CSV dialects, a car loan, a brokerage and three goals — the only profile that also exercises the import mapper |
+| **Struggling** | D+ | A deficit with wants over guideline: money is tight *and* the spending is part of why |
+| **Thriving** | A+ | A 53% savings rate, investments compounding, debts nearly gone |
+| **Turnaround** | B+ | Discretionary spending halves five months in — built to give the Progress page a real, statistically significant change to detect |
+| **Spiralling** | F | Three high-interest debts, spending at 1.7× income, cash projected to −$47k within a year at 100% shortfall probability and a runway of zero months |
+
+Each opens in its **own database file**, so a demo never touches your ledger and
+**File → Return to my own data** puts you back where you were; a banner marks
+demo data while you are in it. Your data lives at `~/.ledgerline/ledgerline.db`
+by default; pass `--db path.db` to use another file. Python ≥ 3.10.
 
 Run the test suite with `python tests/test_core.py`.
 

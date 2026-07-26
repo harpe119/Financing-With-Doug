@@ -6,6 +6,32 @@ intended to hand to someone else. The running version is shown in the app
 header and under **Help → About**, so a downloaded copy always identifies
 itself.
 
+## 1.8.0 — a fifth demo: what the worst case actually looks like
+
+- **New profile: Spiralling — the wheels are coming off.** An F on the habits
+  score (0.4/10), three high-interest debts totalling $36,400, net worth
+  −$36,280, and a projection that puts cash at **−$47,000 within a year** with a
+  100% chance of going negative and a runway of zero months. Every warning the
+  app has fires at once, which is the point: the other four profiles show the
+  tool working, this one shows what it is *for*.
+- **Sized to be internally consistent, not merely alarming.** An F needs both
+  sub-scores on the floor — wants above the guideline *and* a savings rate past
+  −50% — because the interaction penalty is what drags the total under 1.2, and
+  it only bites when habits and means are bad together. The −$2,440/month
+  deficit over the 20-month ledger is about the debt carried across the three
+  accounts, so the numbers agree with each other rather than each being extreme
+  on its own.
+- **Debt payments are written into the ledger**, not left implicit on the
+  accounts. Real statements show them, so the recurrence detector finds them
+  and `auto_link_loans` ties each to its account by name — the profile behaves
+  the way an imported one would instead of omitting the largest fixed cost in
+  the picture. `_rows_for` gained a `debt_payments` parameter and the loader an
+  `extra_loans` list.
+- The goal ladder demonstrates its own edge case here: with no spare income
+  nothing moves until the first loan retires in 2030, and then the freed
+  payment starts the snowball. It says so plainly rather than inventing a
+  schedule.
+
 ## 1.7.2 — the score no longer absolves spending it shouldn't
 
 Found by reading the `struggling` demo and disbelieving it: someone spending 39%
