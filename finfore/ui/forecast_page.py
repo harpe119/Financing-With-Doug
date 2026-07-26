@@ -253,12 +253,13 @@ class ForecastPage(QWidget):
                          ("Net worth only", "networth"),
                          ("Analysis only", "analysis")):
             self.view_pick.addItem(lbl, key)
+        self.view_pick.setCurrentIndex(1)     # "Cash only" by default
         self.view_pick.setToolTip("Hide charts you aren't using to give the "
                                   "rest more room")
         self.view_pick.currentIndexChanged.connect(self._apply_view)
         picker.addWidget(self.view_pick)
         self.show_analysis = QCheckBox("Analysis panel")
-        self.show_analysis.setChecked(True)
+        self.show_analysis.setChecked(False)
         self.show_analysis.stateChanged.connect(lambda _s: self._apply_view())
         picker.addWidget(self.show_analysis)
         picker.addStretch(1)

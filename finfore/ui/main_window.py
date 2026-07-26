@@ -402,8 +402,10 @@ class MainWindow(QMainWindow):
             f"every available metric, bad at its job. Doug has since been "
             f"rewritten more times than anyone involved would like to admit, "
             f"and now handles Monte Carlo simulation, recurrence detection and "
-            f"adaptive categorisation. Doug is very proud of this. Doug would "
-            f"like you to know that Doug still is not a financial advisor.</p>"
+            f"adaptive categorisation. Doug startd life on Caleb's computer "
+            f"as a simple AI that couldn't even count correctly. Since then, "
+            f"Doug has learned how to perform rocket calculations and even spent "
+            f"a semester as glorified toaster and fitness coach.</p>"
             f"<p style='color:#8B98A9'>See CHANGELOG.md in the app folder for "
             f"what changed between versions.</p>")
         box.exec()

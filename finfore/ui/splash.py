@@ -57,6 +57,7 @@ DOUG_FACTS = [
     "Doug has been asked to stop calling the Monte Carlo simulation \u201cthe casino\u201d.",
     "Doug wants you to know that past performance does not guarantee future results, "
     "and that Doug learned this the hard way.",
+    "Doug worked as an intern on internal rocket ballistics simulation before"
     "Doug is not a licensed financial advisor. Doug is barely a licensed Doug.",
 ]
 
