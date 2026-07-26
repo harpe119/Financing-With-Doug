@@ -138,6 +138,25 @@ class LedgerIssue:
     since: date
     duplicates: int = 0     # rows that look like the same event posted twice
     duplicate_value: float = 0.0
+    n_rows: int = 0
+    inflow: float = 0.0
+    outflow: float = 0.0
+    kind: str = "cash"
+
+    @property
+    def if_opened_at_zero(self) -> float:
+        """What the balance would be today had the account started empty.
+
+        The single most useful number when a balance looks wrong. Most accounts
+        did start at zero at the top of their export, so if this figure looks
+        like the real balance and the entered one doesn't, the entered one is
+        what needs fixing — or the file belongs to a different account.
+        """
+        return self.net_flow
+
+    @property
+    def ok(self) -> bool:
+        return self.opening >= -25.0
 
     @property
     def message(self) -> str:
@@ -164,28 +183,43 @@ def reconcile(store: Store, tolerance: float = 25.0) -> list[LedgerIssue]:
     where the row hash cannot dedupe them because the descriptions differ), a
     partial export missing withdrawals, or a stale balance / as-of date.
     """
+    return [i for i in reconcile_all(store) if i.opening < -tolerance]
+
+
+def reconcile_all(store: Store) -> list[LedgerIssue]:
+    """The same check for every cash account, whether or not it looks wrong.
+
+    Reported in full because the useful comparison is *between* accounts: when
+    three reconcile to a sensible opening and the fourth lands at −$1,469, the
+    odd one out is obvious, and the argument that the reconstruction is broken
+    dies immediately.
+    """
     tx = store.transactions()
     out: list[LedgerIssue] = []
     for a in store.accounts():
-        if a.type not in (AccountType.CHECKING, AccountType.SAVINGS):
+        if not a.type.is_cashlike:
             continue
         sub = tx[tx["account_id"] == a.id] if not tx.empty else tx
-        if len(sub) < 5:
+        if len(sub) < 2:
             continue
         net = float(sub["amount"].sum())
         start = known_from(tx, a, pd.Timestamp(a.balance_date))
-        index = pd.date_range(start, pd.Timestamp(date.today()), freq="D")
-        if len(index) < 2:
-            continue
-        series = cash_history(tx, a, index, anchor=cash_anchor(store, a))
-        opening = float(series.iloc[0])
-        if opening >= -tolerance:
-            continue
+        anchor_date, anchor_bal = cash_anchor(store, a)
+        # The balance *before* the first row, not after it. Taking the first
+        # point of the daily series instead includes that day's transactions,
+        # which mislabels any account whose earliest row is large — a card
+        # whose first line is a $1,219 purchase looks like it opened $1,219
+        # overdrawn when it opened at zero and then bought something.
+        prior = float(sub.loc[sub["date"] <= anchor_date, "amount"].sum())
+        opening = anchor_bal - prior
         n_dup, dup_val = _double_postings(sub)
         out.append(LedgerIssue(
-            account=a.name, opening=opening, entered=float(a.balance),
-            net_flow=net, since=start.date(), duplicates=n_dup,
-            duplicate_value=dup_val))
+            account=a.name, opening=opening,
+            entered=float(a.balance), net_flow=net, since=start.date(),
+            duplicates=n_dup, duplicate_value=dup_val, n_rows=len(sub),
+            inflow=float(sub.loc[sub["amount"] > 0, "amount"].sum()),
+            outflow=float(-sub.loc[sub["amount"] < 0, "amount"].sum()),
+            kind=a.type.label))
     return out
 
 

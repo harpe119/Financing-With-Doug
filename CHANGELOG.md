@@ -6,6 +6,35 @@ intended to hand to someone else. The running version is shown in the app
 header and under **Help → About**, so a downloaded copy always identifies
 itself.
 
+## 1.11.0 — Accounts → Check my balances…
+
+Continuing the −$1,500 investigation. Running all four of the reported CSVs
+against their stated balances settles it — three reconcile, one does not:
+
+| Account | Rows | Net flow | Balance entered | Implied opening |
+|---|---|---|---|---|
+| Savings | 182 | **+$1,470.16** | $0.71 | **−$1,469.45** ✗ |
+| MM Savings | 78 | +$0.42 | $1.33 | $0.91 ✓ |
+| CD | 24 | +$1,098.66 | $1,321.23 | $222.57 ✓ |
+| Visa | 44 | −$71.52 | −$71.52 | **−$0.00** ✓ |
+
+The card landing on exactly zero — a new card, opened empty — is the check that
+proves the method. Three accounts agreeing and one missing by precisely its own
+net flow points at the *balance*, not the arithmetic.
+
+- **New: Accounts → `Check my balances…`.** A per-account reconciliation table:
+  rows, money in, money out, net, the balance entered, the opening balance that
+  forces, and — the actionable one — **what the balance would be today had the
+  account started empty**. When that figure looks right and the entered one
+  doesn't, the entered one is what to fix. Figures are shown to the cent,
+  because rounding can hide a small discrepancy entirely.
+- **Opening balance is now measured before the first row, not after it.** Taking
+  the first point of the daily series includes that day's transactions, so a
+  card whose earliest line is a $1,219 purchase was reported as having opened
+  $1,219 overdrawn when it opened at zero and then bought something. It now
+  computes `entered − Σflows`, which is the identity being tested, and the Visa
+  above lands on −$0.00 rather than being falsely flagged.
+
 ## 1.10.2 — when the ledger can't reconcile, say so
 
 Follow-up to the −$1,500 report, using the actual CSVs. The 1.10.1 fixes were

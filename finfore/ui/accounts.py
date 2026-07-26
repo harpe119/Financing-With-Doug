@@ -18,6 +18,7 @@ from ..ingest import (ImportConfig, SIGN_MODES, balances_from_activity,
 from ..pipeline import reimport_with_saved_mapping, refresh_derived
 from ..store import Store
 from ..util import fmt_money, fmt_rate
+from . import theme
 from .account_dialog import AccountDialog, _money_spin
 from .widgets import hint
 
@@ -420,6 +421,112 @@ class SnapshotManagerDialog(QDialog):
             self._reload()
 
 
+class BalanceCheckDialog(QDialog):
+    """Per-account reconciliation: does the ledger agree with the balance?
+
+    The reconstruction is exact arithmetic — B(start) = B(today) − ΣF — so when
+    a history looks impossible it is because the inputs disagree, not because
+    the maths is wrong. Showing every account side by side is what makes that
+    obvious: three landing on a sensible opening and one on −$1,469 identifies
+    the culprit in a glance, which no per-account warning does as well.
+    """
+
+    COLS = ["Account", "Rows", "Money in", "Money out", "Net", "Balance entered",
+            "Implied opening", "If it started at $0"]
+
+    def __init__(self, store: Store, parent=None):
+        super().__init__(parent)
+        self.store = store
+        self.setWindowTitle("Check my balances")
+        self.setMinimumSize(940, 420)
+
+        lay = QVBoxLayout(self)
+        lay.addWidget(hint(
+            "Each row rebuilds an account backwards from the balance you "
+            "entered. <b>Implied opening</b> is what the account must have held "
+            "on its first imported day for the balance and the transactions to "
+            "agree. A deposit account cannot open far below zero, so a large "
+            "negative there means the balance, the as-of date, or the export "
+            "itself needs a look — not that the history is being computed "
+            "wrongly.<br><br><b>If it started at $0</b> is what the balance "
+            "would be today had the account been empty at the top of the "
+            "export. When that figure looks like the real balance and the one "
+            "you entered doesn't, the entered balance is what to fix."))
+
+        self.table = QTableWidget(0, len(self.COLS))
+        self.table.setHorizontalHeaderLabels(self.COLS)
+        self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.table.setAlternatingRowColors(True)
+        self.table.verticalHeader().setVisible(False)
+        self.table.verticalHeader().setDefaultSectionSize(34)
+        h = self.table.horizontalHeader()
+        h.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        for c in range(1, len(self.COLS)):
+            h.setSectionResizeMode(c, QHeaderView.ResizeMode.ResizeToContents)
+        lay.addWidget(self.table, 1)
+
+        self.note = hint("")
+        self.note.setWordWrap(True)
+        lay.addWidget(self.note)
+
+        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        bb.rejected.connect(self.reject)
+        bb.accepted.connect(self.accept)
+        lay.addWidget(bb)
+        self._reload()
+
+    def _reload(self) -> None:
+        from ..history import reconcile_all
+        rows = reconcile_all(self.store)
+        self.table.setRowCount(len(rows))
+        bad = []
+        for r, i in enumerate(rows):
+            # Cents matter here: this table is for spotting a discrepancy, and
+            # rounding to whole dollars can hide a small one entirely.
+            def _c(x, sign=False):
+                s = "+" if sign and x > 0 else ("-" if x < 0 else "")
+                return f"{s}${abs(x):,.2f}"
+            cells = [i.account, str(i.n_rows), _c(i.inflow), _c(i.outflow),
+                     _c(i.net_flow, True), _c(i.entered), _c(i.opening),
+                     _c(i.if_opened_at_zero)]
+            for c, v in enumerate(cells):
+                it = QTableWidgetItem(v)
+                if c >= 1:
+                    it.setTextAlignment(Qt.AlignmentFlag.AlignRight
+                                        | Qt.AlignmentFlag.AlignVCenter)
+                if c == 6:
+                    it.setForeground(theme.qcolor(
+                        theme.POSITIVE if i.ok else theme.RED))
+                self.table.setItem(r, c, it)
+            if not i.ok:
+                bad.append(i)
+        if not rows:
+            self.note.setText("No cash accounts with imported transactions yet.")
+        elif not bad:
+            self.note.setText(
+                "Every account reconciles — the balances you entered and the "
+                "transactions you imported agree with each other.")
+        else:
+            parts = []
+            for i in bad:
+                parts.append(
+                    f"<b>{i.account}</b> does not reconcile. Its rows total "
+                    f"{fmt_money(i.net_flow, signed=True)}, so with a balance "
+                    f"of {fmt_money(i.entered)} it must have opened at "
+                    f"{fmt_money(i.opening)}. If the account started empty, "
+                    f"the balance today would be "
+                    f"<b>{fmt_money(i.if_opened_at_zero)}</b> — check whether "
+                    f"that is the figure you meant, or whether this export "
+                    f"belongs to a different account.")
+                if i.duplicates:
+                    parts.append(
+                        f"{i.duplicates} row{'s' if i.duplicates != 1 else ''} "
+                        f"in it look like one transaction posted twice under "
+                        f"different wording "
+                        f"({fmt_money(i.duplicate_value, signed=True)}).")
+            self.note.setText(" ".join(parts))
+
+
 class AccountsPage(QWidget):
     COLS = ["Name", "Type", "Balance", "As of", "Rate", "Payment / contribution"]
 
@@ -449,7 +556,11 @@ class AccountsPage(QWidget):
                           "accounts reuse their saved column mapping; loans "
                           "and investments open the balance/activity importer")
         update.clicked.connect(self._update_csv)
-        for b in (add, edit, rm, snap, update):
+        check_bal = QPushButton("Check my balances…")
+        check_bal.setToolTip("Does each account's imported history agree with "
+                             "the balance you entered?")
+        check_bal.clicked.connect(self._check_balances)
+        for b in (add, edit, rm, snap, update, check_bal):
             bar.addWidget(b)
         bar.addStretch(1)
         lay.addLayout(bar)
@@ -577,6 +688,9 @@ class AccountsPage(QWidget):
             f"Added {added} new transaction{'s' if added != 1 else ''} "
             f"({skipped} already-imported rows skipped). {n_rec} recurring "
             f"patterns are tracked.")
+
+    def _check_balances(self) -> None:
+        BalanceCheckDialog(self.store, self).exec()
 
     def _import_history(self, account: Account) -> None:
         dlg = SnapshotImportDialog(self.store, account, self)

@@ -1270,7 +1270,7 @@ def main() -> None:
     _hstore.close()
 
     print("a ledger that cannot reconcile is reported, not hidden")
-    from finfore.history import reconcile as _reconcile
+    from finfore.history import reconcile as _reconcile, reconcile_all as _reconcile_all
     # B(start) = B(today) - net_flow is exact, so net-positive flows against a
     # near-zero balance *force* a deeply negative opening. The numbers are
     # right and an input is wrong; drawing it silently reads as the program
@@ -1312,6 +1312,34 @@ def main() -> None:
           _issues2[0].duplicates >= 1)
     check("and their dollar value is reported",
           abs(_issues2[0].duplicate_value) >= 500.0)
+
+    # The opening balance must be measured *before* the first row, not after.
+    # A card whose earliest line is a large purchase opened at zero and then
+    # bought something; reading the first daily point instead reports it as
+    # having opened deeply overdrawn.
+    _card = Store(tmp / "reconcile_card.db")
+    _card.add_account(Account(name="Visa", type=AccountType.CREDIT,
+                              balance=-71.52, balance_date=_date.today()))
+    _card.add_transactions(pd.DataFrame([
+        {"account_id": 1,
+         "date": pd.Timestamp(_date.today() - timedelta(days=250)),
+         "description": "BIG PURCHASE", "amount": -1_219.48,
+         "category": "Shopping", "import_hash": "c1"},
+        {"account_id": 1,
+         "date": pd.Timestamp(_date.today() - timedelta(days=245)),
+         "description": "CARD PAYMENT", "amount": 1_219.48,
+         "category": "Debt payment", "import_hash": "c2"},
+        {"account_id": 1,
+         "date": pd.Timestamp(_date.today() - timedelta(days=20)),
+         "description": "FUEL", "amount": -71.52,
+         "category": "Fuel", "import_hash": "c3"}]))
+    _cards = [i for i in _reconcile_all(_card) if i.account == "Visa"]
+    check("a card whose first row is a big purchase still opens at zero",
+          _cards and abs(_cards[0].opening) < 0.01)
+    check("and is therefore not flagged", _cards[0].ok)
+    check("the reconciling identity holds exactly",
+          abs(_cards[0].entered - _cards[0].net_flow - _cards[0].opening) < 0.01)
+    _card.close()
 
     _ok = Store(tmp / "reconcile_ok.db")
     _ok.add_account(Account(name="Chq", type=AccountType.CHECKING,
