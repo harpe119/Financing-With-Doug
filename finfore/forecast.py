@@ -127,6 +127,100 @@ STARTER_BUFFER = 1000.0
 T_DOF = 5.0
 
 
+# Behavioural weeks decay with the same half-life the habits score uses, so
+# "recent" means one thing across the whole app — but only once there is reason
+# to believe the recent weeks are describing someone different. See
+# `_behaviour_weights` for why that condition matters.
+BEHAVIOUR_HALF_LIFE_WEEKS = 13.0        # ~3 months, matching insights
+CHANGE_TAIL_FRACTION = 1.0 / 3.0        # recent share tested against the rest
+# Per side, and deliberately high. A difference that is real *in sample* need
+# not persist: the balanced demo's 38-week backtest window shows a genuine
+# shift at Cohen's d = 1.40 which is simply mean-reversion, and forecasting
+# from it dropped coverage from 61% to 10%. Requiring roughly four months of
+# sustained new behaviour, against at least as much baseline, is what separates
+# a changed habit from a quiet quarter. It also means the mechanism cannot
+# engage at all until there is about a year of history, which is the right
+# trade: rewriting the model of someone's behaviour on thin data is worse than
+# not doing it.
+CHANGE_MIN_WEEKS = 16
+CHANGE_ALPHA = 0.01
+CHANGE_MIN_EFFECT = 0.8                 # Cohen's d — a *large* effect, not any
+_CHANGE_PERMUTATIONS = 4000
+
+
+def _recency_weights(n: int,
+                     half_life: float = BEHAVIOUR_HALF_LIFE_WEEKS) -> np.ndarray:
+    """Normalised sampling weights for `n` chronologically ordered weeks.
+
+    The newest week has weight 1 and each older one halves every ``half_life``
+    weeks, so a year-old week counts about a sixteenth of last week's. Passing
+    a non-positive half-life returns uniform weights.
+    """
+    if n <= 0:
+        return np.ones(0)
+    if not half_life or half_life <= 0:
+        return np.full(n, 1.0 / n)
+    age = np.arange(n - 1, -1, -1, dtype=float)     # oldest first, newest = 0
+    w = 0.5 ** (age / float(half_life))
+    total = w.sum()
+    return w / total if total > 0 else np.full(n, 1.0 / n)
+
+
+def _behaviour_changed(obs_net: np.ndarray, seed: int = 0) -> bool:
+    """Has the recent third of the sample stopped resembling the rest?
+
+    A permutation test on weekly net flow: reshuffle which weeks belong to
+    which period and ask how often chance alone produces a gap this large. One
+    test on one pre-declared split, so there is no multiple-comparisons problem
+    to answer for.
+
+    Significance alone is not the bar. Acting on a *statistically* detectable
+    but small shift is how a stable ledger ends up reweighted on noise — which
+    it did: an early version fired on the balanced demo's 38-week window and
+    dropped backtest coverage from 61% to 10%. Rewriting the model of someone's
+    behaviour is a large intervention, so it needs a large effect (Cohen's
+    d ≥ 0.8) at a strict alpha, on a decent sample, before it is worth doing.
+    """
+    n = len(obs_net)
+    k = int(round(n * CHANGE_TAIL_FRACTION))
+    if k < CHANGE_MIN_WEEKS or n - k < CHANGE_MIN_WEEKS:
+        return False
+    prior, recent = obs_net[:-k], obs_net[-k:]
+    observed = abs(float(recent.mean() - prior.mean()))
+    if observed <= 0:
+        return False
+    pooled_sd = float(np.sqrt(
+        (np.var(prior, ddof=1) + np.var(recent, ddof=1)) / 2.0))
+    if pooled_sd <= 0 or observed / pooled_sd < CHANGE_MIN_EFFECT:
+        return False
+    rng = np.random.default_rng(seed)
+    pooled = np.concatenate([prior, recent])
+    idx = np.argsort(rng.random((_CHANGE_PERMUTATIONS, n)), axis=1)
+    shuffled = pooled[idx]
+    diffs = shuffled[:, -k:].mean(axis=1) - shuffled[:, :-k].mean(axis=1)
+    p = float((np.abs(diffs) >= observed - 1e-12).mean())
+    return p < CHANGE_ALPHA
+
+
+def _behaviour_weights(obs_net: np.ndarray, seed: int = 0) -> np.ndarray:
+    """Sampling weights over historical weeks — uniform unless habits moved.
+
+    Stationarity is the right default and reweighting unconditionally is not a
+    free improvement: on a stable ledger it shrinks the effective sample,
+    letting a couple of unusual recent weeks drag the whole projection, and
+    measurably *worsened* backtest coverage on the demo data (61% → 10% inside
+    the nominal 80% band). Applied only when the recent third of the sample is
+    statistically distinguishable from the rest, it fixes the case it exists
+    for — someone who halved their spending five months ago being forecast as
+    the average of who they were and who they are — and leaves everyone else
+    exactly as they were.
+    """
+    n = len(obs_net)
+    if n < 4 or not _behaviour_changed(obs_net, seed=seed):
+        return np.full(n, 1.0 / n) if n else np.ones(0)
+    return _recency_weights(n)
+
+
 def _shocks(rng, shape, dof: float = T_DOF) -> np.ndarray:
     """Standardised heavy-tailed innovations (unit variance).
 
@@ -360,23 +454,42 @@ def run_forecast(store: Store, horizon_days: int, n_paths: int,
         mvec = np.array([scenario.category_multipliers.get(c, 1.0) for c in cats])
         Wv = W.values
         Iv = irr_inc.values * scenario.income_multiplier
-        pick = rng.integers(0, len(W), size=(n_paths, n_weeks))
+        # Weeks are drawn by recency, not uniformly. Sampling all of history
+        # with equal probability assumes habits are stationary, and when they
+        # are not it projects an average of the person you were and the person
+        # you are — someone who halved their spending five months ago was being
+        # forecast at the midpoint of both, and told they would run out of money
+        # while the Insights page (which *is* recency-weighted) correctly
+        # reported a surplus. The two halves of the app now answer the question
+        # the same way, with the same half-life.
+        obs_net = Iv - Wv @ mvec
+        wts = _behaviour_weights(obs_net, seed=seed)
+        pick = rng.choice(len(W), size=(n_paths, n_weeks), p=wts)
         net_w = Iv[pick] - Wv[pick] @ mvec                     # (paths, weeks)
         # Parameter uncertainty, not just sampling noise. Resampling weeks
         # independently makes week-to-week variation average out like sqrt(t),
         # so by a one-year horizon the band collapses to a few percent — it
         # implicitly asserts the historical mean weekly net is known exactly.
-        # It isn't: it is estimated from len(W) weeks, with standard error
-        # s/sqrt(len(W)). Drawing one drift offset per path and holding it for
-        # the whole path adds the term that grows *linearly* in t, which is
-        # what actually dominates at long horizons. Backtesting without this
-        # showed ~1% of days falling inside the nominal 80% band.
-        obs_net = Iv - Wv @ mvec
-        se_mean = float(np.std(obs_net, ddof=1) / np.sqrt(len(W))) \
-            if len(W) > 1 else 0.0
+        # It isn't: it is estimated from the sample, with standard error
+        # s/sqrt(n). Drawing one drift offset per path and holding it for the
+        # whole path adds the term that grows *linearly* in t, which is what
+        # actually dominates at long horizons. Backtesting without this showed
+        # ~1% of days falling inside the nominal 80% band.
+        #
+        # With weighted draws the divisor is Kish's effective sample size,
+        # 1/sum(w^2), not the raw week count: down-weighting old weeks means
+        # fewer of them are really informing the mean, and using n would claim
+        # a precision the sample no longer has.
+        det_net_w = float(np.dot(wts, obs_net))
+        n_eff = 1.0 / float(np.sum(wts ** 2))
+        if n_eff > 1.0:
+            var_w = float(np.dot(wts, (obs_net - det_net_w) ** 2))
+            var_w *= n_eff / (n_eff - 1.0)              # small-sample correction
+            se_mean = float(np.sqrt(max(var_w, 0.0) / n_eff))
+        else:
+            se_mean = 0.0
         net_w = net_w + rng.standard_normal((n_paths, 1)) * se_mean
         disc_paths = np.repeat(net_w / 7.0, 7, axis=1)[:, : n - 1]
-        det_net_w = float(Iv.mean() - Wv.mean(axis=0) @ mvec)
         disc_det = np.full(n - 1, det_net_w / 7.0)
     else:
         disc_paths = np.zeros((n_paths, n - 1))

@@ -6,6 +6,48 @@ intended to hand to someone else. The running version is shown in the app
 header and under **Help → About**, so a downloaded copy always identifies
 itself.
 
+## 1.8.1 — the forecast now notices when your habits change
+
+Reported from the turnaround demo: someone who halved their discretionary
+spending five months ago and stuck to it was still being projected into a
+deficit at 99% shortfall risk — while the Insights page, on the same ledger,
+correctly reported a **surplus**. The two halves of the app disagreed.
+
+- **The cause.** The behavioural bootstrap resampled every historical week with
+  equal probability, so it projected the average of who you were and who you
+  are. On the turnaround demo it assumed $2,222/month of discretionary spending
+  when the last five months ran at $1,322. Insights has been recency-weighted
+  since 0.8.0; the forecast never was.
+- **The fix, and why it is conditional.** Weeks are now drawn by recency —
+  same 3-month half-life Insights uses — **but only when the recent third of
+  the sample is statistically distinguishable from the rest**. Reweighting
+  unconditionally is not a free improvement: on a stable ledger it shrinks the
+  effective sample and lets a couple of unusual weeks drag the projection, and
+  it measurably *worsened* backtest coverage on the balanced demo, 61% → 10%
+  inside the nominal 80% band. Stationarity is the right default.
+- **The bar for "changed" is deliberately high**: a large effect (Cohen's
+  d ≥ 0.8) at α = 0.01, with at least ~4 months of sustained new behaviour on
+  each side of the split. An earlier version fired on a genuine in-sample
+  shift in the balanced demo that turned out to be mean-reversion, and
+  forecasting from it made things worse. A difference that is real in-sample
+  need not persist.
+- **The drift-uncertainty term now uses Kish's effective sample size**
+  (`1/Σw²`) rather than the raw week count. Down-weighting old weeks means
+  fewer of them genuinely inform the mean, and dividing by *n* would claim a
+  precision the sample no longer has.
+- Result on the turnaround demo: 2-year projection moves from −$6,883 at 99%
+  shortfall to **+$6,832 at 10%**, net worth $7,150 → $21,347, matching what
+  Insights says. The profiles that really are sinking still are: struggling and
+  spiralling remain at 100%.
+
+**Demo data fixed too.** Generated profiles declared monthly investment
+contributions and loan payments that never appeared in the ledger, so the
+forecast charged cash that the reconstructed history never showed leaving. That
+is what made the thriving profile backtest at 1% coverage — a data fault read
+as the model being hopeless. Those flows are now written into the ledger, where
+the recurrence detector finds them and `auto_link_loans` ties each to its
+account.
+
 ## 1.8.0 — a fifth demo: what the worst case actually looks like
 
 - **New profile: Spiralling — the wheels are coming off.** An F on the habits

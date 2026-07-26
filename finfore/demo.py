@@ -270,11 +270,31 @@ def _load_generated(store: Store, *, months: int, income: float, rent: float,
             d = today - timedelta(days=(5 - k) * 90)
             store.add_snapshot(br.id, d, max(0.0, invest - (5 - k) * 1900))
 
+    # Anything an account commits to every month has to appear in the ledger,
+    # or the demo contradicts itself: the forecast charges a contribution the
+    # reconstructed history never shows leaving, and the backtest then scores
+    # the model against a cash curve that never paid it. That is what made the
+    # thriving profile backtest at 1% coverage — a data fault, read as the
+    # model being hopeless.
+    fixed = list(debt_payments or [])
+    named = {d.upper() for _, d, _ in fixed}
+    if loan_bal and not any("AUTO" in n for n in named):
+        fixed.append((15, "AUTO LOAN PMT", 395.0))
+    for spec in (extra_loans or []):
+        tag = spec["name"].upper().split()[0]
+        if not any(tag in n for n in named):
+            fixed.append((spec.get("day", 15),
+                          f"{spec['name'].upper()} PMT", spec["payment"]))
+    if invest and contribution:
+        # "TRANSFER" so the keyword rules file it as internal movement rather
+        # than spending — money moved into a brokerage is saved, not spent.
+        fixed.append((2, "VANGUARD BROKERAGE TRANSFER", contribution))
+
     rows = _rows_for(months, today, income=income, rent=rent,
                      groceries=groceries, dining=dining, shopping=shopping,
                      dining_after=dining_after, shopping_after=shopping_after,
                      change_months_ago=change_months_ago, seed=seed,
-                     account_id=chk.id, debt_payments=debt_payments)
+                     account_id=chk.id, debt_payments=fixed)
     from .learning import apply_chain, full_chain
     rows = apply_chain(rows, full_chain(store))
     added, _ = store.add_transactions(rows)

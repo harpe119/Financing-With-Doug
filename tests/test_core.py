@@ -20,7 +20,8 @@ import pandas as pd
 from finfore.categorize import pair_transfers
 from finfore.demo import SAMPLE_DIR, load_demo
 from finfore.forecast import run_forecast
-from finfore.history import cash_history, networth_history
+from finfore.history import (cash_history, networth_history,
+                             weekly_category_matrix)
 from finfore.ingest import guess_mapping, read_raw, sniff_delimiter
 from finfore.models import Account, AccountType, RecurringItem, Scenario
 from finfore.pipeline import import_csv
@@ -1329,6 +1330,43 @@ def main() -> None:
           len(_auto.checkpoints()) == 1)
     _auto.close()
 
+    print("behaviour-change detection in the bootstrap")
+    from finfore.forecast import (CHANGE_MIN_WEEKS, _behaviour_changed,
+                                  _behaviour_weights, _recency_weights)
+    _crng = np.random.default_rng(4)
+    _stable = _crng.normal(-500, 120, 60)
+    check("a stable ledger is not called changed",
+          not _behaviour_changed(_stable))
+    check("and is therefore sampled uniformly",
+          np.allclose(_behaviour_weights(_stable), 1.0 / len(_stable)))
+    _shifted = np.concatenate([_crng.normal(-800, 100, 45),
+                               _crng.normal(-300, 100, 25)])
+    check("a large sustained shift is detected", _behaviour_changed(_shifted))
+    _sw = _behaviour_weights(_shifted)
+    check("and switches the sample to recency weighting",
+          _sw[-1] > _sw[0] * 5)
+    check("weights always normalise to one",
+          abs(_sw.sum() - 1.0) < 1e-9
+          and abs(_behaviour_weights(_stable).sum() - 1.0) < 1e-9)
+    # A difference that is real in-sample need not persist. Requiring months of
+    # sustained new behaviour is what stops mean-reversion being mistaken for a
+    # changed habit — an earlier version fired on exactly that and dropped
+    # backtest coverage on the balanced demo from 61% to 10%.
+    _brief = np.concatenate([_crng.normal(-800, 100, 40),
+                             _crng.normal(-200, 100, 6)])
+    check("a brief shift is ignored however large",
+          not _behaviour_changed(_brief))
+    check("a short ledger is never reweighted",
+          not _behaviour_changed(_crng.normal(-500, 150, CHANGE_MIN_WEEKS * 2 - 2)))
+    _small = np.concatenate([_crng.normal(-500, 200, 45),
+                             _crng.normal(-470, 200, 25)])
+    check("a small shift is ignored even when sustained",
+          not _behaviour_changed(_small))
+    check("recency weights decay toward the past",
+          _recency_weights(52)[-1] > _recency_weights(52)[0])
+    check("a disabled half-life gives uniform weights",
+          np.allclose(_recency_weights(20, half_life=0), 1 / 20))
+
     print("demo profiles")
     from finfore import demo as _demo
     from finfore.insights import monthly_aggregates as _ma, spending_score as _ss
@@ -1415,6 +1453,35 @@ def main() -> None:
           len(_sc_seq) >= 2 and _sc_seq[-1] > _sc_seq[0] + 1.0)
     check("turnaround's older projection can be scored against reality",
           _P.check_path(_ts, _cps[0]) is not None)
+
+    # The projection has to describe who they are now, not the average of who
+    # they were and who they are. Before the bootstrap learned about changed
+    # habits this profile was forecast into a deficit at 99% shortfall while
+    # the Insights page reported a surplus — the two halves of the app
+    # disagreeing about the same ledger.
+    _tw, _ti = weekly_category_matrix(
+        _ts.transactions(), exclude_keys={i.key for i in _ts.recurring()})
+    check("turnaround's change is visible to the detector",
+          _behaviour_changed(_ti.values - _tw.values.sum(axis=1), seed=7))
+    _tess = _ess_monthly(_ts)
+    _tf = run_forecast(_ts, 730, 300, emergency_target=_tess * 3,
+                       essential_monthly=_tess)
+    check("its projection is no longer a collapse",
+          _tf.cash_breach.get("zero", 1.0) < 0.5)
+    check("and net worth grows over the horizon",
+          _tf.networth_pct[50][-1] > _tf.networth_det[0])
+    check("the forecast agrees with Insights about the direction",
+          (_aggs["turnaround"].surplus > 0)
+          == (_tf.networth_pct[50][-1] > _tf.networth_det[0]))
+    # Sanity in the other direction: the profiles that really are sinking must
+    # still be reported as sinking.
+    for _bad in ("struggling", "spiralling"):
+        _bs = _loaded[_bad]
+        _be = _ess_monthly(_bs)
+        _bf = run_forecast(_bs, 730, 200, emergency_target=_be * 3,
+                           essential_monthly=_be)
+        check(f"{_bad} is still projected into shortfall",
+              _bf.cash_breach.get("zero", 0.0) > 0.9)
 
     # Backfilled checkpoints must be built from data that existed then, or the
     # Progress page reports the model as better than it is.

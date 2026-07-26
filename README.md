@@ -234,6 +234,28 @@ is bootstrapped the same way under the income multiplier. At least four
 complete weeks of history are required; otherwise variable spending is
 zero and a warning is shown.
 
+Weeks are normally drawn **uniformly**, because stationarity is the right
+default. When the most recent third of the sample is statistically
+distinguishable from the rest, they are drawn by **recency** instead — the same
+3-month half-life the habits score uses — so someone who halved their spending
+five months ago is projected as who they are now rather than as the average of
+who they were and who they are. Before this, that person was forecast into a
+deficit at 99% shortfall risk while the Insights page, reading the same ledger,
+correctly reported a surplus.
+
+The bar for "changed" is deliberately high: a large effect (Cohen's
+$d \ge 0.8$) at $\alpha = 0.01$, with at least four months of sustained new
+behaviour on each side of the split. Reweighting unconditionally is *not* a free
+improvement — it shrinks the effective sample, lets a couple of unusual weeks
+drag the whole projection, and measurably worsened backtest coverage on stable
+data (61% → 10% inside the nominal 80% band). An earlier version also fired on a
+real in-sample shift that turned out to be mean-reversion: a difference that is
+genuine in sample need not persist, which is what the sustained-duration
+requirement encodes. When recency weighting is in effect, the drift standard
+error divides by Kish's effective sample size $1/\sum w_i^2$ rather than the raw
+week count, because fewer weeks are genuinely informing the mean and dividing by
+$n$ would claim a precision the sample no longer has.
+
 **Uncertainty and goals.** Percentile bands (P10/P25/P50/P75/P90) are
 computed pointwise across paths at each date — they are marginal
 quantiles, not simultaneous confidence bands for whole trajectories. Goal
@@ -448,7 +470,9 @@ through detected interest deposits rather than an APY model. Recurring
 amounts are medians with no inflation or contractual escalators. GBM
 assumes independent lognormal monthly returns — no fat tails, volatility
 clustering, or drawdown dynamics. The bootstrap assumes your spending
-habits are stationary at the weekly scale. The habits score is a transparent heuristic, not a validated financial index: it is only as good as the category assignments, needs a few months of recognized income and some recognized essential spending to compute, and ignores debt load, emergency-fund adequacy, and one-time events. Its constants are anchored on a budgeting rule of thumb, not on population data. Ledgerline produces statistical estimates from your own history; it is a modeling tool, not financial advice.
+habits are stationary at the weekly scale, except for one step change it will
+detect and adapt to — a gradual drift, or a second change on top of the first,
+is still projected as an average. The habits score is a transparent heuristic, not a validated financial index: it is only as good as the category assignments, needs a few months of recognized income and some recognized essential spending to compute, and ignores debt load, emergency-fund adequacy, and one-time events. Its constants are anchored on a budgeting rule of thumb, not on population data. Ledgerline produces statistical estimates from your own history; it is a modeling tool, not financial advice.
 
 A natural next step is read-only aggregator support (e.g. SimpleFIN or
 Plaid) so imports refresh automatically; the ingestion pipeline was
