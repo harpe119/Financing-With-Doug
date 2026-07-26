@@ -46,10 +46,46 @@ def cash_anchor(store: Store, account: Account) -> tuple[pd.Timestamp, float]:
     return anchor_d, anchor_b
 
 
+def known_from(tx: pd.DataFrame, account: Account,
+               anchor_date: pd.Timestamp | None = None) -> pd.Timestamp:
+    """Earliest date this account's balance can actually be reconstructed.
+
+    Two things carry information: the anchor (a balance the user asserted on a
+    date) and the transactions (the deltas either side of it). Before the
+    earlier of those, nothing is known.
+    """
+    if anchor_date is None:
+        anchor_date = pd.Timestamp(account.balance_date)
+    sub = tx[tx["account_id"] == account.id] if not tx.empty else tx
+    first_tx = sub["date"].min() if len(sub) and sub["date"].notna().any() else None
+    if first_tx is None or pd.isna(first_tx):
+        return pd.Timestamp(anchor_date).normalize()
+    return min(pd.Timestamp(anchor_date), pd.Timestamp(first_tx)).normalize()
+
+
 def cash_history(tx: pd.DataFrame, account: Account,
                  index: pd.DatetimeIndex,
                  anchor: tuple[pd.Timestamp, float] | None = None) -> pd.Series:
-    """Daily end-of-day balance series for one cash-like account."""
+    """Daily end-of-day balance series for one cash-like account.
+
+    Reconstruction runs back only as far as this account actually knows
+    anything — the earlier of its anchor date and its first transaction. Before
+    that the earliest reconstructed value is held flat.
+
+    Extrapolating past it produced confidently wrong numbers, and the failure
+    was invisible on a single-account ledger. The chart spans the *union* of
+    every account's history, so a savings account imported six months ago sits
+    on a three-year axis; ``F(t)`` is zero across the years before its first
+    row, and B(t₀) − F(t₀) then walks today's balance back through inflows that
+    had not happened yet. A $5,000 balance funded by $6,500 of recent transfers
+    reported **−$1,500 three years ago** — an account that had no data then, and
+    in all likelihood no existence.
+
+    Flat is the right fill rather than dropping the account: an account with no
+    transactions at all already holds its balance flat across the whole chart,
+    so this is consistent, and excluding it instead would make net worth jump
+    on the day its ledger happens to start — a windfall that never happened.
+    """
     if anchor is None:
         anchor_date, anchor_bal = pd.Timestamp(account.balance_date), account.balance
     else:
@@ -64,7 +100,17 @@ def cash_history(tx: pd.DataFrame, account: Account,
         f0 = float(F.iloc[-1])
     else:
         f0 = float(F.asof(anchor_date))
-    return anchor_bal + (F - f0)
+    series = anchor_bal + (F - f0)
+
+    start = known_from(tx, account, anchor_date)
+    if start > index[0]:
+        # asof() rather than direct lookup: `start` may fall between grid points
+        # when the index is coarser than daily.
+        edge = series.asof(start)
+        if pd.isna(edge):
+            edge = float(series.iloc[0])
+        series = series.where(series.index >= start, float(edge))
+    return series
 
 
 def snapshot_history(store: Store, account: Account,
@@ -96,8 +142,19 @@ def networth_history(store: Store) -> pd.DataFrame:
     invest = pd.Series(0.0, index=index)
     debt = pd.Series(0.0, index=index)
     for a in accounts:
-        if a.type.is_cashlike:
+        if a.type in (AccountType.CHECKING, AccountType.SAVINGS):
             cash = cash + cash_history(tx, a, index, anchor=cash_anchor(store, a))
+        elif a.type == AccountType.CREDIT:
+            # A card carrying a balance is debt, not negative cash — the same
+            # split `headline_stats` has made since 0.6.1. This series was
+            # still folding the whole card into cash, so the chart's "Net cash"
+            # line sat below the "Net cash" stat card by the card balance, and
+            # the debt line ignored cards entirely. Net worth came out right
+            # either way, which is exactly why it went unnoticed: the error
+            # cancelled in the total and showed only in the two components.
+            line = cash_history(tx, a, index, anchor=cash_anchor(store, a))
+            debt = debt + (-line).clip(lower=0.0)     # owed
+            cash = cash + line.clip(lower=0.0)        # overpaid card is cash
         elif a.type == AccountType.INVESTMENT:
             invest = invest + snapshot_history(store, a, index)
         elif a.type == AccountType.LOAN:

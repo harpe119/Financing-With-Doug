@@ -21,7 +21,7 @@ import pandas as pd
 from finfore.categorize import pair_transfers
 from finfore.demo import SAMPLE_DIR, load_demo
 from finfore.forecast import run_forecast
-from finfore.history import (cash_history, networth_history,
+from finfore.history import (cash_anchor, cash_history, networth_history,
                              weekly_category_matrix)
 from finfore.ingest import guess_mapping, read_raw, sniff_delimiter
 from finfore.models import Account, AccountType, RecurringItem, Scenario
@@ -1178,6 +1178,96 @@ def main() -> None:
     check("an unfiltered summary hides nothing",
           uncategorized_summary(wstore)["hidden_merchants"] == 0)
     wstore.close()
+
+    print("dashboard history agrees with the stat cards")
+    from finfore.history import headline_stats as _hs2, known_from as _known
+    _hstore = Store(tmp / "hist.db")
+    _t0 = _date.today()
+    _hstore.add_account(Account(name="Chq", type=AccountType.CHECKING,
+                                balance=3_000.0, balance_date=_t0))
+    # A card carrying a balance and never imported — the ordinary case: you
+    # add the account, type what you owe, and only import the current account.
+    _hstore.add_account(Account(name="Visa", type=AccountType.CREDIT,
+                                balance=-1_500.0, balance_date=_t0))
+    _hrows = []
+    for _i in range(30):
+        _d = _t0 - timedelta(days=30 * _i)
+        _hrows += [
+            {"account_id": 1, "date": pd.Timestamp(_d), "description": "PAY",
+             "amount": 2_800.0, "category": "Income", "import_hash": f"hp{_i}"},
+            {"account_id": 1, "date": pd.Timestamp(_d + timedelta(days=2)),
+             "description": "RENT", "amount": -2_800.0, "category": "Housing",
+             "import_hash": f"hr{_i}"}]
+    _hstore.add_transactions(pd.DataFrame(_hrows))
+    _hh = networth_history(_hstore)
+    _hst = _hs2(_hstore)
+    # A card is debt, not negative cash. headline_stats has split it that way
+    # since 0.6.1; this series had not, so the chart's "Net cash" line sat a
+    # whole card balance below the "Net cash" card on the same page, and the
+    # debt line ignored cards entirely. Net worth cancelled the error, which is
+    # why it survived: only the two components were wrong.
+    check("chart cash matches the stat card",
+          abs(_hh["cash"].iloc[-1] - _hst["cash"]) < 0.01)
+    check("chart debt matches the stat card",
+          abs(_hh["debt"].iloc[-1] - _hst["debt"]) < 0.01)
+    check("chart net worth matches the stat card",
+          abs(_hh["networth"].iloc[-1] - _hst["networth"]) < 0.01)
+    check("an unimported card never drags the cash line negative",
+          _hh["cash"].min() > 0)
+    check("its balance shows up as debt across the whole history",
+          abs(_hh["debt"].iloc[0] - 1_500.0) < 0.01)
+    _over = Store(tmp / "overpaid.db")
+    _over.add_account(Account(name="Visa", type=AccountType.CREDIT,
+                              balance=250.0, balance_date=_t0))
+    _oh = networth_history(_over)
+    check("an overpaid card counts as cash, not negative debt",
+          abs(_oh["cash"].iloc[-1] - 250.0) < 0.01
+          and abs(_oh["debt"].iloc[-1]) < 0.01)
+    _over.close()
+
+    # The chart spans every account's history combined, so an account imported
+    # recently sits on an axis that starts years before its first row. Running
+    # B(t0) - F(t0) back through that empty region walks today's balance
+    # through flows that had not happened, which is how a funded savings
+    # account reported a large negative balance years ago.
+    _late = Store(tmp / "late.db")
+    _late.add_account(Account(name="Chq", type=AccountType.CHECKING,
+                              balance=2_000.0, balance_date=_t0))
+    _late.add_account(Account(name="Sav", type=AccountType.SAVINGS,
+                              balance=5_000.0, balance_date=_t0))
+    _lrows = []
+    for _i in range(36):
+        _lrows += [
+            {"account_id": 1,
+             "date": pd.Timestamp(_t0 - timedelta(days=30 * _i)),
+             "description": "PAY", "amount": 3_000.0, "category": "Income",
+             "import_hash": f"lp{_i}"},
+            {"account_id": 1,
+             "date": pd.Timestamp(_t0 - timedelta(days=30 * _i - 2)),
+             "description": "RENT", "amount": -3_000.0, "category": "Housing",
+             "import_hash": f"lr{_i}"}]
+    for _i in range(6):
+        _lrows.append({"account_id": 2,
+                       "date": pd.Timestamp(_t0 - timedelta(days=30 * _i)),
+                       "description": "SAVE XFER", "amount": 1_083.33,
+                       "category": "Transfer", "import_hash": f"ls{_i}"})
+    _late.add_transactions(pd.DataFrame(_lrows))
+    _ltx = _late.transactions()
+    _sav = [a for a in _late.accounts() if a.name == "Sav"][0]
+    _chq = [a for a in _late.accounts() if a.name == "Chq"][0]
+    check("an account knows nothing before its own first row",
+          _known(_ltx, _sav) > _known(_ltx, _chq))
+    _lh = networth_history(_late)
+    _line = cash_history(_ltx, _sav, _lh.index,
+                         anchor=cash_anchor(_late, _sav))
+    check("its reconstruction is flat before that point, not extrapolated",
+          abs(_line.iloc[0] - _line.asof(_known(_ltx, _sav))) < 0.01)
+    check("and the flat region is genuinely constant",
+          _line[_line.index < _known(_ltx, _sav)].nunique() <= 1)
+    check("total cash still ends on the sum of the entered balances",
+          abs(_lh["cash"].iloc[-1] - 7_000.0) < 0.01)
+    _late.close()
+    _hstore.close()
 
     print("categorisation accuracy")
     from finfore.categorize import categorize as _cz

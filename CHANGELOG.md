@@ -6,6 +6,43 @@ intended to hand to someone else. The running version is shown in the app
 header and under **Help → About**, so a downloaded copy always identifies
 itself.
 
+## 1.10.1 — two bugs in the dashboard history charts
+
+Reported as "it puts my brother at about −$1,500 several years ago, which
+doesn't sound right." It wasn't. Two independent faults, both invisible on a
+ledger with one cash account and no card.
+
+- **A credit card was being counted as negative cash instead of as debt.**
+  `headline_stats` has split it correctly since 0.6.1 — a card carrying a
+  balance is debt; only an overpaid card is spendable cash — but
+  `networth_history`, which draws the chart, never got the same fix and folded
+  the whole card into cash via `is_cashlike`. So the **Net cash line sat a full
+  card balance below the Net cash stat card on the same page**, and the debt
+  line ignored cards entirely. Net worth cancelled the error, which is exactly
+  why it survived four months: the total was right and only the two components
+  were wrong. A card with $1,500 owed and no imported transactions is flat at
+  −$1,500 across the entire chart, which is the reported symptom almost
+  exactly. Now split per day, the same way the stat cards do it.
+- **An account's history was extrapolated back before the account had any
+  data.** The chart spans the *union* of every account's history, so a savings
+  account imported six months ago sits on an axis that may start years earlier.
+  Across that empty stretch $F(t)=0$, and $B_0 - F(t_0)$ walks today's balance
+  back through inflows that had not happened yet — $5,000 funded by $6,500 of
+  recent transfers reported **−$1,500 three years ago**. The series is now held
+  flat before the earlier of the account's anchor date and its first
+  transaction. Flat rather than dropping the account: one with no transactions
+  at all already holds its balance flat across the whole chart, so this is
+  consistent, and excluding it would make net worth step up on the day its
+  ledger happens to begin.
+- Regression tests assert the chart and the stat cards agree on cash, debt and
+  net worth — including the overpaid-card case — and that no account is
+  extrapolated before its own first row.
+
+> If you have used **Progress** already, its stored checkpoints were recorded
+> against the old cash definition and will score oddly against the new one.
+> **Progress → Clear checkpoints…** then **Reconstruct history…** rebuilds them
+> cleanly; your transactions are untouched either way.
+
 ## 1.10.0 — credited, clearer, and a categoriser that had drifted
 
 - **Author credit.** `Created by Dr. Caleb N. Harper` on the splash and in

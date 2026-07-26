@@ -187,10 +187,28 @@ which is exact wherever the ledger is complete and anchored to your true
 balance even if imports don't reach back to the account's origin. $B_0$ is the
 account's current balance, or the most recent snapshot if you have added one
 dated at or after it — which is how a snapshot corrects drift on a cash
-account. Loan and
-investment histories interpolate linearly in time through balance
-snapshots. Net worth is $N(t) = C(t) + \sum_i V_i(t) - \sum_j L_j(t)$ for
-cash $C$, investments $V$, and debts $L$.
+account.
+
+The series is held **flat before the earlier of the account's anchor date and
+its first transaction**, because before that the account knows nothing. The
+chart spans the *union* of every account's history, so an account imported six
+months ago sits on an axis that may start years earlier; across that empty
+stretch $F(t)=0$, and $B_0-F(t_0)$ then walks today's balance back through
+flows that had not happened yet, producing a confident and badly wrong number.
+Flat is the right fill rather than dropping the account, because an account
+with no transactions at all already holds its balance flat across the whole
+chart — and excluding it instead would make net worth step up on the day its
+ledger happens to begin.
+
+A **credit card is debt, not negative cash**: its balance is split per day the
+same way the stat cards split it, into $\max(0,-B)$ of debt and $\max(0,B)$ of
+cash. Folding the whole card into cash left the chart's net-cash line a full
+card balance below the net-cash figure on the same page, with the debt line
+ignoring cards entirely; net worth cancelled the error, which is why only the
+components were visibly wrong. Loan and investment histories interpolate
+linearly in time through balance snapshots. Net worth is
+$N(t) = C(t) + \sum_i V_i(t) - \sum_j L_j(t)$ for cash $C$, investments $V$,
+and debts $L$.
 
 **Recurring detection.** Descriptions are normalized (case-folded, noise
 tokens and trailing identifiers stripped) and grouped by (name, sign).
