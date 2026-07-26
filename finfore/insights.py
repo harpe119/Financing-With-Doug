@@ -230,6 +230,41 @@ def monthly_aggregates(tx: pd.DataFrame, window: int | None = None,
                       half_life=half_life, giving=giving)
 
 
+def weight_shares(half_life: float = HALF_LIFE_MONTHS,
+                  lookback: int = LOOKBACK_MONTHS) -> dict[int, float]:
+    """Share of the score contributed by the most recent N months.
+
+    Derived from the constants rather than written out, so the sentence the UI
+    shows cannot drift away from the arithmetic it describes.
+    """
+    w = [0.5 ** (m / half_life) for m in range(lookback)]
+    total = sum(w) or 1.0
+    return {n: sum(w[:n]) / total for n in (3, 6, 12)}
+
+
+def window_note(agg: "Aggregates | None" = None,
+                half_life: float = HALF_LIFE_MONTHS,
+                lookback: int = LOOKBACK_MONTHS) -> str:
+    """One line saying how far back the score looks, and how unevenly.
+
+    Quoting the lookback alone ("24 months") reliably reads as "two years,
+    treated evenly", which is the opposite of what the decay does — the recent
+    quarter is already half the answer. Both numbers, or neither.
+    """
+    sh = weight_shares(half_life, lookback)
+    base = (f"Looks back {lookback} months, weighted toward recent ones "
+            f"(half-life {half_life:.0f} months): the last 3 months are about "
+            f"{sh[3] * 100:.0f}% of this score, the last 6 about "
+            f"{sh[6] * 100:.0f}%, and anything over a year about "
+            f"{(1 - sh[12]) * 100:.0f}%.")
+    if agg is not None and getattr(agg, "n_months", 0):
+        base += (f" You have {agg.n_months} complete month"
+                 f"{'s' if agg.n_months != 1 else ''} of history"
+                 + (" (this month is still in progress and is left out)."
+                    if agg.partial_current else "."))
+    return base
+
+
 def essential_monthly(store) -> float:
     """Average monthly essential outflow, $/mo.
 

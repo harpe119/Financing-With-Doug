@@ -403,8 +403,10 @@ class MainWindow(QMainWindow):
         box = QMessageBox(self)
         box.setWindowTitle("About Doug")
         box.setTextFormat(Qt.TextFormat.RichText)
+        from .splash import AUTHOR
         box.setText(
             f"<h3>Financing with Doug v{__version__}</h3>"
+            f"<p style='color:#8B98A9'>Created by <b>{AUTHOR}</b></p>"
             f"<p>A local, private personal-finance modeling tool. All data "
             f"stays in a SQLite file on this machine.</p>"
             f"<p>Doug was originally a machine-learning model that was, by "

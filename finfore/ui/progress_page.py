@@ -62,6 +62,13 @@ class ProgressPage(QWidget):
             "works now instead of in a few months")
         self.fill_btn.clicked.connect(self._backfill)
         bar.addWidget(self.fill_btn)
+        self.clear_btn = QPushButton("Clear checkpoints…")
+        self.clear_btn.setObjectName("danger")
+        self.clear_btn.setToolTip(
+            "Start this page over. Only the recorded checkpoints are removed — "
+            "your accounts, transactions and goals are untouched.")
+        self.clear_btn.clicked.connect(self._clear)
+        bar.addWidget(self.clear_btn)
         bar.addStretch(1)
         root.addLayout(bar)
 
@@ -214,6 +221,51 @@ class ProgressPage(QWidget):
             if made else
             "Nothing to reconstruct — your ledger doesn't reach far enough "
             "back, or those dates already have checkpoints.")
+
+    def _clear(self) -> None:
+        """Remove the checkpoints and nothing else.
+
+        Reconstructing history is easy to press twice, or at a spacing that
+        turns out not to be useful, and there was no way back — the comparison
+        list just kept growing. This resets the page to empty so it can be
+        rebuilt, and is careful to say what it does *not* delete: a button next
+        to a financial ledger that says "clear" needs to be unambiguous about
+        its blast radius.
+        """
+        cps = self.store.checkpoints()
+        if not cps:
+            QMessageBox.information(self, "Nothing to clear",
+                                    "There are no checkpoints yet.")
+            return
+        auto = sum(1 for c in cps if c.label not in ("history", "backfilled"))
+        built = len(cps) - auto
+        box = QMessageBox(self)
+        box.setWindowTitle("Clear checkpoints")
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setText(
+            f"Delete all {len(cps)} checkpoint{'s' if len(cps) != 1 else ''} "
+            f"and start this page over?")
+        box.setInformativeText(
+            f"{built} were reconstructed and {auto} recorded at an import.\n\n"
+            f"This removes only the saved snapshots that this page compares. "
+            f"Your accounts, transactions, goals and imported CSV data are NOT "
+            f"touched.\n\n"
+            f"A new checkpoint is recorded on your next import, and "
+            f"Reconstruct history can rebuild the older ones at any time.")
+        box.setStandardButtons(QMessageBox.StandardButton.Cancel)
+        go = box.addButton("Clear checkpoints",
+                           QMessageBox.ButtonRole.DestructiveRole)
+        box.setDefaultButton(QMessageBox.StandardButton.Cancel)
+        box.exec()
+        if box.clickedButton() is not go:
+            return
+        n_tx = len(self.store.transactions())
+        for c in cps:
+            self.store.delete_checkpoint(c.id)
+        self.refresh()
+        self.main.status(
+            f"Cleared {len(cps)} checkpoint{'s' if len(cps) != 1 else ''}. "
+            f"{n_tx} transactions untouched.")
 
     def _selected(self):
         cid = self.pick.currentData()

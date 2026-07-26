@@ -23,11 +23,23 @@ from .widgets import hint
 # Trailing windows the queue can be narrowed to. The default matches the span
 # the Insights habits score actually reads, because clearing the pile in order
 # to fix that score is the reason most people open this dialog.
+#
+# The old label for that entry read "Scoring window (24 months)", which is true
+# and misleading in the same breath: 24 months is only the point past which a
+# month contributes nothing, while the 3-month half-life means the last quarter
+# already carries half the score. Reading "24 months" and concluding the score
+# treats two years evenly is the obvious inference and the wrong one.
 _WINDOWS = [("Last 3 months", 3), ("Last 6 months", 6), ("Last 12 months", 12),
-            (f"Scoring window ({scoring_window_months()} months)",
-             scoring_window_months()),
+            (f"Everything the score sees ({scoring_window_months()} months, "
+             f"weighted)", scoring_window_months()),
             ("Everything", None)]
 _DEFAULT_WINDOW = 3          # index of the scoring-window entry
+
+# How many merchants the table will show at once. Previously 60 with nothing
+# saying so, which is how "I labelled every row and the list didn't clear"
+# happens: the summary counted 80 merchants, the table held 60, and the 20 the
+# user never saw were still there afterwards.
+MAX_ROWS = 250
 
 
 class ReviewUncategorizedDialog(QDialog):
@@ -60,10 +72,12 @@ class ReviewUncategorizedDialog(QDialog):
             self.window.addItem(label, months)
         self.window.setCurrentIndex(_DEFAULT_WINDOW)
         self.window.setToolTip(
-            "The habits score weights each month by 0.5^(age/3), so a charge "
-            "two years old counts about 1/256 of last month's. Labelling those "
-            "merchants is real work that barely moves the score. Labels you do "
-            "apply still cover every matching row, however old.")
+            "The habits score looks back 24 months but weights each month by "
+            "0.5^(age/3) — so the last 3 months are half the score, the last "
+            "6 are three quarters, and anything past a year is about 6% of it. "
+            "Labelling a merchant you last saw two years ago is real work that "
+            "moves almost nothing. Labels you do apply still cover every "
+            "matching row, however old.")
         self.window.currentIndexChanged.connect(self._reload)
         wrow.addWidget(self.window)
         wrow.addStretch(1)
@@ -76,7 +90,12 @@ class ReviewUncategorizedDialog(QDialog):
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.setAlternatingRowColors(True)
-        self.table.verticalHeader().setVisible(False)
+        vh = self.table.verticalHeader()
+        vh.setVisible(False)
+        # Merchant names are long and the Category cell holds a live combo box;
+        # at the default ~30px both get clipped through the middle of the text.
+        vh.setDefaultSectionSize(40)
+        vh.setMinimumSectionSize(40)
         hdr = self.table.horizontalHeader()
         hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         for c in range(1, len(self.COLS)):
@@ -107,14 +126,21 @@ class ReviewUncategorizedDialog(QDialog):
     # ---------------------------------------------------------------
     def _reload(self) -> None:
         months = self.window.currentData()
-        self._clusters = uncategorized_clusters(self.store, limit=60,
+        self._clusters = uncategorized_clusters(self.store, limit=MAX_ROWS,
                                                 months=months)
         s = uncategorized_summary(self.store, months=months)
+        shown = min(len(self._clusters), s["merchants"])
+        more = max(0, s["merchants"] - shown)
         if s["merchants"]:
+            # Say plainly when the table is not the whole list. Without this,
+            # labelling every visible row and finding the queue non-empty looks
+            # like the button failed.
+            head = (f"{s['merchants']} unlabelled merchants"
+                    + (f" (showing the top {shown})" if more else ""))
             self.summary.setText(
-                f"{s['merchants']} unlabelled merchants · {s['transactions']} "
-                f"transactions · {fmt_money(s['total'])} total — the top 10 "
-                f"merchants alone are {s['top10_share'] * 100:.0f}% of it")
+                f"{head} · {s['transactions']} transactions · "
+                f"{fmt_money(s['total'])} total — the top 10 merchants alone "
+                f"are {s['top10_share'] * 100:.0f}% of it")
         elif months:
             self.summary.setText("Nothing uncategorized in this window.")
         else:
@@ -177,12 +203,23 @@ class ReviewUncategorizedDialog(QDialog):
             moved += label_cluster(self.store, cluster, cat)
         propagated = recategorize_all(self.store)
         self._reload()
+        left = uncategorized_summary(self.store,
+                                     months=self.window.currentData())
+        tail = (f"{propagated} further transactions were matched automatically "
+                f"from similar merchant names."
+                if propagated else
+                "No further transactions matched automatically yet — the more "
+                "merchants you label, the more this will catch on its own.")
+        # Always report what is left. Silence here reads as "all done", which
+        # is wrong whenever the queue was longer than one screenful.
+        if left["merchants"]:
+            tail += (f"\n\n{left['merchants']} merchant"
+                     f"{'s' if left['merchants'] != 1 else ''} still "
+                     f"unlabelled in this window "
+                     f"({fmt_money(left['total'])}).")
+        else:
+            tail += "\n\nNothing left uncategorized in this window."
         QMessageBox.information(
             self, "Categories applied",
             f"Labelled {moved} transaction{'s' if moved != 1 else ''} across "
-            f"{len(picks)} merchant{'s' if len(picks) != 1 else ''}.\n\n"
-            + (f"{propagated} further transactions were matched automatically "
-               f"from similar merchant names."
-               if propagated else
-               "No further transactions matched automatically yet — the more "
-               "merchants you label, the more this will catch on its own."))
+            f"{len(picks)} merchant{'s' if len(picks) != 1 else ''}.\n\n" + tail)

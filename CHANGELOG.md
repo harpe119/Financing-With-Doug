@@ -6,6 +6,53 @@ intended to hand to someone else. The running version is shown in the app
 header and under **Help → About**, so a downloaded copy always identifies
 itself.
 
+## 1.10.0 — credited, clearer, and a categoriser that had drifted
+
+- **Author credit.** `Created by Dr. Caleb N. Harper` on the splash and in
+  Help → About. This is heading past the family that already knows who wrote it.
+- **Review uncategorized: taller rows (40px)** — merchant names and the inline
+  category picker were being clipped through the middle at the default height.
+- **Review uncategorized: "I labelled everything and the list didn't clear."**
+  Reproduced. The table was capped at 60 merchants with nothing saying so, while
+  the header counted all of them — label all 60 of 80 and 20 you never saw are
+  still there. The cap is now 250, the header says *"showing the top N"* when it
+  bites, and the confirmation reports what remains rather than going quiet.
+- **The scoring window was described misleadingly.** It said "Scoring window
+  (24 months)", which is true and reads as "two years, evenly". The half-life is
+  3 months, so **the last 3 months are about half the score**, the last 6 about
+  three quarters, and everything past a year about 6%. The picker now says
+  *"Everything the score sees (24 months, weighted)"*, and the Insights page
+  states the whole thing in a line computed from the constants — so the sentence
+  cannot drift from the arithmetic.
+- **Progress: `Clear checkpoints…`**. Reconstruct history is easy to press twice
+  and there was no way back. This resets the page to empty so it can be rebuilt,
+  and says explicitly that accounts, transactions, goals and imported CSV data
+  are not touched.
+- **Goals: "Getting there sooner" works on any rung, not just the top one.**
+  *"Can I have the computer by July while still clearing the card first?"* is a
+  question about a lower priority by definition. A target picker costs any live
+  goal, the figures stay on top of what is already committed above it, and when
+  a date is out of reach it says so — adding that moving the goal up the ladder
+  would reach it sooner, at a cost to whatever it overtakes, rather than
+  pretending priority is free.
+
+**Categorisation audit** — the rules had drifted since they were written:
+
+- **Three false positives fixed.** Bare `UNITED` filed *United Way* under
+  **Travel**, because Travel is tested before Giving. Bare `MARKET` filed
+  *Facebook Marketplace* and anything mentioning the stock market under
+  **Groceries**. Both are now anchored. A miss costs one click and is
+  remembered; a confident mislabel silently skews the score.
+- **Credit-card payments had no rule at all** — the single commonest outflow
+  the categoriser missed. When only the current account is imported there is no
+  opposite side for transfer-pairing to find, so they sat in Misc forever. Now
+  **Debt payment**, with pairing still winning when both sides are imported.
+- **~30 merchants and utilities added** — REI, Nordstrom, TJ Maxx, Petco,
+  Chewy, Wayfair, Ace Hardware, Staples, Waste Management, Con Edison and
+  others. The demo profiles went from 4.4% unlabelled to **0%**.
+- Recurrence detection re-checked and left alone: every pattern in the demos is
+  found at the right cadence and kind, with confidence ≥ 0.95.
+
 ## 1.9.0 — a Getting started guide, in the app
 
 - **`docs/getting-started.md`**, written for someone who has just unzipped the

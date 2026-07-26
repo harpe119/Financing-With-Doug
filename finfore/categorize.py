@@ -18,18 +18,35 @@ RULES: list[tuple[tuple[str, ...], str]] = [
     (("TRANSFER", "XFER"), "Transfer"),
     (("RENT", "LANDLORD", "PROPERTIES", "APARTMENT", "MORTGAGE"), "Housing"),
     (("ELECTRIC", "POWER CO", "ENERGY", "GAS & ELEC", "WASHINGTON GAS",
-      "NATURAL GAS", "WATER", "SEWER", "UTILIT"), "Utilities"),
+      "NATURAL GAS", "WATER", "SEWER", "UTILIT", "WASTE MGMT",
+      "WASTE MANAGEMENT", "REPUBLIC SERV", "CON EDISON", "CONED",
+      "NATIONAL GRID", "PG&E", "PGANDE", "DOMINION"), "Utilities"),
     (("INTERNET", "COMCAST", "XFINITY", "SPECTRUM", "FIOS", "BROADBAND"), "Utilities"),
     (("VERIZON", "T-MOBILE", "TMOBILE", "AT&T", "ATT WIRELESS", "MINT MOBILE"), "Utilities"),
     (("NETFLIX", "SPOTIFY", "HULU", "DISNEY", "HBO", "MAX.COM", "YOUTUBE PREM",
       "APPLE.COM/BILL", "AUDIBLE", "SUBSTACK", "PATREON", "CRUNCHYROLL",
       "PARAMOUNT", "PEACOCK", "PRIME VIDEO", "APPLETV", "SLING", "TWITCH"), "Subscriptions"),
     (("GEICO", "STATE FARM", "PROGRESSIVE", "ALLSTATE", "INSURANCE", "USAA INS"), "Insurance"),
-    (("LOAN", "NAVIENT", "NELNET", "SALLIE", "MOHELA", "AUTO FIN", "AUTO FINANCE",
-      "CAR PAYMENT", "LENDING"), "Debt payment"),
+    # Card payments belong here too. They are the most common outflow the
+    # rules used to miss entirely, and when only the current account has been
+    # imported there is no opposite side for transfer-pairing to find, so they
+    # sat in Misc forever. When both sides *are* imported, pair_transfers still
+    # runs afterwards and relabels them Transfer, which is the better answer.
+    # Anchored forms only: bare "DISCOVER" catches Discovery+, bare "VISA"
+    # catches visa fees.
+    (("LOAN", "NAVIENT", "NELNET", "SALLIE", "MOHELA", "AIDVANTAGE",
+      "EDFINANCIAL", "AUTO FIN", "AUTO FINANCE", "CAR PAYMENT", "LENDING",
+      "CARD PMT", "CARD PAYMENT", "CRD PYMT", "CRD EPAY", "CARD MIN PMT",
+      "CREDIT CRD", "AMEX EPAYMENT", "DISCOVER E-PAY", "DISCOVER PAYMENT",
+      "CHASE CARD", "CAPITAL ONE CRD", "CARDMEMBER SERV"), "Debt payment"),
+    # "MARKET" on its own was matching FACEBOOK MARKETPLACE and anything with
+    # "stock market" in it, filing both as groceries. A miss is recoverable in
+    # one click and is remembered; a confident mislabel quietly skews the score.
     (("KROGER", "SAFEWAY", "WEGMANS", "PUBLIX", "ALDI", "H-E-B", "HEB ", "WINCO",
-      "TRADER JOE", "WHOLE FOODS", "FOOD LION", "GIANT", "MARKET", "GROCER",
-      "COSTCO", "SAM'S CLUB"), "Groceries"),
+      "TRADER JOE", "WHOLE FOODS", "FOOD LION", "GIANT FOOD", "GROCER",
+      "SUPERMARKET", "FOOD MARKET", "FRESH MARKET", "FARMERS MARKET",
+      "MARKET BASKET", "SPROUTS", "HARRIS TEETER", "MEIJER", "HYVEE",
+      "HY-VEE", "STOP & SHOP", "COSTCO", "SAM'S CLUB"), "Groceries"),
     (("STARBUCKS", "DUNKIN", "COFFEE", "CAFE", "RESTAURANT", "PIZZA", "SUSHI",
       "TACO", "BURGER", "CHIPOTLE", "MCDONALD", "WENDY", "CHICK-FIL",
       "DOORDASH", "UBER EATS", "GRUBHUB", "BREWERY", "BAR & GRILL", "DELI",
@@ -39,11 +56,15 @@ RULES: list[tuple[tuple[str, ...], str]] = [
       "SHEETZ", "FUEL", "GAS STATION", "SPEEDWAY", "CIRCLE K", "QT ", "PILOT"), "Fuel"),
     (("UBER", "LYFT", "TRANSIT", "PARKING", "TOLL", "AMTRAK"), "Transport"),
     (("AMAZON", "AMZN", "TARGET", "WALMART", "BEST BUY", "EBAY", "ETSY",
-      "HOME DEPOT", "LOWES", "IKEA", "MICRO CENTER"), "Shopping"),
+      "HOME DEPOT", "LOWES", "IKEA", "MICRO CENTER", "MARKETPLACE",
+      "REI ", "REI.COM", "NORDSTROM", "MACY'S", "MACYS", "KOHL'S", "KOHLS",
+      "TJ MAXX", "TJMAXX", "MARSHALLS", "ROSS STORES", "OLD NAVY", "WAYFAIR",
+      "CHEWY", "PETSMART", "PETCO", "ACE HARDWARE", "MENARDS", "STAPLES",
+      "OFFICE DEPOT", "DICK'S SPORTING", "ULTA", "SEPHORA"), "Shopping"),
     (("GYM", "FITNESS", "CLIMB", "YOGA", "CROSSFIT"), "Health & fitness"),
     (("PHARMACY", "CVS", "WALGREEN", "RITE AID", "DENTAL", "MEDICAL", "CLINIC",
       "URGENT CARE", "OPTOMETR", "LABCORP"), "Health & fitness"),
-    (("AIRLINE", "DELTA AIR", "UNITED", "SOUTHWEST", "AMERICAN AIR", "ALASKA AIR",
+    (("AIRLINE", "AIRLINES", "DELTA AIR", "UNITED AIR", "SOUTHWEST AIR", "AMERICAN AIR", "ALASKA AIR",
       "HOTEL", "AIRBNB", "MARRIOTT", "HILTON", "EXPEDIA"), "Travel"),
     (("STEAM", "PLAYSTATION", "NINTENDO", "XBOX", "CINEMA", "THEATRE", "THEATER",
       "TICKETMASTER", "AMC "), "Entertainment"),

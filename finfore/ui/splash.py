@@ -66,6 +66,11 @@ def doug_fact() -> str:
     return random.choice(DOUG_FACTS)
 
 
+# Single source for the credit — splash, About box and window title all read
+# it, so there is one place to change if it ever needs to.
+AUTHOR = "Dr. Caleb N. Harper"
+
+
 def _render(version: str) -> QPixmap:
     pm = QPixmap(_W, _H)
     pm.fill(Qt.GlobalColor.transparent)
@@ -109,6 +114,16 @@ def _render(version: str) -> QPixmap:
     p.setPen(QPen(QColor(theme.ACCENT_DIM)))
     p.drawText(QRectF(0, 92, _W, 18), Qt.AlignmentFlag.AlignHCenter,
                "Doug has been studying.")
+
+    # Authorship. Sits above the status line rather than in the corner: this
+    # is heading out past the family that already knows who wrote it, and a
+    # credit nobody reads is not a credit.
+    f.setPointSize(9)
+    f.setWeight(QFont.Weight.DemiBold)
+    p.setFont(f)
+    p.setPen(QPen(QColor(theme.MUTED)))
+    p.drawText(QRectF(0, _H - 62, _W, 18), Qt.AlignmentFlag.AlignHCenter,
+               f"Created by {AUTHOR}")
     p.end()
     return pm
 

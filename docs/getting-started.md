@@ -183,7 +183,11 @@ charge you have ever made and every one you make in future. Twenty minutes here
 does more than an hour of editing rows one at a time.
 
 By default it only shows merchants from the period that actually affects your
-score, because labelling something you bought once in 2022 changes nothing.
+score. The score looks back 24 months but weights recent months far more
+heavily — **the last 3 months are about half of it**, the last 6 about three
+quarters, and anything over a year about 6%. So labelling a merchant you last
+saw in 2022 is real work that changes almost nothing. If the list is longer
+than one screen, the header says so.
 
 Two things worth knowing:
 

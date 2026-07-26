@@ -10,8 +10,8 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (QGridLayout, QHBoxLayout, QLabel, QScrollArea,
                              QSizePolicy, QVBoxLayout, QWidget)
 
-from ..insights import (monthly_aggregates, spending_score, breakdown,
-                        suggestions)
+from ..insights import (breakdown, monthly_aggregates, spending_score,
+                        suggestions, window_note)
 from ..store import Store
 from ..util import fmt_money
 from . import theme
@@ -89,11 +89,16 @@ class InsightsPage(QWidget):
             "you're doing (net income against the 20% savings target). A tight "
             "month with disciplined spending still grades well; the same "
             "shortfall caused by discretionary spending does not.")
+        # Say how far back this looks, in the terms people actually ask about.
+        # "24 months" on its own invites the reading that two years are treated
+        # evenly; the half-life is what makes the recent quarter half the answer.
+        self.window_note = hint("")
         tcol.addWidget(self.means)
         tcol.addWidget(self.verdict)
         tcol.addWidget(self.detail)
         tcol.addWidget(self.components)
         tcol.addWidget(self.provisional)
+        tcol.addWidget(self.window_note)
         tcol.addWidget(self.explain)
         tcol.addStretch(1)
         srow.addLayout(tcol, 1)
@@ -164,6 +169,7 @@ class InsightsPage(QWidget):
         self.verdict.setText(sc.headline)
         self.verdict.setStyleSheet(f"font-size: 13px; color: {col};")
         self.provisional.setVisible(sc.provisional)
+        self.window_note.setText(window_note(agg))
 
         # composition
         slices = breakdown(agg)

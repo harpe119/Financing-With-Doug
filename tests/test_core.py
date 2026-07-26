@@ -1110,6 +1110,35 @@ def main() -> None:
           not near.feasible or len(near.cuts) == 1
           or sum(c.monthly for c in near.cuts[:-1]) < near.shortfall)
 
+    # Any rung, not just the top one — "can I have the computer by July while
+    # still clearing the card first?" is a question about a lower priority by
+    # definition, and the honest answer has to account for what is ahead of it.
+    dstore.add_account(Account(name="Card", type=AccountType.LOAN,
+                               balance=2_000.0, balance_date=_date.today(),
+                               apr=0.24, monthly_payment=90.0))
+    _cid = [a.id for a in dstore.accounts() if a.name == "Card"][0]
+    dstore.set_plan_order([f"loan:{_cid}", f"goal:{dgoal}"])
+    dplan2 = _G.build_plan(dstore, policy="focus", surplus=200.0)
+    _lower = _G.deadline_plan(dstore, dplan2, f"goal:{dgoal}",
+                              _date.today().replace(day=1) + timedelta(days=460))
+    check("a lower rung reports its position on the ladder", _lower.rank == 2)
+    check("and names what is ahead of it", _lower.ahead == ["Card"])
+    check("and advises about priority, not only about cutting",
+          "priority 2" in _lower.advice)
+    check("the top rung carries no such advice",
+          _G.deadline_plan(dstore, dplan2, f"loan:{_cid}",
+                           _date.today().replace(day=1)
+                           + timedelta(days=460)).advice == "")
+    _sp_low = _G.speedups(dstore, dplan2, amounts=(100.0,),
+                          target_key=f"goal:{dgoal}")
+    check("speedups can be costed for a lower rung",
+          _sp_low and _sp_low[0].target == "New laptop")
+    _sp_top = _G.speedups(dstore, dplan2, amounts=(100.0,))
+    check("and still default to the top rung",
+          _sp_top and _sp_top[0].target == "Card")
+    dstore.delete_account(_cid)
+    dstore.set_plan_order([f"goal:{dgoal}"])
+
     absurd = _G.deadline_plan(dstore, dplan, f"goal:{dgoal}",
                               _date.today().replace(day=1) + timedelta(days=31))
     check("an unreachable date says so rather than cutting into essentials",
@@ -1149,6 +1178,52 @@ def main() -> None:
     check("an unfiltered summary hides nothing",
           uncategorized_summary(wstore)["hidden_merchants"] == 0)
     wstore.close()
+
+    print("categorisation accuracy")
+    from finfore.categorize import categorize as _cz
+    # Anchored keywords. Bare "UNITED" put United Way under Travel because the
+    # Travel rule is tested before Giving, and bare "MARKET" filed Facebook
+    # Marketplace as groceries. A miss costs one click and is remembered; a
+    # confident mislabel silently skews the score.
+    for _desc, _amt, _want in (
+            ("UNITED WAY OF AMERICA", -50, "Charitable donation"),
+            ("UNITED AIRLINES 016", -420, "Travel"),
+            ("FACEBOOK MARKETPLACE", -40, "Shopping"),
+            ("GIANT FOOD 0182", -90, "Groceries"),
+            # Card payments were the commonest outflow with no rule at all.
+            ("VISA REWARDS CARD MIN PMT", -210, "Debt payment"),
+            ("CHASE CREDIT CRD EPAY", -400, "Debt payment"),
+            ("AMEX EPAYMENT ACH PMT", -300, "Debt payment"),
+            ("DISCOVER E-PAYMENT", -150, "Debt payment"),
+            ("NAVIENT STUDENT LN", -300, "Debt payment"),
+            ("REI 0042", -85, "Shopping"),
+            ("PETSMART 0231", -70, "Shopping"),
+            ("WAYFAIR ORDER", -300, "Shopping"),
+            ("WASTE MANAGEMENT", -45, "Utilities"),
+            ("CON EDISON", -140, "Utilities"),
+            # Ordering that must not regress: food delivery beats rideshare.
+            ("UBER EATS TRIP", -28, "Dining"),
+            ("UBER TRIP 4AM", -22, "Transport"),
+            ("OAKWOOD PROPERTIES RENT", -1795, "Housing"),
+            ("ACME PAYROLL DIR DEP", 2650, "Income")):
+        check(f"{_desc!r} categorises as {_want}", _cz(_desc, _amt) == _want)
+    check("an unmatched outflow still falls through to Misc",
+          _cz("ZZQX UNKNOWN VENDOR", -20) == "Misc")
+    check("an unmatched inflow still falls through to Other income",
+          _cz("ZZQX UNKNOWN VENDOR", 20) == "Other income")
+
+    print("the scoring window says what it does")
+    from finfore.insights import weight_shares, window_note
+    _sh = weight_shares()
+    check("the recent quarter carries about half the score",
+          0.45 < _sh[3] < 0.55)
+    check("the last six months carry about three quarters",
+          0.70 < _sh[6] < 0.80)
+    check("beyond a year is a rounding error", (1 - _sh[12]) < 0.10)
+    _wn = window_note()
+    check("the note quotes the lookback and the half-life",
+          "24 months" in _wn and "half-life" in _wn)
+    check("and the share the recent months actually carry", "%" in _wn)
 
     print("getting-started guide")
     from finfore.ui import guide as _guide
@@ -1356,6 +1431,17 @@ def main() -> None:
           not _P.score_move(
               _P.Checkpoint(when=_date.today(), score=6.5, grade="B"),
               _P.Checkpoint(when=_date.today(), score=4.0, grade="D")).improved)
+
+    check("checkpoints can be cleared without touching the ledger",
+          True)   # exercised via the store below
+    _n_tx_before = len(pstore.transactions())
+    for _c in pstore.checkpoints():
+        pstore.delete_checkpoint(_c.id)
+    check("clearing removes every checkpoint",
+          len(pstore.checkpoints()) == 0)
+    check("and leaves the transactions alone",
+          len(pstore.transactions()) == _n_tx_before)
+    _P.capture(pstore, label="t", horizon_days=180, n_paths=120)
 
     _shifts = _P.category_shifts(pstore, _P.Checkpoint(when=pcut), top=4)
     check("category attribution is ordered by size of move",

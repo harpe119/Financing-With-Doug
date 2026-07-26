@@ -417,6 +417,12 @@ counts a quarter, two years ago about 1/256. This replaces a hard three-month
 window, which discarded usable history and put a cliff at the boundary where a
 large purchase silently stopped counting.
 
+Both numbers matter and quoting either alone misleads: the lookback is 24
+months, but the decay means **the last 3 months are about 50% of the score**,
+the last 6 about 75%, and everything beyond a year about 6%. The Insights page
+states this in a line generated from the constants, so the description cannot
+drift from the arithmetic.
+
 Charitable giving is its own bucket, neither essential nor frivolous. It counts
 toward total spending — the money is gone either way — but is kept out of
 $\rho$, because grading someone down for tithing or a monthly charity

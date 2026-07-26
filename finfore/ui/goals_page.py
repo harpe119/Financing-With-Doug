@@ -173,7 +173,21 @@ class GoalsPage(QWidget):
 
         faster_card = Card("Getting there sooner")
         drow = QHBoxLayout()
-        drow.addWidget(QLabel("I want it by"))
+        drow.addWidget(QLabel("I want"))
+        # Any rung, not just the top one. "What would it take to have the
+        # computer by July, while still clearing the card first?" is the
+        # question people actually have, and it is about a goal partway down
+        # the ladder by definition.
+        self.target_pick = QComboBox()
+        self.target_pick.setMinimumWidth(150)
+        self.target_pick.setToolTip(
+            "Which target to cost. Anything above it on the ladder keeps its "
+            "priority, so the answer accounts for what you are already "
+            "committed to.")
+        self.target_pick.currentIndexChanged.connect(
+            lambda _i: self._render_faster())
+        drow.addWidget(self.target_pick, 1)
+        drow.addWidget(QLabel("by"))
         self.by_date = QDateEdit()
         self.by_date.setCalendarPopup(True)
         self.by_date.setDisplayFormat("MMM yyyy")
@@ -182,7 +196,6 @@ class GoalsPage(QWidget):
             "Pick a date and Doug works out what would have to give — by name.")
         self.by_date.dateChanged.connect(lambda _d: self._render_faster())
         drow.addWidget(self.by_date)
-        drow.addStretch(1)
         faster_card.body.addLayout(drow)
         self.faster = QLabel("")
         self.faster.setWordWrap(True)
@@ -408,21 +421,49 @@ class GoalsPage(QWidget):
                 f"{tail}</div>")
         self.cascade.setText("".join(rows))
 
+    def _sync_target_pick(self) -> None:
+        """Offer every unfinished rung, keeping the current choice if it lives."""
+        live = [a for a in self._plan.allocations if not a.target.complete]
+        prev = self.target_pick.currentData()
+        self.target_pick.blockSignals(True)
+        self.target_pick.clear()
+        for i, a in enumerate(live):
+            self.target_pick.addItem(
+                f"{a.target.name}" + ("  (next up)" if i == 0 else ""),
+                a.target.key)
+        j = self.target_pick.findData(prev)
+        self.target_pick.setCurrentIndex(j if j >= 0 else 0)
+        self.target_pick.blockSignals(False)
+        self.target_pick.setEnabled(bool(live))
+
     def _render_faster(self) -> None:
         plan = self._plan
-        focus = next((a for a in plan.allocations if not a.target.complete), None)
-        if focus is None:
+        self._sync_target_pick()
+        live = [a for a in plan.allocations if not a.target.complete]
+        if not live:
             self.faster.setText("Every target on the ladder is already met.")
             return
+        key = self.target_pick.currentData()
+        focus = next((a for a in live if a.target.key == key), live[0])
         try:
-            ups = speedups(self.store, plan)
+            ups = speedups(self.store, plan, target_key=focus.target.key)
         except Exception as e:
             self.faster.setText(f"Could not cost the options: {e}")
             return
-        head = (f"<div style='margin-bottom:6px'>Next up: "
+        # Rank among the *live* rungs, matching goals.deadline_plan. Counting
+        # completed targets too would tell someone their second remaining goal
+        # is "priority 3", which is a different and wrong claim.
+        rank = live.index(focus) + 1
+        where = ("Next up" if focus is live[0]
+                 else f"Priority {rank} on the ladder")
+        head = (f"<div style='margin-bottom:6px'>{where}: "
                 f"<b>{focus.target.name}</b>"
                 + (f", on track for {focus.eta.strftime('%b %Y')}"
                    if focus.eta else ", not reached at this rate") + ".</div>")
+        if focus is not live[0]:
+            head += (f"<div style='color:{theme.MUTED};margin-bottom:6px'>"
+                     f"Everything above it keeps its priority, so these figures "
+                     f"are on top of what you are already committed to.</div>")
         rows = []
         for s in ups:
             if s.months_saved <= 0:
@@ -458,10 +499,12 @@ class GoalsPage(QWidget):
         if dl.already_met or (dl.feasible and not dl.cuts):
             return head + (f"<div style='color:{theme.ACCENT}'>{dl.note}</div>")
         if not dl.feasible:
+            tail = (f"<div style='color:{theme.BLUE};margin-top:6px'>"
+                    f"{dl.advice}</div>" if dl.advice else "")
             return head + (
                 f"<div style='color:{theme.RED};margin-bottom:4px'>"
                 f"Not reachable by then.</div>"
-                f"<div style='color:{theme.MUTED}'>{dl.note}</div>")
+                f"<div style='color:{theme.MUTED}'>{dl.note}</div>" + tail)
 
         rows = [f"<div style='margin-bottom:4px'>Find "
                 f"<b>{fmt_money(dl.shortfall)}/mo</b> more. The smallest set of "
@@ -480,6 +523,9 @@ class GoalsPage(QWidget):
             f"listed. Essentials and loan payments are never proposed as cuts, "
             f"so if the list above is short of the number, the date is out of "
             f"reach rather than merely expensive.</div>")
+        if dl.advice:
+            rows.append(f"<div style='color:{theme.BLUE};margin-top:6px'>"
+                        f"{dl.advice}</div>")
         return head + "".join(rows)
 
     # ---------------------------------------------------------------
