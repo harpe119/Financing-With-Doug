@@ -88,18 +88,20 @@ this and other pages can be **dragged** to give one chart more room.
 
 Go to **Accounts** and click **Add account** for each one you want tracked.
 
-**Amounts type from the right.** Like a card machine: typing `1234` gives
-`$12.34`, and `123456` gives `$1,234.56`. To enter one thousand dollars exactly,
-type `100000`. Typing the decimal point out in full also works — `1234.56` lands
-in the same place.
+**Type amounts the way you would say them.** `1234.56` is one thousand two
+hundred and thirty-four dollars and fifty-six cents; `1234` is one thousand two
+hundred and thirty-four dollars. Dollar signs and commas pasted from a statement
+are ignored, so `$1,234.56` works too. Clicking into a field selects what is
+already there, so typing straight away replaces it rather than adding to it.
 
 What to enter for each type:
 
 - **Checking / Savings** — the balance right now, and today's date.
-- **Credit card** — the balance as a **negative** number (what you owe).
-- **Loan** — the amount owed as a **positive** number, plus the APR, the monthly
-  payment, and which day of the month it comes out. APR takes four decimal
-  places, so `6.4875%` off your statement goes in exactly as written.
+- **Credit card** — the amount you owe, as a **positive** number. (A negative
+  figure means the card is in credit — you are owed money.)
+- **Loan** — the amount owed as a **positive** number too, plus the APR, the
+  monthly payment, and which day of the month it comes out. APR takes four
+  decimal places, so `6.4875%` off your statement goes in exactly as written.
 - **Investment** — the current value, an expected annual return (7% is a common
   long-run assumption for a broad stock fund), a volatility (15% is typical),
   and anything you add each month.
@@ -208,10 +210,14 @@ subscriptions, loan payments — with how often it happens and how confident it 
 
 Have a quick look and:
 
-- **Deactivate** anything that has stopped (a cancelled subscription).
-- **Link** a loan payment to its loan account if it did not link itself. There
-  is a warning if one is unlinked, because otherwise the payment gets counted
-  twice.
+- Untick **On** for anything that has stopped, or that still happens but should
+  not count towards the forecast (a cancelled subscription, a one-off that
+  looked regular).
+- **Right-click** a row to say what it really is — income, a bill, not real at
+  all, or a payment on one of your loans. Linking a loan payment matters:
+  otherwise it gets counted twice, and there is a warning when one is unlinked.
+- **Delete** only removes patterns that no longer occur at all. If matching
+  transactions are still in your ledger, re-detecting simply finds it again.
 
 ---
 

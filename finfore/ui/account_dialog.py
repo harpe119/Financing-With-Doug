@@ -21,15 +21,14 @@ _TYPES = [AccountType.CHECKING, AccountType.SAVINGS, AccountType.CREDIT,
 RATE_DECIMALS = 4
 
 
-def _money_spin(lo=-1e9, hi=1e9, cents_entry: bool = True) -> QDoubleSpinBox:
-    s = MoneySpinBox(cents_entry=cents_entry)
+def _money_spin(lo=-1e9, hi=1e9) -> QDoubleSpinBox:
+    s = MoneySpinBox()
     s.setRange(lo, hi)
     s.setDecimals(2)
     s.setGroupSeparatorShown(True)
     s.setPrefix("$ ")
-    if cents_entry:
-        s.setToolTip("Digits fill in from the right, like a card terminal: "
-                     "type 1234 for $12.34, or 123456 for $1,234.56.")
+    s.setToolTip("Type the amount as you would say it — 1234.56, or 1234. "
+                 "Dollar signs and commas are fine.")
     return s
 
 
@@ -71,7 +70,8 @@ class AccountDialog(QDialog):
 
         form.addRow("Name", self.name)
         form.addRow("Type", self.type)
-        form.addRow("Balance", self.balance)
+        self.balance_label = QLabel("Balance")
+        form.addRow(self.balance_label, self.balance)
         form.addRow("Balance as of", self.balance_date)
 
         self.balance_hint = hint("")
@@ -115,7 +115,9 @@ class AccountDialog(QDialog):
         if account:
             self.name.setText(account.name)
             self.type.setCurrentIndex(_TYPES.index(account.type))
-            self.balance.setValue(account.balance)
+            self.balance.setValue(
+                -account.balance if account.type == AccountType.CREDIT
+                else account.balance)
             d = account.balance_date
             self.balance_date.setDate(QDate(d.year, d.month, d.day))
             self.apr.setValue(account.apr * 100)
@@ -125,8 +127,22 @@ class AccountDialog(QDialog):
             self.volatility.setValue(account.volatility * 100)
             self.contribution.setValue(account.monthly_contribution)
 
+    @staticmethod
+    def _owed_type(t: AccountType) -> bool:
+        """Types entered as a positive amount owed rather than a balance held.
+
+        A card and a loan are both money you owe, and asking for one as −1,500
+        and the other as +1,500 is a distinction with no meaning to the person
+        typing. Both are entered positive here; the credit card's stored sign
+        is flipped on the way in and out, because internally a card sits on the
+        cash side of the ledger where a purchase has to be negative.
+        """
+        return t in (AccountType.CREDIT, AccountType.LOAN)
+
     def _sync_fields(self) -> None:
         t: AccountType = self.type.currentData()
+        self.balance_label.setText(
+            "Amount owed" if self._owed_type(t) else "Balance")
         for lbl, w in self._loan_rows:
             lbl.setVisible(t == AccountType.LOAN)
             w.setVisible(t == AccountType.LOAN)
@@ -138,9 +154,11 @@ class AccountDialog(QDialog):
                                   "habits can be learned from it.",
             AccountType.SAVINGS: "Import this account's CSV so history and "
                                  "habits can be learned from it.",
-            AccountType.CREDIT: "Enter the balance as a negative number "
-                                "(amount owed). Import its CSV like a cash account.",
-            AccountType.LOAN: "Enter the balance as the positive amount owed. "
+            AccountType.CREDIT: "Enter what you owe as a positive number — "
+                                "the same way as a loan. A negative figure "
+                                "means the card is in credit. Import its CSV "
+                                "like a cash account.",
+            AccountType.LOAN: "Enter what you owe as a positive number. "
                               "Import the lender's CSV — balances or payment "
                               "activity — to draw its history. A payment "
                               "detected in your cash imports links automatically.",
@@ -153,6 +171,12 @@ class AccountDialog(QDialog):
         self.adjustSize()
 
     def _validate(self) -> None:
+        # Spin boxes only fold their text into value() when editing ends, which
+        # clicking OK does trigger. Doing it explicitly costs nothing and means
+        # no route to accept can ever save the figure that was there before.
+        for w in (self.balance, self.apr, self.payment, self.annual_return,
+                  self.volatility, self.contribution, self.payment_day):
+            w.interpretText()
         if not self.name.text().strip():
             self.name.setFocus()
             return
@@ -163,7 +187,9 @@ class AccountDialog(QDialog):
         a = Account(
             name=self.name.text().strip(),
             type=self.type.currentData(),
-            balance=self.balance.value(),
+            balance=(-self.balance.value()
+                     if self.type.currentData() == AccountType.CREDIT
+                     else self.balance.value()),
             balance_date=date(d.year(), d.month(), d.day()),
             apr=self.apr.value() / 100.0,
             annual_return=self.annual_return.value() / 100.0,

@@ -1,10 +1,8 @@
 """Small reusable widgets."""
 from __future__ import annotations
 
-import math
-
 from PyQt6.QtCore import QPoint, QRect, QRectF, QSize, Qt, QTimer
-from PyQt6.QtGui import QColor, QFont, QPainter, QPen
+from PyQt6.QtGui import QColor, QFont, QPainter, QPen, QValidator
 from PyQt6.QtWidgets import (QCheckBox, QDoubleSpinBox, QFrame, QHBoxLayout,
                              QLabel, QLayout, QPushButton, QSizePolicy,
                              QSpinBox, QSplitter, QVBoxLayout, QWidget)
@@ -118,93 +116,63 @@ class _SelectOnClickMixin:
 
 
 class MoneySpinBox(_SelectOnClickMixin, QDoubleSpinBox):
-    """Amount field with optional right-to-left (teller-style) digit entry.
+    """Amount field that accepts whatever a person would reasonably type.
 
-    With ``cents_entry`` the decimal point is fixed and typed digits shift in
-    from the right, the way an ATM, a card terminal and every banking app
-    behave: ``1234`` reads as ``$12.34``, and a further ``00`` makes it
-    ``$1,234.00``. The point is that there is no moment where the field holds a
-    half-finished number that is wrong by a factor of a hundred — which is
-    exactly how ``71520.00`` gets entered by someone who typed the digits they
-    meant into a field that had a ``0.00`` sitting in it already.
+    Plain left-to-right typing, because that is what everyone expects and
+    anything cleverer has to be learned. An earlier version filled digits in
+    from the right like a card terminal — `1234` becoming `$12.34` — which is
+    genuinely how tills work but is disorienting when you cannot see that it is
+    happening, and makes correcting one digit of an existing figure impossible
+    without retyping the lot.
 
-    Typing the amount out in full still works unchanged: the decimal key is
-    ignored rather than rejected, so ``1234.56`` delivers the same six digits
-    and lands on ``$1,234.56``.
+    What makes it forgiving instead of clever:
+
+    * `$`, commas and spaces are accepted and ignored, so pasting `$1,234.56`
+      from a statement works.
+    * The text is only re-parsed when editing finishes, so the field does not
+      rewrite itself under the cursor mid-number — typing `1`, `.`, `5` no
+      longer has an intermediate state that snaps to something else.
+    * Focusing selects the value, so typing replaces rather than appends.
+    * A half-typed number (`-`, `1.`) is *intermediate*, not rejected: Qt would
+      otherwise refuse the keystroke and it would look like the keyboard was
+      broken.
     """
 
-    def __init__(self, *args, cents_entry: bool = False, **kwargs):
+    def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self._cents_entry = cents_entry
+        # Don't re-read the text on every keystroke; wait for Enter or focus
+        # loss. This is what stops the field fighting the cursor.
+        self.setKeyboardTracking(False)
 
-    def set_cents_entry(self, on: bool) -> None:
-        self._cents_entry = on
+    def _core(self, text: str) -> str:
+        """The number part: prefix, suffix, currency and separators removed."""
+        s = str(text)
+        for fix in (self.prefix(), self.suffix()):
+            if fix and fix.strip() and fix.strip() in s:
+                s = s.replace(fix.strip(), "")
+        return s.replace("$", "").replace(",", "").replace(" ", "").strip()
 
-    def _units(self) -> int:
-        """Current value as an integer count of the smallest unit (cents)."""
-        return int(round(self.value() * (10 ** self.decimals())))
+    def validate(self, text, pos):               # noqa: N802
+        core = self._core(text)
+        if core in ("", "-", "+", ".", "-.", "+."):
+            return (QValidator.State.Intermediate, text, pos)
+        try:
+            float(core)
+        except ValueError:
+            return (QValidator.State.Invalid, text, pos)
+        return (QValidator.State.Acceptable, text, pos)
 
-    def _fresh(self) -> bool:
-        """True when the whole number is selected, so typing starts over.
+    def valueFromText(self, text) -> float:      # noqa: N802
+        core = self._core(text)
+        try:
+            return float(core)
+        except ValueError:
+            return float(self.value())
 
-        Compared against ``cleanText()`` — the value without prefix or suffix —
-        because ``QAbstractSpinBox.selectAll()`` deliberately leaves the ``"$ "``
-        prefix out of the selection. Comparing against the full line-edit text
-        instead meant this never returned True for a field showing money, so
-        typing into a populated field appended to the existing digits rather
-        than replacing them: clicking a balance of $71,520.00 and typing "500"
-        produced $71,520,005.00. It went unnoticed because a field sitting at
-        $0.00 gives the same answer either way, and zero is the common case.
-
-        A *pending* select also counts. The select-all is posted through a
-        zero-timer (Qt restores its own selection after focusIn, so doing it
-        inline gets undone), which leaves a window where the field has focus
-        but nothing is highlighted yet — a keystroke landing in that window
-        would append to the old value. Asking "has the reset been consumed?"
-        rather than "is the highlight painted?" closes the race.
-        """
-        if self._pending_select:
-            return True
-        sel = self.lineEdit().selectedText()
-        core = self.cleanText()
-        # Containment, not equality: selectAll() on the spin box yields just
-        # "71,520.00" while dragging across the field yields "$ 71,520.00", and
-        # both mean the same thing to the person doing it.
-        return bool(sel) and bool(core) and core in sel
-
-    def _commit(self, units: int) -> None:
-        self._pending_select = False
-        self.setValue(units / (10 ** self.decimals()))
-        le = self.lineEdit()
-        le.deselect()
-        # Park the caret at the end. Nothing is typed *at* the caret in this
-        # mode, but leaving it mid-number looks like the field is editable
-        # there when it is not.
-        le.setCursorPosition(len(le.text()))
-
-    def keyPressEvent(self, event) -> None:      # noqa: N802
-        if not self._cents_entry:
-            super().keyPressEvent(event)
-            return
-        mods = event.modifiers() & ~Qt.KeyboardModifier.ShiftModifier
-        if mods != Qt.KeyboardModifier.NoModifier:
-            super().keyPressEvent(event)          # Ctrl+A/C/V and friends
-            return
-        text = event.text()
-        if text.isdigit():
-            base = 0 if self._fresh() else self._units()
-            self._commit(int(math.copysign(abs(base) * 10 + int(text), base or 1)))
-            return
-        if event.key() in (Qt.Key.Key_Backspace, Qt.Key.Key_Delete):
-            units = 0 if self._fresh() else self._units()
-            self._commit(int(math.copysign(abs(units) // 10, units or 1)))
-            return
-        if text in ("-", "+") and self.minimum() < 0:
-            self._commit(-abs(self._units()) if text == "-" else abs(self._units()))
-            return
-        if text in (".", ","):
-            return          # the point is fixed; there is nothing to place
-        super().keyPressEvent(event)
+    def fixup(self, text) -> str:                # noqa: N802
+        """Turn an abandoned half-number into something valid."""
+        core = self._core(text)
+        return "0" if core in ("", "-", "+", ".", "-.", "+.") else core
 
 
 class IntSpinBox(_SelectOnClickMixin, QSpinBox):

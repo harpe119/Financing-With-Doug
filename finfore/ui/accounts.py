@@ -699,7 +699,8 @@ class DuplicateDialog(QDialog):
 
 
 class AccountsPage(QWidget):
-    COLS = ["Name", "Type", "Balance", "As of", "Rate", "Payment / contribution"]
+    COLS = ["Name", "Type", "Balance / owed", "As of", "Rate",
+            "Payment / contribution"]
 
     def __init__(self, store: Store, main):
         super().__init__()
@@ -750,9 +751,10 @@ class AccountsPage(QWidget):
         lay.addWidget(self.table, 1)
 
         lay.addWidget(hint(
-            "Loans store the amount owed as a positive balance; credit cards as "
-            "a negative balance. The forecast amortizes loans monthly at APR/12 "
-            "and grows investments at the expected return."))
+            "Loans and credit cards both show what you owe as a positive "
+            "figure; a negative one means the card is in credit. The forecast "
+            "amortizes loans monthly at APR/12 and grows investments at the "
+            "expected return."))
 
     # ---------------------------------------------------------------
     def refresh(self) -> None:
@@ -771,7 +773,12 @@ class AccountsPage(QWidget):
                     paycol = f"{fmt_money(a.monthly_contribution)}/mo"
             elif a.type == AccountType.CREDIT and a.apr:
                 rate = f"{fmt_rate(a.apr)} APR"
-            vals = [a.name, a.type.label, fmt_money(a.balance),
+            # Debts read as a positive amount owed, matching what is typed in
+            # the dialog. A card stored at -1,500 and a loan stored at +1,500
+            # are the same statement about the world, and showing them with
+            # opposite signs is the inconsistency, not the storage.
+            shown = -a.balance if a.type == AccountType.CREDIT else a.balance
+            vals = [a.name, a.type.label, fmt_money(shown),
                     a.balance_date.isoformat(), rate, paycol]
             for c, v in enumerate(vals):
                 it = QTableWidgetItem(v)

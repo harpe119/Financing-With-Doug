@@ -4,8 +4,8 @@ from __future__ import annotations
 from datetime import date
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QBrush, QColor
-from PyQt6.QtWidgets import (QComboBox, QHBoxLayout, QHeaderView, QMessageBox,
+from PyQt6.QtGui import QAction, QBrush, QColor
+from PyQt6.QtWidgets import (QHBoxLayout, QHeaderView, QMenu, QMessageBox,
                              QPushButton, QTableWidget, QTableWidgetItem,
                              QVBoxLayout, QWidget)
 
@@ -18,18 +18,13 @@ from . import theme
 from .widgets import hint
 
 
-def _find_by_value(combo: QComboBox, want) -> int:
-    """QComboBox.findData compares Python payloads by identity; compare by
-    value instead."""
-    for i in range(combo.count()):
-        if combo.itemData(i) == want:
-            return i
-    return -1
-
-
 class RecurringPage(QWidget):
-    COLS = ["On", "Name", "Cadence", "Amount", "≈ /month", "Next", "Conf.",
-            "Treat as"]
+    # No "Treat as" column. It duplicated the On checkbox for the only choice
+    # people actually made (Ignore), and the rest — income vs bill, and linking
+    # a payment to its loan — is detected automatically and needed so rarely
+    # that a permanent column of combo boxes was the wrong price for it. Both
+    # still available on right-click.
+    COLS = ["On", "Name", "Cadence", "Amount", "≈ /month", "Next", "Conf."]
 
     def __init__(self, store: Store, main):
         super().__init__()
@@ -45,7 +40,7 @@ class RecurringPage(QWidget):
         bar = QHBoxLayout()
         bar.addWidget(hint(
             "Patterns found in your ledger. Active items are replayed "
-            "forward by the forecast — uncheck “On” or set “Treat as” → "
+            "forward by the forecast — uncheck “On” or right-click → "
             "Ignore to exclude one that still occurs but shouldn't count. "
             "To remove a pattern that no longer happens at all (e.g. a "
             "former job's income), select its row and click Delete."), 1)
@@ -68,6 +63,11 @@ class RecurringPage(QWidget):
         hdr.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self.table.itemChanged.connect(self._item_changed)
+        self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self._context_menu)
+        vh = self.table.verticalHeader()
+        vh.setDefaultSectionSize(36)
+        vh.setMinimumSectionSize(36)
         lay.addWidget(self.table, 1)
 
     # ---------------------------------------------------------------
@@ -102,23 +102,11 @@ class RecurringPage(QWidget):
             conf = QTableWidgetItem(f"{it.confidence * 100:.0f}%")
 
             for col, item in enumerate((on, name, cad, amt, mo, nx, conf)):
+                if it.kind == "loan_payment":
+                    item.setToolTip("Linked to a loan — charged once by the "
+                                    "amortisation, not twice.")
                 self.table.setItem(r, col, item)
 
-            combo = QComboBox()
-            combo.addItem("Income", ("income", None))
-            combo.addItem("Bill", ("bill", None))
-            combo.addItem("Ignore", ("ignore", None))
-            for l in loans:
-                combo.addItem(f"Loan payment → {l.name}", ("loan_payment", l.id))
-            want = (it.kind, it.linked_account_id if it.kind == "loan_payment"
-                    else None)
-            idx = _find_by_value(combo, want)
-            if idx < 0 and it.kind == "loan_payment":
-                idx = _find_by_value(combo, ("bill", None))
-            combo.setCurrentIndex(max(idx, 0))
-            combo.currentIndexChanged.connect(
-                lambda _i, c=combo, iid=it.id: self._kind_changed(iid, c))
-            self.table.setCellWidget(r, 7, combo)
         self._loading = False
 
     def _item_changed(self, item: QTableWidgetItem) -> None:
@@ -128,11 +116,45 @@ class RecurringPage(QWidget):
         self.store.update_recurring(
             iid, active=item.checkState() == Qt.CheckState.Checked)
 
-    def _kind_changed(self, item_id: int, combo: QComboBox) -> None:
-        if self._loading:
+    def _context_menu(self, point) -> None:
+        """Right-click: the rare reclassifications, off the main surface."""
+        r = self.table.rowAt(point.y())
+        if r < 0 or self.table.item(r, 0) is None:
             return
-        kind, link = combo.currentData()
+        iid = self.table.item(r, 0).data(Qt.ItemDataRole.UserRole)
+        item = next((i for i in self.store.recurring() if i.id == iid), None)
+        if item is None:
+            return
+        menu = QMenu(self)
+        head = menu.addAction(f"“{item.name}” is…")
+        head.setEnabled(False)
+        menu.addSeparator()
+        for label, kind in (("Income", "income"), ("A bill", "bill"),
+                            ("Not real — ignore it", "ignore")):
+            act = QAction(label, self)
+            act.setCheckable(True)
+            act.setChecked(item.kind == kind)
+            act.triggered.connect(
+                lambda _c=False, i=iid, k=kind: self._set_kind(i, k, None))
+            menu.addAction(act)
+        loans = [a for a in self.store.accounts()
+                 if a.type == AccountType.LOAN]
+        if loans:
+            menu.addSeparator()
+            for l in loans:
+                act = QAction(f"A payment on {l.name}", self)
+                act.setCheckable(True)
+                act.setChecked(item.kind == "loan_payment"
+                               and item.linked_account_id == l.id)
+                act.triggered.connect(
+                    lambda _c=False, i=iid, lid=l.id:
+                    self._set_kind(i, "loan_payment", lid))
+                menu.addAction(act)
+        menu.exec(self.table.viewport().mapToGlobal(point))
+
+    def _set_kind(self, item_id: int, kind: str, link) -> None:
         self.store.update_recurring(item_id, kind=kind, linked_account_id=link)
+        self.refresh()
         self.main.status("Recurring item updated.")
 
     def _redetect(self) -> None:
@@ -153,8 +175,8 @@ class RecurringPage(QWidget):
             "Use this only for patterns that no longer occur at all — if "
             "matching transactions are still in your ledger, re-detecting "
             "will simply find it again. To exclude a pattern that still "
-            "happens but shouldn't count in the forecast, uncheck “On” or "
-            "set “Treat as” → Ignore instead.")
+            "happens but shouldn't count in the forecast, uncheck “On”, or "
+            "right-click it and choose “Not real — ignore it”, instead.")
         if ok == QMessageBox.StandardButton.Yes:
             self.store.delete_recurring(item_id)
             self.refresh()

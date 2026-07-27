@@ -80,6 +80,19 @@ def new_plot(date_axis: bool = True, money_left: bool = True,
 MIN_SPAN_DAYS = 21.0        # furthest you can zoom *in* on a date axis
 _PAD_Y = 0.08               # headroom above and below the data
 _PAD_X = 0.01
+DAY = 86400.0
+
+# Breathing room past the newest point. As a plain 1% of the span this was a
+# day and a half on a four-month chart and eleven days on a three-year one —
+# exactly backwards, since the short chart is the one being read closely. A
+# floor in days keeps the last marker off the axis whatever the span.
+_PAD_RIGHT_DAYS = 12.0
+
+# How much of a long history a chart opens on. The bounds still cover every
+# point — this only decides where the view starts. Recent months are what a
+# balance chart is actually consulted for; three years compressed into one
+# screen turns the part you care about into a few pixels at the right edge.
+HISTORY_INITIAL_DAYS = 365.0
 
 
 def _finite(arrays) -> np.ndarray:
@@ -94,20 +107,8 @@ def _finite(arrays) -> np.ndarray:
     return np.concatenate(vals) if vals else np.array([], dtype=float)
 
 
-def lock_view(plot: pg.PlotWidget, x_min: float, x_max: float, y_series,
-              include_y=(), pad_y: float = _PAD_Y,
-              min_span_days: float = MIN_SPAN_DAYS) -> None:
-    """Fix a date chart's pan/zoom envelope to its own data, and show it all.
-
-    ``y_series`` are the plotted arrays; ``include_y`` are reference values
-    (the floors) that should be visible *if they are anywhere near the data*.
-    A $0 line a full chart-height below a $500k projection tells you nothing
-    and costs every pixel of detail to display, so a reference further than one
-    data-span away is left out of the bounds rather than dragged into them.
-    """
-    data = _finite(y_series)
-    if data.size == 0:
-        return
+def _y_bounds(data: np.ndarray, include_y, pad_y: float) -> tuple[float, float]:
+    """Padded low/high for a set of values, pulling in nearby reference lines."""
     lo, hi = float(data.min()), float(data.max())
     span = max(hi - lo, 1.0)
     for v in include_y:
@@ -116,24 +117,93 @@ def lock_view(plot: pg.PlotWidget, x_min: float, x_max: float, y_series,
         if lo - span <= v <= hi + span:
             lo, hi = min(lo, float(v)), max(hi, float(v))
     span = max(hi - lo, 1.0)
-    lo -= span * pad_y
-    hi += span * pad_y
+    return lo - span * pad_y, hi + span * pad_y
+
+
+def _tail(y_series, x_data, frac: float) -> np.ndarray:
+    """The plotted values falling inside the trailing ``frac`` of the x-range.
+
+    With ``x_data`` the slice is exact. Without it the series are assumed to be
+    evenly sampled across the span — true of every daily history in the app —
+    and the last ``frac`` of each array is taken instead.
+    """
+    if x_data is not None:
+        x = np.asarray(x_data, dtype=float).ravel()
+        if x.size:
+            cut = float(x.max()) - frac * (float(x.max()) - float(x.min()))
+            keep = x >= cut
+            if keep.any():
+                sel = [np.asarray(a, dtype=float).ravel()[keep]
+                       for a in y_series
+                       if a is not None
+                       and np.asarray(a).ravel().size == x.size]
+                if sel:
+                    return _finite(sel)
+    sliced = []
+    for a in y_series:
+        if a is None:
+            continue
+        arr = np.asarray(a, dtype=float).ravel()
+        if arr.size:
+            sliced.append(arr[-max(2, int(round(arr.size * frac))):])
+    return _finite(sliced)
+
+
+def lock_view(plot: pg.PlotWidget, x_min: float, x_max: float, y_series,
+              include_y=(), pad_y: float = _PAD_Y,
+              min_span_days: float = MIN_SPAN_DAYS,
+              initial_days: float | None = None, x_data=None,
+              zoom_y: bool = True) -> None:
+    """Fix a date chart's pan/zoom envelope to its own data, and show it.
+
+    ``y_series`` are the plotted arrays; ``include_y`` are reference values
+    (the floors) that should be visible *if they are anywhere near the data*.
+    A $0 line a full chart-height below a $500k projection tells you nothing
+    and costs every pixel of detail to display, so a reference further than one
+    data-span away is left out of the bounds rather than dragged into them.
+
+    ``initial_days`` opens the chart on that many trailing days instead of the
+    whole span — the *limits* are unchanged, so zooming out to the beginning
+    still works, it simply is not where you land. ``x_data`` lets the opening
+    y-range be computed from exactly the points in that window; ``zoom_y=False``
+    keeps the full vertical range instead, which is what a bar chart wants —
+    scaling to the visible bars would clip the taller ones the moment you
+    panned back to them.
+    """
+    data = _finite(y_series)
+    if data.size == 0:
+        return
+    lo, hi = _y_bounds(data, include_y, pad_y)
 
     x_lo, x_max = float(x_min), float(x_max)
-    x_span = max(x_max - x_lo, 86400.0)
+    x_span = max(x_max - x_lo, DAY)
     x_lo -= x_span * _PAD_X
-    x_hi = x_max + x_span * _PAD_X
+    x_hi = x_max + max(x_span * _PAD_X, _PAD_RIGHT_DAYS * DAY)
     full_x, full_y = x_hi - x_lo, hi - lo
+
+    # Opening window: the trailing slice, scaled to its own detail.
+    view_x_lo, view_y_lo, view_y_hi = x_lo, lo, hi
+    if initial_days and initial_days * DAY < full_x:
+        view_x_lo = x_hi - initial_days * DAY
+        frac = min(1.0, (x_hi - view_x_lo) / full_x)
+        tail = _tail(y_series, x_data, frac) if zoom_y else np.array([])
+        if tail.size:
+            t_lo, t_hi = _y_bounds(tail, include_y, pad_y)
+            view_y_lo, view_y_hi = max(lo, t_lo), min(hi, t_hi)
+            if view_y_hi - view_y_lo < 1.0:      # a perfectly flat window
+                view_y_lo, view_y_hi = lo, hi
+    view_y = view_y_hi - view_y_lo
 
     vb = plot.getViewBox()
     vb.setLimits(
         xMin=x_lo, xMax=x_hi, yMin=lo, yMax=hi,
         # maxRange == the full extent: you can never pull back to empty space.
         maxXRange=full_x, maxYRange=full_y,
-        minXRange=min(min_span_days * 86400.0, full_x),
-        minYRange=min(full_y * 0.02, full_y),
+        minXRange=min(min_span_days * DAY, full_x, x_hi - view_x_lo),
+        minYRange=min(full_y * 0.02, full_y, view_y),
     )
-    vb.setRange(xRange=(x_lo, x_hi), yRange=(lo, hi), padding=0)
+    vb.setRange(xRange=(view_x_lo, x_hi), yRange=(view_y_lo, view_y_hi),
+                padding=0)
 
 
 def unlock_view(plot: pg.PlotWidget) -> None:

@@ -6,6 +6,43 @@ intended to hand to someone else. The running version is shown in the app
 header and under **Help → About**, so a downloaded copy always identifies
 itself.
 
+## 1.13.0 — typing a number, and owing money
+
+Four things that were harder to use than they needed to be.
+
+- **Amounts are typed the way they are said.** `1234.56` is $1,234.56 and
+  `1234` is $1,234 — the right-to-left card-terminal entry added in 1.4.0 is
+  gone. It really is how a till works, but it is disorienting when you cannot
+  see that it is happening, and it made correcting one digit of an existing
+  figure impossible without retyping the whole thing. What replaces it is
+  forgiving rather than clever: `$` and thousands separators pasted off a
+  statement are ignored, a half-typed `-` or `1.` stays editable instead of
+  being rejected as invalid, and the text is only re-read when you leave the
+  field, so nothing rewrites itself under the cursor. Clicking into a field
+  still selects what is there, so typing replaces rather than appends.
+- **A credit card and a loan are entered the same way.** Both ask for the
+  **amount owed** as a positive number; asking for one as −1,500 and the other
+  as +1,500 was a distinction with no meaning to the person typing. A card's
+  stored sign is still negative — internally it sits on the cash side of the
+  ledger, where a purchase has to reduce the balance — so the flip happens at
+  the dialog's edge and no existing file needs migrating. The Accounts table
+  column is now **Balance / owed** and shows a card's debt positive.
+- **The Dashboard charts open on the last twelve months.** The left bound that
+  stops the chart being lost by scrolling stays; what went is the whole span
+  being crammed onto one screen, which turned the months people actually
+  consult into a few pixels at the right edge. The pan/zoom *limits* are
+  unchanged — zoom out and the first day is still there — and the right edge
+  now clears the newest point by a fixed twelve days rather than 1% of the
+  span, which on a three-year chart was eleven days and on a four-month chart
+  was a day and a half, exactly backwards. The opening vertical range is scaled
+  to the visible window, except on the bar chart, where doing so would clip the
+  taller bars the moment you panned back to them.
+- **The Recurring page lost its "Treat as" column.** It was a permanent column
+  of combo boxes paying for a choice almost nobody made — the one people did
+  make, *stop counting this*, is the **On** checkbox two columns to its left.
+  Income vs bill, ignoring a pattern, and linking a payment to its loan moved
+  to right-click, and rows are taller now that nothing has to fit inside them.
+
 ## 1.12.0 — finding a transaction the bank posted twice
 
 **Same-day transactions were already handled correctly** and this confirms it

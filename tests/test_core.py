@@ -889,6 +889,50 @@ def main() -> None:
     check("unlocking clears the bounds",
           _plot.getViewBox().state["limits"]["xLimits"] == [None, None])
 
+    # A long history is bounded on the left so the chart cannot be lost, but
+    # opening on all of it squeezes the months people actually consult into a
+    # few pixels at the right edge. The view starts on the recent year; the
+    # limits still reach the first point, so zooming out gets you there.
+    _day = 86400.0
+    _n = 365 * 3
+    _x = np.arange(_n, dtype=float) * _day
+    _long = np.concatenate([np.linspace(0.0, 8600.0, _n - 365),
+                            np.linspace(8600.0, 8800.0, 365)])
+    _charts.lock_view(_plot, float(_x[0]), float(_x[-1]), [_long],
+                      include_y=[0.0],
+                      initial_days=_charts.HISTORY_INITIAL_DAYS, x_data=_x)
+    _vb = _plot.getViewBox()
+    (_vx0, _vx1), (_vy0, _vy1) = _vb.viewRange()
+    _lim = _vb.state["limits"]
+    check("three years of history opens on its last twelve months",
+          350.0 <= (_vx1 - _vx0) / _day <= 400.0)
+    check("the newest point is not jammed against the right edge",
+          _vx1 - float(_x[-1]) >= 10 * _day)
+    check("but the bounds still reach the very first point",
+          _lim["xLimits"][0] <= float(_x[0]))
+    check("and zoom-out still spans the whole ledger",
+          _lim["xRange"][1] >= (_lim["xLimits"][1] - _lim["xLimits"][0]) - 1.0)
+    check("the opening y-range is scaled to that window, not the whole run",
+          (_vy1 - _vy0) < 0.5 * (_lim["yLimits"][1] - _lim["yLimits"][0]))
+    check("with every recent point inside it",
+          _vy0 <= _long[-365:].min() and _vy1 >= _long[-365:].max())
+    check("while the y bounds still cover the oldest values",
+          _lim["yLimits"][0] <= _long.min())
+    _charts.lock_view(_plot, float(_x[0]), float(_x[-1]), [_long],
+                      initial_days=_charts.HISTORY_INITIAL_DAYS, x_data=_x,
+                      zoom_y=False)
+    _, (_by0, _by1) = _plot.getViewBox().viewRange()
+    check("bar charts keep the full height so panning back clips nothing",
+          _by0 <= _long.min() and _by1 >= _long.max())
+    _short_x = np.arange(120, dtype=float) * _day
+    _charts.lock_view(_plot, float(_short_x[0]), float(_short_x[-1]),
+                      [np.linspace(100.0, 900.0, 120)],
+                      initial_days=_charts.HISTORY_INITIAL_DAYS, x_data=_short_x)
+    (_sx0, _sx1), _ = _plot.getViewBox().viewRange()
+    check("a history shorter than the window is shown whole",
+          _sx0 <= float(_short_x[0]) and _sx1 >= float(_short_x[-1]))
+    _charts.unlock_view(_plot)
+
     print("forecast leads with the projection")
     from finfore.ui.forecast_page import history_window
     for _h in (183, 365, 1095, 3650):
@@ -997,60 +1041,137 @@ def main() -> None:
           next(t for t in ts3 if t.key == f"goal:{pc_id}").complete)
     gstore.close()
 
-    print("teller-style amount entry")
+    # Amount entry types the way the number is said: "1234.56" is $1,234.56.
+    # The previous right-to-left teller mode, where "1234" meant $12.34, was
+    # removed — it is the convention at a bank terminal but nowhere a person
+    # types a number themselves, and it made every field feel broken until you
+    # had guessed the rule.
+    print("amount entry")
     from finfore.ui.widgets import MoneySpinBox as _MSB
-    from PyQt6.QtGui import QKeyEvent as _QKE
-    from PyQt6.QtCore import Qt as _Qt
+    from PyQt6.QtTest import QTest as _QTest
 
-    def _type_raw(spin, digits: str) -> float:
-        """Send keystrokes without clearing the selection first."""
-        for ch in digits:
-            key = (_Qt.Key.Key_0 + int(ch) if ch.isdigit()
-                   else _Qt.Key.Key_Period)
-            spin.keyPressEvent(_QKE(_QKE.Type.KeyPress, key,
-                                    _Qt.KeyboardModifier.NoModifier, ch))
+    def _type(spin, text: str) -> float:
+        """Focus the field and type, exactly as a person would."""
+        spin.setFocus()
+        spin.selectAll()          # what clicking into the field does for real
+        _QTest.keyClicks(spin, text)
+        spin.interpretText()
         return spin.value()
 
-    def _type(spin, digits: str) -> float:
-        spin.selectAll()          # what focusing the field does for real
-        return _type_raw(spin, digits)
-
-    _sb = _MSB(cents_entry=True)
+    _sb = _MSB()
     _sb.setRange(-1e9, 1e9)
     _sb.setDecimals(2)
-    check("1234 fills in from the right as $12.34",
-          abs(_type(_sb, "1234") - 12.34) < 1e-9)
-    check("123456 reads as $1,234.56", abs(_type(_sb, "123456") - 1234.56) < 1e-9)
-    check("a single digit is a single cent", abs(_type(_sb, "7") - 0.07) < 1e-9)
-    check("typing the decimal point out lands in the same place",
-          abs(_type(_sb, "1234.56") - 1234.56) < 1e-9)
-    check("the mis-entry case: 7152000 is $71,520.00",
-          abs(_type(_sb, "7152000") - 71_520.0) < 1e-9)
-    _type(_sb, "1234")
-    _sb.keyPressEvent(_QKE(_QKE.Type.KeyPress, _Qt.Key.Key_Backspace,
-                           _Qt.KeyboardModifier.NoModifier, ""))
-    check("backspace shifts one digit back out", abs(_sb.value() - 1.23) < 1e-9)
+    _sb.setGroupSeparatorShown(True)
+    _sb.setPrefix("$ ")
+    check("1234 is one thousand two hundred and thirty-four",
+          abs(_type(_sb, "1234") - 1234.0) < 1e-9)
+    check("1234.56 is read as written", abs(_type(_sb, "1234.56") - 1234.56) < 1e-9)
+    check("a leading dollar sign is forgiven",
+          abs(_type(_sb, "$1234.56") - 1234.56) < 1e-9)
+    check("so are thousands separators pasted in from a statement",
+          abs(_type(_sb, "1,234.56") - 1234.56) < 1e-9)
+    check("a bare .5 is fifty cents", abs(_type(_sb, ".5") - 0.5) < 1e-9)
+    check("a negative amount survives the sign",
+          abs(_type(_sb, "-250.75") + 250.75) < 1e-9)
+    check("a single digit is a single dollar", abs(_type(_sb, "7") - 7.0) < 1e-9)
 
-    # The regression that shipped broken: a field already holding a value must
-    # be *replaced* by what is typed next, not appended to. It passed review
-    # because a field sitting at 0.00 behaves identically either way.
+    # The mis-entry that started all of this: a field already holding a value
+    # must be *replaced* by what is typed next, never appended to.
     _sb.setValue(71_520.00)
     check("typing into a populated field replaces it",
-          abs(_type(_sb, "500") - 5.00) < 1e-9)
-    _sb.setValue(71_520.00)
-    _sb.lineEdit().selectAll()      # drag-select, which includes the "$ " prefix
-    check("a selection including the prefix also counts as a fresh start",
-          _sb._fresh())
-    _sb.setValue(71_520.00)
-    _sb._pending_select = False
-    _sb.lineEdit().deselect()
-    check("with nothing selected, digits append rather than replace",
-          abs(_type_raw(_sb, "5") - 715_200.05) < 1e-6)
-    _plain = _MSB(cents_entry=False)
-    _plain.setRange(0, 100)
-    _plain.setDecimals(4)
-    check("cents entry is opt-in, so rate fields keep ordinary typing",
-          not _plain._cents_entry)
+          abs(_type(_sb, "500") - 500.0) < 1e-9)
+    _sb.setValue(1234.56)
+    check("and retyping the same value is a no-op, not a doubling",
+          abs(_type(_sb, "1234.56") - 1234.56) < 1e-9)
+
+    # Half-typed text has to stay editable rather than being snapped back.
+    from PyQt6.QtGui import QValidator as _QV
+    for _partial in ("", "-", ".", "$ -"):
+        check(f"“{_partial}” is treated as unfinished, not invalid",
+              _sb.validate(_partial, len(_partial))[0]
+              == _QV.State.Intermediate)
+    check("letters are rejected outright",
+          _sb.validate("$ 12x", 5)[0] == _QV.State.Invalid)
+    check("an abandoned entry falls back to zero rather than sticking",
+          _sb.fixup("$ -") == "0")
+
+    _rate = _MSB()
+    _rate.setRange(0, 100)
+    _rate.setDecimals(4)
+    _rate.setSuffix(" %")
+    check("a rate field keeps four decimals off the statement",
+          abs(_type(_rate, "6.4900") - 6.49) < 1e-9)
+
+    # A card and a loan are both money owed, so both are entered as a positive
+    # amount owed. The card's stored sign is still negative — internally it
+    # sits on the cash side of the ledger, where a purchase has to reduce the
+    # balance — so the flip happens at the dialog's edge, not in the database.
+    print("a card and a loan are entered the same way")
+    from finfore.ui.account_dialog import AccountDialog as _AD, _TYPES as _TYPES_ORDER
+    for _t, _stored in ((AccountType.CREDIT, -1500.0),
+                        (AccountType.LOAN, 1500.0)):
+        _dlg = _AD()
+        _dlg.name.setText("Debt")
+        _dlg.type.setCurrentIndex(_TYPES_ORDER.index(_t))
+        _dlg.balance.setValue(1500.0)
+        _a = _dlg.get_account()
+        check(f"{_t.label}: 1500 typed in is stored as {_stored:.0f}",
+              abs(_a.balance - _stored) < 1e-9)
+        check(f"{_t.label}: and counts against net worth either way",
+              abs(_a.signed_balance + 1500.0) < 1e-9)
+        check(f"{_t.label}: the field is labelled as an amount owed",
+              "owed" in _dlg.balance_label.text().lower())
+        _a.id = 1
+        _back = _AD(account=_a)
+        check(f"{_t.label}: reopening shows the same positive figure",
+              abs(_back.balance.value() - 1500.0) < 1e-9)
+        check(f"{_t.label}: and saving unchanged round-trips",
+              abs(_back.get_account().balance - _stored) < 1e-9)
+    _chq = _AD()
+    _chq.type.setCurrentIndex(_TYPES_ORDER.index(AccountType.CHECKING))
+    _chq.name.setText("Chq")
+    _chq.balance.setValue(1500.0)
+    check("a cash account is still a plain balance",
+          _chq.balance_label.text() == "Balance"
+          and abs(_chq.get_account().balance - 1500.0) < 1e-9)
+
+    # "Treat as" was a permanent column of combo boxes paying for a choice
+    # almost nobody made: the one people did make (stop counting this) is the
+    # On checkbox two columns to its left. Reclassifying moved to right-click.
+    print("the recurring table is a table again")
+    from finfore.ui.recurring import RecurringPage as _RP
+    from finfore.models import RecurringItem as _RI
+
+    class _StubMain:
+        def status(self, *_a, **_k):
+            pass
+
+    rstore = Store(tmp / "recurring_ui.db")
+    rstore.add_account(Account(name="Chq", type=AccountType.CHECKING,
+                               balance=500.0, balance_date=_date.today()))
+    rstore.merge_recurring([_RI(key="netflix|-", name="NETFLIX", amount=-15.99,
+                                cadence="monthly", kind="bill",
+                                last_date=_date.today(), confidence=0.9,
+                                n_seen=6)])
+    rid = rstore.recurring()[0].id
+    _page = _RP(rstore, _StubMain())
+    _page.refresh()
+    check("no 'Treat as' column is left", "Treat as" not in _RP.COLS)
+    check("the columns are the facts about the pattern",
+          _RP.COLS == ["On", "Name", "Cadence", "Amount", "≈ /month",
+                       "Next", "Conf."])
+    check("and the table holds no embedded widgets",
+          all(_page.table.cellWidget(0, c) is None
+              for c in range(_page.table.columnCount())))
+    check("rows are tall enough to read",
+          _page.table.verticalHeader().defaultSectionSize() >= 34)
+    _page._set_kind(rid, "ignore", None)
+    check("right-click reclassification still reaches the store",
+          next(i for i in rstore.recurring() if i.id == rid).kind == "ignore")
+    _page._set_kind(rid, "income", None)
+    check("and can be changed back",
+          next(i for i in rstore.recurring() if i.id == rid).kind == "income")
+    rstore.close()
 
     print("costing a deadline in things to give up")
     dstore = Store(tmp / "deadline.db")

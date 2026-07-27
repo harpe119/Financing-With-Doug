@@ -190,11 +190,14 @@ class DashboardPage(QWidget):
                 reg.add("debt", charts.line(p, x, -h["debt"].values, theme.RED,
                                             1.3, "Debt"))
             reg.apply()
+            # Opens on the last twelve months — where the detail people came
+            # for lives — and zooms out to the whole ledger from there.
             charts.lock_view(
                 p, float(x[0]), float(x[-1]),
                 [h["networth"].values, h["cash"].values,
                  h["investments"].values, -h["debt"].values],
-                include_y=[0.0, 1000.0, ef])
+                include_y=[0.0, 1000.0, ef],
+                initial_days=charts.HISTORY_INITIAL_DAYS, x_data=x)
 
         # monthly cash flow — zero is the break-even line between the bars
         p = self.plot_flow
@@ -212,7 +215,9 @@ class DashboardPage(QWidget):
             pad = 86400.0 * 16
             charts.lock_view(p, float(mx[0]) - pad, float(mx[-1]) + pad,
                              [mc["income"].values, mc["spending"].values],
-                             include_y=[0.0])
+                             include_y=[0.0],
+                             initial_days=charts.HISTORY_INITIAL_DAYS + 30,
+                             x_data=mx, zoom_y=False)
 
         # categories
         p = self.plot_cat
