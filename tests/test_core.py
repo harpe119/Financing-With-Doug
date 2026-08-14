@@ -1173,6 +1173,30 @@ def main() -> None:
     import os as _os
     _os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     _app = QApplication.instance() or QApplication([])
+    # Point the app's preferences at a scratch ini for the rest of the run. The
+    # Simple/Everything choice and the last update-check date are stored under
+    # ("Doug", "Financing with Doug"), which on a developer's machine is their
+    # own registry — so a test asserting the default asserted whatever they last
+    # clicked, and the suite wrote its values back over theirs. Both directions
+    # are bugs, and the first one bites hardest: `build.ps1` refuses to build on
+    # a failing test, so flipping a toggle in the UI could block a release.
+    #
+    # Everything reaches its settings through `prefs.app_settings`, so replacing
+    # that one function covers the app. Note QSettings' own redirection hooks do
+    # not work here: setDefaultFormat applies only to the constructor that takes
+    # no organisation, and every call site names one.
+    from PyQt6.QtCore import QSettings as _QSettings
+    from finfore.ui import prefs as _prefs
+    _settings_ini = str(Path(tempfile.mkdtemp()) / "prefs.ini")
+    _prefs.app_settings = lambda: _QSettings(_settings_ini,
+                                             _QSettings.Format.IniFormat)
+    # Asserted rather than assumed: if this ever stops taking effect the symptom
+    # is a suite that passes or fails according to what someone last clicked,
+    # which is the hardest kind of failure to attribute.
+    # Qt hands back the path with forward slashes, so compare as paths.
+    check("app settings are isolated from the developer's own",
+          Path(_prefs.app_settings().fileName()) == Path(_settings_ini)
+          and _prefs.app_settings().value("simple_mode", True, type=bool))
     _plot = _pg.PlotWidget()
     _ys = np.array([100.0, 250.0, 175.0])
     _charts.lock_view(_plot, 0.0, 100.0 * 86400.0, [_ys])

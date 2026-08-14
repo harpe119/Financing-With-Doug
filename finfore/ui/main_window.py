@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PyQt6.QtCore import QSettings, Qt
+from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QAction, QKeySequence
 from PyQt6.QtWidgets import (QApplication, QHBoxLayout, QLabel, QListWidget,
                              QMainWindow, QMessageBox, QPushButton, QSizePolicy,
@@ -12,7 +12,7 @@ from PyQt6.QtWidgets import (QApplication, QHBoxLayout, QLabel, QListWidget,
 from ..history import headline_stats
 from ..store import Store
 from ..util import fmt_money
-from . import theme
+from . import prefs, theme
 from .accounts import AccountsPage
 from .dashboard import DashboardPage
 from .forecast_page import ForecastPage
@@ -176,7 +176,7 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
         self.nav.currentRowChanged.connect(self._on_nav)
 
-        self._settings = QSettings("Doug", "Financing with Doug")
+        self._settings = prefs.app_settings()
         self.simple_mode = self._settings.value("simple_mode", True, type=bool)
         self._apply_mode(refresh=False)
         # Recording starts here rather than in Store.__init__ so that the demo

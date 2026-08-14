@@ -19,13 +19,13 @@ import threading
 from datetime import date
 from pathlib import Path
 
-from PyQt6.QtCore import QObject, QSettings, Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import QObject, Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (QApplication, QDialog, QHBoxLayout, QLabel,
                              QMessageBox, QProgressDialog, QPushButton,
                              QTextBrowser, QVBoxLayout)
 
 from .. import __version__, update
-from . import theme
+from . import prefs, theme
 
 _LAST_CHECK = "update/last_check"
 _ENABLED = "update/check_on_start"
@@ -216,8 +216,7 @@ def check_now(parent) -> None:
 
     def finished(rel, err) -> None:
         parent.unsetCursor()
-        QSettings("Doug", "Financing with Doug").setValue(
-            _LAST_CHECK, date.today().isoformat())
+        prefs.app_settings().setValue(_LAST_CHECK, date.today().isoformat())
         if err:
             QMessageBox.warning(parent, "Couldn't check for updates", err)
         elif rel is None:
@@ -240,7 +239,7 @@ def check_quietly(parent) -> None:
     """
     if not (update.configured() and frozen()):
         return
-    s = QSettings("Doug", "Financing with Doug")
+    s = prefs.app_settings()
     if not s.value(_ENABLED, True, type=bool):
         return
     if str(s.value(_LAST_CHECK, "")) == date.today().isoformat():

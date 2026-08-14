@@ -24,6 +24,20 @@ itself.
   something Doug has an opinion about. Also fixed: two facts had been written
   without the comma between them, so Python concatenated the pair and one of
   them could never appear.
+- **The test suite no longer reads the developer's own preferences.** Settings
+  live under `("Doug", "Financing with Doug")` — on a dev machine, that is the
+  real registry key the real app writes to. So the test asserting that Simple
+  view is the default was asserting whatever had last been clicked in the UI,
+  and the suite wrote its own values back over it. Since `build.ps1` refuses to
+  build on a failing test, using the header toggle could block a release. Every
+  call site now goes through `finfore.ui.prefs.app_settings()`, which the suite
+  redirects to a scratch ini — and then checks that the redirect took, because
+  a settings leak shows up as a test that passes or fails depending on what
+  someone clicked yesterday. QSettings' own hooks are no use here:
+  `setDefaultFormat` applies only to the constructor that names no
+  organisation, and every call site names one. One function also means the
+  org/app pair is written once rather than three times, where a typo would
+  quietly open a second, empty store of settings.
 - **The README describes the program people are actually handed.** It opened on
   `pip install -r requirements.txt`, three releases after the installer landed,
   and said nothing about the app updating itself. Installing now comes first

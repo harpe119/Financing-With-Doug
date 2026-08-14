@@ -651,6 +651,7 @@ finfore/
   update.py               "is there something newer?" — stdlib only, no Qt
   demo.py                 one-click demo loader
   ui/                     PyQt6 theme, charts, dialogs, eight pages
+  ui/prefs.py             the one door to QSettings (and the test suite's seam)
   ui/video.py             bundled explainer videos, with a system-player fallback
   ui/guide.py             renders docs/getting-started.md in-app
 docs/getting-started.md   the user-facing walkthrough (Help -> Getting started)
