@@ -115,8 +115,33 @@ def cash_history(tx: pd.DataFrame, account: Account,
 
 
 def snapshot_history(store: Store, account: Account,
-                     index: pd.DatetimeIndex) -> pd.Series:
-    """Daily balance series via snapshot interpolation (loans/investments)."""
+                     index: pd.DatetimeIndex,
+                     before: str | None = None) -> pd.Series:
+    """Daily balance series via snapshot interpolation (loans/investments).
+
+    Before the earliest dated balance the account has, the series reads **zero**
+    by default, because that is what was true: a car loan taken out in March
+    2025 was not a debt in 2023, and a brokerage account opened last year held
+    nothing the year before. Back-filling the first known balance instead —
+    which is what this did — drew a $28,000 loan stretching back across the
+    whole chart and subtracted it from net worth for years in which it did not
+    exist. The chart spans the union of every account's history, so any account
+    whose records start later than the oldest one is affected, which in practice
+    is most of them.
+
+    Zero is only assumed where there is something to be earlier *than*. An
+    account with no snapshots at all has no first recorded day: its balance is
+    held flat across the chart, exactly as before. Doing otherwise would show a
+    manually entered loan at zero for three years and then have it appear at
+    full size on the day it was typed in — a debt materialising out of nowhere,
+    which is a worse lie than the one being fixed.
+
+    ``before`` overrides the account's saved preference: ``"zero"`` or
+    ``"flat"``. It exists because the default is an assumption, not a
+    measurement — a mortgage carried over from another lender, or a brokerage
+    account transferred in with its holdings, genuinely did have a balance
+    before its first row here, and the user is the only one who knows.
+    """
     snaps = store.snapshots(account.id)
     pts = {pd.Timestamp(account.balance_date): float(account.balance)}
     for _, r in snaps.iterrows():
@@ -124,7 +149,17 @@ def snapshot_history(store: Store, account: Account,
     s = pd.Series(pts).sort_index()
     s = s[~s.index.duplicated(keep="last")]
     full = s.reindex(index.union(s.index)).interpolate(method="time")
-    full = full.ffill().bfill()
+    full = full.ffill()
+
+    if before is None:
+        before = store.prehistory_mode(account.id)
+    # len(snaps) rather than len(s): `s` always contains the account's own
+    # current balance, so it is never empty and would make every account look
+    # as though it had a first recorded day.
+    if before == "zero" and len(snaps):
+        full = full.where(full.index >= s.index[0], 0.0)
+    else:
+        full = full.bfill()
     return full.reindex(index)
 
 
@@ -184,6 +219,47 @@ def reconcile(store: Store, tolerance: float = 25.0) -> list[LedgerIssue]:
     partial export missing withdrawals, or a stale balance / as-of date.
     """
     return [i for i in reconcile_all(store) if i.opening < -tolerance]
+
+
+def _ack_key(issue: LedgerIssue) -> str:
+    return issue.account
+
+
+def _ack_value(issue: LedgerIssue) -> float:
+    """What was acknowledged, to the dollar.
+
+    The opening balance rather than a plain "seen" flag, so acknowledgement is
+    of *this* discrepancy and not of the account. Import another partial export
+    and the number moves; the warning comes back, which is the whole point —
+    "I know about that one" must never quietly become "never tell me about this
+    account again".
+    """
+    return round(issue.opening)
+
+
+def unacknowledged(store: Store, tolerance: float = 25.0) -> list[LedgerIssue]:
+    """Ledger problems the user has not already said they know about.
+
+    What the dashboard nags with. `reconcile` remains the unfiltered truth and
+    is what the Accounts → Check my balances table reports, because a dedicated
+    page someone opened on purpose should never hide a finding — dismissing a
+    banner is a statement about the banner, not about the arithmetic.
+    """
+    ack = store.ledger_acknowledgements()
+    out = []
+    for i in reconcile(store, tolerance):
+        seen = ack.get(_ack_key(i))
+        if seen is not None and abs(float(seen) - _ack_value(i)) < 1.0:
+            continue
+        out.append(i)
+    return out
+
+
+def acknowledge(store: Store, issues: list[LedgerIssue]) -> None:
+    """Record that the user has read these, at the numbers they now hold."""
+    ack = store.ledger_acknowledgements()
+    ack.update({_ack_key(i): _ack_value(i) for i in issues})
+    store.set_ledger_acknowledgements(ack)
 
 
 def reconcile_all(store: Store) -> list[LedgerIssue]:

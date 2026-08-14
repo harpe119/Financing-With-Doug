@@ -315,6 +315,27 @@ class SnapshotManagerDialog(QDialog):
             "load a balance-over-time export from your lender or brokerage.")
         lay.addWidget(self.empty_note)
 
+        # Only for loans and investments: a cash account's pre-history is
+        # governed by its ledger and its anchor, not by snapshots.
+        self.pre_row = None
+        if not cashlike:
+            self.pre_row = QWidget()
+            prl = QHBoxLayout(self.pre_row)
+            prl.setContentsMargins(0, 0, 0, 0)
+            prl.addWidget(QLabel("Before the first snapshot, assume"))
+            self.prehistory = QComboBox()
+            self.prehistory.addItem("the balance was $0", "zero")
+            self.prehistory.addItem("the first known balance, held flat", "flat")
+            self.prehistory.setToolTip(
+                "A loan taken out in 2025 was not a debt in 2023, so the "
+                "default is that there was nothing there before the records "
+                "start. Change it for an account that arrived already carrying "
+                "a balance — a mortgage moved from another lender, or a "
+                "brokerage account transferred in with its holdings.")
+            self.prehistory.currentIndexChanged.connect(self._save_prehistory)
+            prl.addWidget(self.prehistory, 1)
+            lay.addWidget(self.pre_row)
+
         self.table = QTableWidget(0, 2)
         self.table.setHorizontalHeaderLabels(["Date", "Balance"])
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
@@ -378,6 +399,20 @@ class SnapshotManagerDialog(QDialog):
             f"{len(df)} snapshot{'s' if len(df) != 1 else ''} · current balance "
             f"{fmt_money(self.account.balance)} as of "
             f"{self.account.balance_date.isoformat()}")
+        if self.pre_row is not None:
+            # With no snapshots there is no "before the first one" to describe,
+            # and the balance is held flat regardless — offering the choice
+            # there would be offering a control that does nothing.
+            self.pre_row.setVisible(not df.empty)
+            mode = self.store.prehistory_mode(self.account.id)
+            self.prehistory.blockSignals(True)
+            self.prehistory.setCurrentIndex(
+                max(0, self.prehistory.findData(mode)))
+            self.prehistory.blockSignals(False)
+
+    def _save_prehistory(self) -> None:
+        self.store.set_prehistory_mode(self.account.id,
+                                       self.prehistory.currentData())
 
     def _selected_id(self) -> int | None:
         r = self.table.currentRow()
@@ -482,6 +517,15 @@ class BalanceCheckDialog(QDialog):
         self.undo_btn.setToolTip(
             "Forget every duplicate removal, so the next import brings them back")
         self.undo_btn.clicked.connect(self._unsuppress)
+        # Dismissing the dashboard warning has to be reversible from somewhere,
+        # or "Got it" is a one-way door on the only thing telling you the
+        # history is wrong.
+        self.unack_btn = bb.addButton("Show dashboard warning again",
+                                      QDialogButtonBox.ButtonRole.ResetRole)
+        self.unack_btn.setToolTip(
+            "Undo a “Got it” — bring the dashboard warning back for every "
+            "account it was dismissed on")
+        self.unack_btn.clicked.connect(self._unacknowledge)
         bb.addButton(QDialogButtonBox.StandardButton.Close)
         bb.rejected.connect(self.reject)
         lay.addWidget(bb)
@@ -490,6 +534,20 @@ class BalanceCheckDialog(QDialog):
     def _find_duplicates(self) -> None:
         DuplicateDialog(self.store, self).exec()
         self._reload()
+
+    def _unacknowledge(self) -> None:
+        n = len(self.store.ledger_acknowledgements())
+        if not n:
+            QMessageBox.information(
+                self, "Nothing dismissed",
+                "The dashboard warning hasn't been dismissed for any account.")
+            return
+        self.store.set_ledger_acknowledgements({})
+        self._reload()
+        QMessageBox.information(
+            self, "Warning restored",
+            f"The dashboard will warn about {n} account"
+            f"{'s' if n != 1 else ''} again.")
 
     def _unsuppress(self) -> None:
         n = len(self.store.suppressed_hashes())
@@ -532,9 +590,17 @@ class BalanceCheckDialog(QDialog):
             if not i.ok:
                 bad.append(i)
         n_sup = len(self.store.suppressed_hashes())
-        self.removed_note.setText(
-            f"{n_sup} row{'s' if n_sup != 1 else ''} previously removed as "
-            f"duplicates and held out of future imports." if n_sup else "")
+        n_ack = len(self.store.ledger_acknowledgements())
+        notes = []
+        if n_sup:
+            notes.append(f"{n_sup} row{'s' if n_sup != 1 else ''} previously "
+                         f"removed as duplicates and held out of future "
+                         f"imports.")
+        if n_ack:
+            notes.append(f"The dashboard warning is dismissed for {n_ack} "
+                         f"account{'s' if n_ack != 1 else ''}; this table "
+                         f"always shows every one regardless.")
+        self.removed_note.setText(" ".join(notes))
         if not rows:
             self.note.setText("No cash accounts with imported transactions yet.")
         elif not bad:

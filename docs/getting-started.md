@@ -399,6 +399,20 @@ not everything since the beginning of time. And the history is kept in memory
 while the program is open, so **closing the app clears it** — if you have just
 deleted something you want back, undo it before you quit.
 
+### "This history doesn't add up"
+
+If an account's imported rows and the balance you entered cannot both be true,
+the dashboard says so rather than drawing a confident wrong line. Usually the
+export is missing withdrawals, doesn't reach back far enough, or contains the
+same transaction twice.
+
+Once you have read it, press **Got it** and it goes away. It comes back if the
+figures change — importing another partial export, for instance — because
+dismissing it says "I know about this discrepancy", not "stop checking this
+account". **Accounts → Check my balances** always shows every account whether
+or not you dismissed the banner, and has a **Show dashboard warning again**
+button if you want the reminder back.
+
 ### Simple view
 
 The header carries a **Simple view / Everything** switch, and it starts on

@@ -2770,6 +2770,90 @@ def main() -> None:
     check("and publishes the checksum the updater looks for",
           "SHA256SUMS.txt" in _ps1 and "SHA256" in _ps1)
 
+    print("what a loan or investment was worth before its records start")
+    from finfore.history import snapshot_history as _snaphist
+    _pt = Path(tempfile.mkdtemp())
+    _p = Store(_pt / "pre.db")
+    _ptoday = _date.today()
+    _p.add_account(Account(name="Car loan", type=AccountType.LOAN,
+                           balance=-18_000.0, balance_date=_ptoday))
+    _pidx = pd.date_range(_ptoday - timedelta(days=1000), _ptoday, freq="D")
+    _bare = _snaphist(_p, _p.account(1), _pidx)
+    check("an account with no dated balances is still held flat",
+          abs(_bare.iloc[0] - (-18_000.0)) < 0.01)
+
+    for _k in range(5):
+        _p.add_snapshot(1, _ptoday - timedelta(days=200 - 40 * _k),
+                        -(20_000.0 - 500.0 * _k))
+    _ser = _snaphist(_p, _p.account(1), _pidx)
+    check("zero is the default before the first recorded day",
+          _p.prehistory_mode(1) == "zero")
+    check("a loan is not a debt before it was taken out",
+          _ser.loc[pd.Timestamp(_ptoday - timedelta(days=900))] == 0.0
+          and _ser.loc[pd.Timestamp(_ptoday - timedelta(days=201))] == 0.0)
+    check("and is its recorded size from the first day onward",
+          abs(_ser.loc[pd.Timestamp(_ptoday - timedelta(days=199))]
+              + 19_987.5) < 1.0)
+    # networth_history spans the transaction ledger, so the chart only reaches
+    # back past the loan's records if some other account's does.
+    _p.add_account(Account(name="Chk", type=AccountType.CHECKING,
+                           balance=2_000.0, balance_date=_ptoday))
+    _p.add_transactions(pd.DataFrame([
+        {"account_id": 2,
+         "date": pd.Timestamp(_ptoday - timedelta(days=1000 - 30 * i)),
+         "description": "PAY", "amount": 100.0, "category": "Income",
+         "import_hash": f"p{i}"} for i in range(33)]))
+    _nw = networth_history(_p)
+    check("net worth is not dragged down by a debt that did not exist",
+          abs(_nw["debt"].iloc[100]) < 0.01)
+    check("and carries it once the loan exists",
+          abs(_nw["debt"].iloc[-1] - 18_000.0) < 1.0)
+
+    _p.set_prehistory_mode(1, "flat")
+    _flat = _snaphist(_p, _p.account(1), _pidx)
+    check("an account carried in with a balance can say so",
+          abs(_flat.iloc[0] - (-20_000.0)) < 0.01)
+    try:
+        _p.set_prehistory_mode(1, "sideways")
+        _refused = False
+    except ValueError:
+        _refused = True
+    check("an unknown mode is refused rather than silently stored", _refused)
+    _p.close()
+
+    print("dismissing the ledger warning")
+    from finfore.history import (acknowledge as _ack,
+                                 unacknowledged as _unack)
+    _at = Path(tempfile.mkdtemp())
+    _a = Store(_at / "ack.db")
+    _a.add_account(Account(name="Savings", type=AccountType.SAVINGS,
+                           balance=0.71, balance_date=_ptoday))
+    _a.add_transactions(pd.DataFrame([
+        {"account_id": 1,
+         "date": pd.Timestamp(_ptoday - timedelta(days=300 - 20 * i)),
+         "description": "Deposit", "amount": 500.0 if i % 3 else -120.0,
+         "category": "Deposits", "import_hash": f"a{i}"} for i in range(15)]))
+    check("a ledger that cannot reconcile is reported", len(_reconcile(_a)) == 1)
+    check("and is unacknowledged to begin with", len(_unack(_a)) == 1)
+    _before = _reconcile(_a)[0].opening
+    _ack(_a, _reconcile(_a))
+    check("acknowledging silences the dashboard", len(_unack(_a)) == 0)
+    check("but never the arithmetic — Check my balances still shows it",
+          len(_reconcile(_a)) == 1)
+
+    # The point of keying acknowledgement to the number: dismissing *this*
+    # discrepancy must not dismiss the account for ever.
+    _a.add_transactions(pd.DataFrame([
+        {"account_id": 1, "date": pd.Timestamp(_ptoday - timedelta(days=5)),
+         "description": "Deposit", "amount": 900.0, "category": "Deposits",
+         "import_hash": "aNEW"}]))
+    check("a later import moves the figure", _reconcile(_a)[0].opening != _before)
+    check("so the warning comes back", len(_unack(_a)) == 1)
+    _ack(_a, _reconcile(_a))
+    _a.set_ledger_acknowledgements({})
+    check("and it can always be restored deliberately", len(_unack(_a)) == 1)
+    _a.close()
+
     print("undo and redo")
     from finfore.models import Goal
     from finfore.undo import UndoStack

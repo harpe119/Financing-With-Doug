@@ -375,6 +375,49 @@ class Store:
         self.con.commit()
         return added, updated
 
+    # ---------------- acknowledged ledger warnings ----------------
+    def ledger_acknowledgements(self) -> dict[str, float]:
+        """Accounts whose reconciliation warning the user has dismissed, and
+        the opening balance each was dismissed at."""
+        v = self.get_setting("ledger_ack", {})
+        if not isinstance(v, dict):
+            return {}
+        out: dict[str, float] = {}
+        for k, x in v.items():
+            try:
+                out[str(k)] = float(x)
+            except (TypeError, ValueError):
+                continue
+        return out
+
+    @undoable("Dismiss the ledger warning")
+    def set_ledger_acknowledgements(self, ack: dict[str, float]) -> None:
+        self.set_setting("ledger_ack",
+                         {str(k): float(v) for k, v in ack.items()})
+
+    # ---------------- what came before the records ----------------
+    # Kept in `settings` rather than as an accounts column: it describes how to
+    # *draw* an account whose records do not reach back to the start of the
+    # chart, not a property of the account itself, and putting it here means no
+    # schema migration on every database that already exists.
+    PREHISTORY_MODES = ("zero", "flat")
+
+    def prehistory_mode(self, account_id: int) -> str:
+        """What a loan/investment balance was before its first recorded day.
+
+        ``"zero"`` (the default — the account did not exist yet) or ``"flat"``
+        (hold the first known balance backwards, for an account that was
+        transferred in already carrying one).
+        """
+        v = self.get_setting(f"prehistory:{account_id}", "zero")
+        return v if v in self.PREHISTORY_MODES else "zero"
+
+    @undoable("Change what came before the records")
+    def set_prehistory_mode(self, account_id: int, mode: str) -> None:
+        if mode not in self.PREHISTORY_MODES:
+            raise ValueError(f"unknown prehistory mode: {mode}")
+        self.set_setting(f"prehistory:{account_id}", mode)
+
     # ---------------- import mappings ----------------
     @undoable("Save import settings")
     def save_import_mapping(self, account_id: int, mapping: dict) -> None:

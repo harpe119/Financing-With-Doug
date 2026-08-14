@@ -6,6 +6,42 @@ intended to hand to someone else. The running version is shown in the app
 header and under **Help → About**, so a downloaded copy always identifies
 itself.
 
+## 1.18.0 — a warning you can put down, and debts that did not always exist
+
+Both of these came from people actually using it.
+
+- **The "this history doesn't add up" warning can be acknowledged.** A **Got
+  it** button on the dashboard strip puts it away. A warning that cannot be
+  dismissed stops being read — it becomes part of the furniture, and so does
+  the next one, about a different account, for a different reason.
+- **Dismissing it is about the discrepancy, not the account.** The
+  acknowledgement is recorded against the implied opening balance as it stands,
+  so importing another partial export moves the figure and the warning returns.
+  "I know about that one" must never quietly become "never mention this account
+  again". **Accounts → Check my balances** always lists every account
+  regardless — a page opened on purpose should not hide a finding — and carries
+  a **Show dashboard warning again** button, so "Got it" is never a one-way
+  door. Ctrl+Z undoes it too.
+- **A loan or an investment now reads $0 before its first recorded day.** A car
+  loan taken out in March 2025 was not a debt in 2023, and a brokerage account
+  opened last year held nothing the year before. The history line used to
+  back-fill the earliest known balance instead, which drew a $28,000 loan
+  stretching across the whole chart and subtracted it from net worth for years
+  in which it did not exist. Because the chart spans the union of every
+  account's history, this hit any account whose records start later than the
+  oldest one — in practice, most of them.
+- **Where there is no first recorded day, nothing changes.** An account with no
+  dated balances at all is still held flat across the chart. Zeroing it instead
+  would show a manually entered loan at nothing for three years and then have
+  it appear at full size on the day it was typed in — a debt materialising out
+  of thin air, which is a worse lie than the one being fixed.
+- **The assumption is changeable, because it is an assumption.** Snapshots… on a
+  loan or investment offers *"Before the first snapshot, assume the balance was
+  $0"* or *"the first known balance, held flat"* — the second for a mortgage
+  moved from another lender, or a brokerage account transferred in already
+  holding something. It is per account, and only appears once there are
+  snapshots for it to be earlier than.
+
 ## 1.17.0 — Ctrl+Z
 
 Every change to the database can now be taken back.

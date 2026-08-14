@@ -108,7 +108,11 @@ at long horizons. This was not a theoretical worry: before the correction, the
 backtest found reality falling inside the nominal 80% band 1% of the time. Balance snapshots (Accounts → **Snapshots…**) can be
 added, edited, deleted, or bulk-imported for *any* account: they draw the
 history line for loans and investments, and act as a corrective balance anchor
-for cash accounts.
+for cash accounts. Before its first dated balance a loan or investment
+reads **$0** — a loan taken out in 2025 was not a debt in 2023 — unless the
+account is set to hold its first known balance flat instead, for one that was
+transferred in already carrying a balance. An account with no snapshots at
+all is held flat, so a manually entered loan never appears out of nowhere.
 
 Anything that writes to the database can be taken back. **Ctrl+Z** undoes the
 last change and **Ctrl+Shift+Z** (or **Ctrl+Y**) redoes it; both sit on the

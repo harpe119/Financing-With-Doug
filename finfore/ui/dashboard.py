@@ -7,8 +7,8 @@ from PyQt6.QtWidgets import (QHBoxLayout, QLabel, QPushButton, QSizePolicy,
                              QVBoxLayout, QWidget)
 
 from ..alerts import annual_total, bill_changes, summarise
-from ..history import (category_spending, headline_stats, monthly_cashflow,
-                       networth_history, reconcile)
+from ..history import (acknowledge, category_spending, headline_stats,
+                       monthly_cashflow, networth_history, unacknowledged)
 from ..insights import emergency_fund_target
 from ..store import Store
 from ..util import fmt_money
@@ -23,6 +23,7 @@ class DashboardPage(QWidget):
         self.setObjectName("page")
         self.store = store
         self.main = main
+        self._issues: list = []      # what the warning strip is currently about
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(18, 16, 18, 16)
@@ -81,13 +82,29 @@ class DashboardPage(QWidget):
         # so. The alternative is a chart that quietly shows a savings account
         # at −$1,469 for three years, which reads as the program being broken
         # rather than as the export being incomplete.
+        # ...and must then let the reader put it down. A warning that cannot be
+        # dismissed stops being read: it becomes part of the furniture, and the
+        # next one — about a different account, for a different reason — is
+        # furniture too. Acknowledging is recorded against the numbers as they
+        # stand, so it silences this discrepancy rather than this account.
+        self.warn_row = QWidget()
+        wrl = QHBoxLayout(self.warn_row)
+        wrl.setContentsMargins(0, 0, 0, 0)
+        wrl.setSpacing(8)
         self.warn = QLabel("")
         self.warn.setObjectName("ledgerWarning")
         self.warn.setWordWrap(True)
         self.warn.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse)
-        self.warn.setVisible(False)
-        lay.addWidget(self.warn)
+        wrl.addWidget(self.warn, 1)
+        self.warn_ack = QPushButton("Got it")
+        self.warn_ack.setToolTip(
+            "Stop showing this. It comes back if the numbers change, and "
+            "Accounts → Check my balances always has the full detail.")
+        self.warn_ack.clicked.connect(self._ack_warning)
+        wrl.addWidget(self.warn_ack, 0, Qt.AlignmentFlag.AlignTop)
+        self.warn_row.setVisible(False)
+        lay.addWidget(self.warn_row)
 
         hist_card = Card("Net worth history")
         self.plot_hist = charts.new_plot(legend=True)
@@ -199,14 +216,25 @@ class DashboardPage(QWidget):
             "pattern on the Recurring page stops it being checked.</p>")
         return "What changed without being asked", "".join(rows)
 
+    def _ack_warning(self) -> None:
+        try:
+            acknowledge(self.store, self._issues)
+        except Exception:
+            return
+        self.warn_row.setVisible(False)
+        self.main.status(
+            "Dismissed. It will reappear if the figures change — the full "
+            "detail is always on Accounts → Check my balances.")
+
     def _render_warnings(self) -> None:
         """Explain a history the arithmetic has forced somewhere impossible."""
         try:
-            issues = reconcile(self.store)
+            issues = unacknowledged(self.store)
         except Exception:
             issues = []
+        self._issues = issues
         if not issues:
-            self.warn.setVisible(False)
+            self.warn_row.setVisible(False)
             return
         rows = ["<b>This history doesn't add up, and the chart is showing it "
                 "honestly rather than hiding it.</b>"]
@@ -234,7 +262,7 @@ class DashboardPage(QWidget):
             "<b>Snapshot</b> with a known past balance re-anchors the history "
             "from that date.</div>")
         self.warn.setText("".join(rows))
-        self.warn.setVisible(True)
+        self.warn_row.setVisible(True)
 
     def refresh(self) -> None:
         store = self.store
