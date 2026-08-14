@@ -12,10 +12,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PyQt6.QtCore import QUrl, Qt
-from PyQt6.QtGui import QDesktopServices
+from PyQt6.QtCore import QTimer, QUrl, Qt
+from PyQt6.QtGui import QDesktopServices, QPixmap
 from PyQt6.QtWidgets import (QDialog, QHBoxLayout, QLabel, QMessageBox,
-                             QPushButton, QSlider, QVBoxLayout)
+                             QPushButton, QSizePolicy, QSlider, QStackedWidget,
+                             QVBoxLayout)
 
 from ..util import resource_path
 from .widgets import hint
@@ -56,7 +57,20 @@ def open_externally(path: Path) -> bool:
 
 
 class VideoDialog(QDialog):
-    """A minimal player: play/pause, a scrubber, and a way out to the OS."""
+    """A minimal player: play/pause, a scrubber, and a way out to the OS.
+
+    The last frame is held on screen after the video ends. The explainer
+    finishes on a card of text, and a player that blanks (or hands the widget
+    back to the backend to clear) gives you no time to read it. Rather than
+    trust the backend to leave the final frame up — that differs between
+    ffmpeg, AVFoundation and GStreamer — the dialog keeps its own copy of the
+    frames near the end and shows that still until you replay or close.
+    """
+
+    #: How much of the tail to keep copies of, in ms. Frames are copied off
+    #: the decoder thread, so this stays small: only the run-out is worth the
+    #: conversion, and the last one to arrive is the one we hold.
+    HOLD_WINDOW_MS = 1500
 
     def __init__(self, path: Path, title: str, parent=None):
         super().__init__(parent)
@@ -65,6 +79,8 @@ class VideoDialog(QDialog):
         self._path = path
         self._duration = 0
         self._recovered = False
+        self._last_frame = None
+        self._holding = False
 
         mm = _multimedia()
         if mm is None:
@@ -77,7 +93,22 @@ class VideoDialog(QDialog):
 
         self.view = QVideoWidget()
         self.view.setMinimumHeight(300)
-        lay.addWidget(self.view, 1)
+        # The still sits in front of the video widget rather than over it: a
+        # stack swaps them cleanly, where an overlay would have to be kept in
+        # sync with the widget's own letterboxing.
+        self.still = QLabel()
+        self.still.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.still.setStyleSheet("background: #000;")
+        # Without this the held pixmap becomes the label's size hint and the
+        # dialog can no longer be made smaller than the frame it is showing.
+        self.still.setSizePolicy(QSizePolicy.Policy.Ignored,
+                                 QSizePolicy.Policy.Ignored)
+        self.still.setMinimumSize(1, 1)
+        self.stack = QStackedWidget()
+        self.stack.setMinimumHeight(300)
+        self.stack.addWidget(self.view)
+        self.stack.addWidget(self.still)
+        lay.addWidget(self.stack, 1)
 
         self.player = QMediaPlayer(self)
         self.audio = QAudioOutput(self)
@@ -91,7 +122,7 @@ class VideoDialog(QDialog):
         bar.addWidget(self.play_btn)
         self.scrub = QSlider(Qt.Orientation.Horizontal)
         self.scrub.setRange(0, 0)
-        self.scrub.sliderMoved.connect(self.player.setPosition)
+        self.scrub.sliderMoved.connect(self._seek)
         bar.addWidget(self.scrub, 1)
         self.clock = QLabel("0:00 / 0:00")
         self.clock.setObjectName("hint")
@@ -114,7 +145,15 @@ class VideoDialog(QDialog):
         self.player.positionChanged.connect(self._on_position)
         self.player.durationChanged.connect(self._on_duration)
         self.player.playbackStateChanged.connect(self._on_state)
+        self.player.mediaStatusChanged.connect(self._on_status)
         self.player.errorOccurred.connect(self._on_error)
+        # Watching the widget's own sink is passive: the widget still draws
+        # every frame, we just keep a copy of the ones near the end. If a
+        # binding hasn't got videoSink(), the dialog simply doesn't hold.
+        try:
+            self.view.videoSink().videoFrameChanged.connect(self._on_frame)
+        except Exception:
+            pass
 
         self.player.setSource(QUrl.fromLocalFile(str(path)))
         self.player.play()
@@ -141,15 +180,95 @@ class VideoDialog(QDialog):
 
     def _on_state(self, state) -> None:
         from PyQt6.QtMultimedia import QMediaPlayer
+        if self._holding:
+            self.play_btn.setText("Replay")
+            return
         playing = state == QMediaPlayer.PlaybackState.PlayingState
         self.play_btn.setText("Pause" if playing else "Play")
 
     def _toggle(self) -> None:
         from PyQt6.QtMultimedia import QMediaPlayer
-        if self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+        if self._holding:
+            self._resume(0)
+        elif self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
             self.player.pause()
         else:
             self.player.play()
+
+    def _seek(self, ms: int) -> None:
+        """Scrubbing off the end drops the hold and goes back to the video."""
+        if self._holding:
+            self._resume(ms)
+        else:
+            self.player.setPosition(ms)
+
+    # ---- holding the last frame ---------------------------------------
+    def _on_frame(self, frame) -> None:
+        """Keep a copy of each frame in the tail of the video.
+
+        This runs on the backend's decoding thread, so it touches nothing but
+        plain data — the widget work happens later, on the GUI thread, in
+        _hold_last_frame. Frames outside the tail are skipped rather than
+        converted, because toImage() copies a full frame's worth of pixels and
+        there is no reason to pay that thirty times a second all the way
+        through. A backend that doesn't stamp frames with a time gets every
+        frame copied instead, which is the safe way round: slower, but the
+        last one is always there.
+        """
+        try:
+            if not frame.isValid():
+                return
+            start_ms = frame.startTime() // 1000
+            if (self._duration > 0 and start_ms >= 0
+                    and start_ms < self._duration - self.HOLD_WINDOW_MS):
+                return
+            img = frame.toImage()
+            if not img.isNull():
+                self._last_frame = img.copy()
+        except Exception:
+            pass
+
+    def _on_status(self, status) -> None:
+        from PyQt6.QtMultimedia import QMediaPlayer
+        if status == QMediaPlayer.MediaStatus.EndOfMedia:
+            self._hold_last_frame()
+
+    def _hold_last_frame(self) -> None:
+        if self._last_frame is None or self._last_frame.isNull():
+            return                      # nothing captured; leave the widget be
+        self._holding = True
+        self._paint_still()
+        self.stack.setCurrentWidget(self.still)
+        self.play_btn.setText("Replay")
+        self.note.setText("Ended — holding the last frame. Replay to watch "
+                          "it again.")
+
+    def _resume(self, ms: int) -> None:
+        self._holding = False
+        self.note.setText("")
+        self.stack.setCurrentWidget(self.view)
+        # play() first: from the end of the media it rewinds to the start, so
+        # a seek made before it would be thrown away. Seeking after means the
+        # scrubbed position survives.
+        self.player.play()
+        if ms > 0:
+            self.player.setPosition(ms)
+
+    def _paint_still(self) -> None:
+        """Scale the held frame to the stack, keeping its shape."""
+        if self._last_frame is None or self._last_frame.isNull():
+            return
+        self.still.setPixmap(QPixmap.fromImage(self._last_frame).scaled(
+            self.stack.size(), Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation))
+
+    def resizeEvent(self, event) -> None:         # noqa: N802
+        super().resizeEvent(event)
+        if self._holding:
+            # A turn of the event loop later, so the stack has actually taken
+            # its new size and the frame is scaled to it rather than to the
+            # size it is about to stop having.
+            QTimer.singleShot(0, self._paint_still)
 
     def _on_error(self, _err, msg: str) -> None:
         """Hand the file to the OS rather than showing a dead rectangle.

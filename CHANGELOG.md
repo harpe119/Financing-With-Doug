@@ -6,6 +6,29 @@ intended to hand to someone else. The running version is shown in the app
 header and under **Help → About**, so a downloaded copy always identifies
 itself.
 
+## 1.18.1 — the last frame stays up
+
+- **The Explain me video holds its final frame.** The explainer ends on a card
+  of text, and the player was blanking the instant the stream ended — the one
+  moment the video is asking to be read is the moment it disappeared. The
+  dialog now keeps its own copy of the frames in the last 1.5 seconds and puts
+  the final one up as a still when playback ends, with **Pause** becoming
+  **Replay**. Copying only the tail, rather than every frame, is the difference
+  between a few conversions and two thousand of them for a 69-second video.
+  Keeping our own copy rather than asking the backend to leave the last frame
+  on screen is the point: whether it does is up to ffmpeg, AVFoundation or
+  GStreamer, and they do not agree. Scrubbing off the end drops the hold and
+  carries on from wherever it was dragged.
+- **More for the version-number easter egg.** Doug's facts now run to a field
+  guide — orangutans, Highland cattle and bananas, each dragged back to
+  something Doug has an opinion about. Also fixed: two facts had been written
+  without the comma between them, so Python concatenated the pair and one of
+  them could never appear.
+- **The README describes the program people are actually handed.** It opened on
+  `pip install -r requirements.txt`, three releases after the installer landed,
+  and said nothing about the app updating itself. Installing now comes first
+  and running from source is a section for whoever is editing it.
+
 ## 1.18.0 — a warning you can put down, and debts that did not always exist
 
 Both of these came from people actually using it.

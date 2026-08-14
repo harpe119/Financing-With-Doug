@@ -9,6 +9,16 @@ available, so it's worth keeping them readable.
 
 ---
 
+## 1.18.1 — a small one
+
+- **The explainer video stops disappearing.** The short video behind ▶ **Explain
+  me** on the Forecast page ends on a few lines of text, and the window used to
+  go blank the instant it finished — right when there was something to read.
+  It now stays on that last frame until you close it, and the Pause button
+  becomes **Replay**.
+- **Doug has learned some facts about orangutans.** Click the version number in
+  the header. That's all that does.
+
 ## 1.16.0 — the first proper release
 
 This is the first version you can just **install**. Download the setup file,

@@ -2043,6 +2043,73 @@ def main() -> None:
     check("the spec bundles assets/ so the video survives a build",
           "assets" in _spec_txt)
 
+    # The explainer ends on a card of text, and a player that goes blank the
+    # instant the stream ends gives you no time to read it. The dialog keeps
+    # its own copy of the tail frames rather than trusting the backend to
+    # leave the last one on screen, so the copying and the hold are worth
+    # testing without decoding anything.
+    if _video._multimedia() is None:
+        print("  skip  Qt Multimedia is absent; hold-the-last-frame untested")
+    else:
+        from PyQt6.QtGui import QImage as _QImage
+
+        class _Frame:                      # duck-types the bits of QVideoFrame
+            def __init__(self, start_us, img):
+                self._start, self._img = start_us, img
+
+            def isValid(self):             # noqa: N802
+                return True
+
+            def startTime(self):           # noqa: N802
+                return self._start
+
+            def toImage(self):             # noqa: N802
+                return self._img
+
+        _early = _QImage(4, 4, _QImage.Format.Format_RGB32)
+        _early.fill(0x111111)
+        _late = _QImage(4, 4, _QImage.Format.Format_RGB32)
+        _late.fill(0xEEEEEE)
+        # A backend failure inside the dialog hands the file to the OS, which
+        # during a test run means a media player appearing on someone's
+        # screen. Neuter that for the duration of the block.
+        _open_saved = _video.open_externally
+        _video.open_externally = lambda _p: False
+        _dlg = _video.VideoDialog(_vp, "test")
+        try:
+            _dlg.player.stop()             # constructed playing; nothing to hear
+            _dlg.audio.setMuted(True)
+            _dlg._last_frame = None        # discard anything the tail decoded
+            _dlg._duration = 10_000
+            _dlg._on_frame(_Frame(1_000_000, _early))
+            check("frames well before the end are not copied",
+                  _dlg._last_frame is None)
+            _dlg._on_frame(_Frame(9_600_000, _late))
+            check("frames in the tail window are",
+                  _dlg._last_frame is not None
+                  and _dlg._last_frame.pixelColor(0, 0).blue() == 0xEE)
+            _dlg._hold_last_frame()
+            check("the end of the video holds that frame on screen",
+                  _dlg._holding
+                  and _dlg.stack.currentWidget() is _dlg.still
+                  and not _dlg.still.pixmap().isNull())
+            check("and offers a replay rather than a pause",
+                  _dlg.play_btn.text() == "Replay")
+            _dlg._resume(0)
+            _dlg.player.stop()
+            check("replaying puts the video back in front",
+                  not _dlg._holding
+                  and _dlg.stack.currentWidget() is _dlg.view
+                  and _dlg.note.text() == "")
+            _dlg._last_frame = None
+            _dlg._hold_last_frame()
+            check("with no frame captured it holds nothing",
+                  not _dlg._holding
+                  and _dlg.stack.currentWidget() is _dlg.view)
+        finally:
+            _dlg.close()
+            _video.open_externally = _open_saved
+
     print("progress: checkpoints, path adherence, significance")
     from finfore import progress as _P
 

@@ -57,8 +57,60 @@ DOUG_FACTS = [
     "Doug has been asked to stop calling the Monte Carlo simulation \u201cthe casino\u201d.",
     "Doug wants you to know that past performance does not guarantee future results, "
     "and that Doug learned this the hard way.",
-    "Doug worked as an intern on internal rocket ballistics simulation before"
+    "Doug worked an internship on rocket ballistics simulation, which is how Doug "
+    "learned that a decimal point in the wrong place is everybody's problem.",
     "Doug is not a licensed financial advisor. Doug is barely a licensed Doug.",
+    "Doug spent a semester as a glorified toaster. Doug does not wish to discuss "
+    "the semester.",
+    "Doug has read your ledger 10,000 times this week and has never once judged "
+    "you for the excessive quantities of milk. The tornado chart might.",
+    "Doug's favourite number is the median, because the mean lets one bad month "
+    "shout over eleven good ones.",
+    "Doug rounds to the cent. Doug has strong feelings about people who round to "
+    "the dollar and then wonder where the dollar went.",
+    "Doug once tried to forecast the weather with a savings-rate model. It said "
+    "you should stop buying rain.",
+
+    # Doug's field guide, compiled during a long re-training run.
+    "An orangutan's name means \u201cperson of the forest\u201d in Malay \u2014 "
+    "orang hutan. Doug has petitioned, unsuccessfully, to be renamed "
+    "\u201cperson of the spreadsheet\u201d.",
+    "Orangutans are the largest animals that live in trees, which Doug considers "
+    "an admirable refusal to pay rent.",
+    "Wild orangutans hold big leaves over their heads as umbrellas. Doug files "
+    "this under emergency fund: cheap, simple, deployed before the rain, not "
+    "during.",
+    "An orangutan's arm span is wider than it is tall \u2014 up to about 2.2 "
+    "metres. Doug's reach is roughly one SQLite file.",
+    "A mother orangutan raises one infant for the better part of a decade, the "
+    "slowest schedule of any mammal. Compounding takes patience too, but "
+    "compounding does not climb the curtains.",
+
+    "A group of Highland cattle is not a herd, it is a fold. Doug appreciates "
+    "any species that files itself under the correct heading.",
+    "That magnificent fringe over a Highland cow's eyes is called a dossan, and "
+    "it keeps the wind and the flies out. Doug's equivalent is Simple view.",
+    "Highland cattle wear two coats: an oily outer one that sheds Scottish rain "
+    "and a woolly one underneath. They insulate rather than fattening up \u2014 "
+    "the bovine equivalent of a buffer account.",
+    "Highland cattle have been kept for centuries in weather that would end most "
+    "breeds, on grass nobody else wanted. Doug calls this a low-cost index fund "
+    "with horns.",
+
+    "Bananas are berries. Strawberries are not. Doug has stopped trying to make "
+    "this make sense and simply reports it.",
+    "Nearly every banana exported on earth is a Cavendish, and they are all "
+    "clones of one another \u2014 a portfolio with precisely one holding. Doug "
+    "would like a word with the banana industry about diversification.",
+    "The banana the world ate before the Cavendish, the Gros Michel, was "
+    "commercially wiped out by a fungus in the 1950s. Concentration risk is not "
+    "a hypothetical; it is a fruit.",
+    "A banana plant is not a tree but a giant herb, and its \u201ctrunk\u201d is "
+    "rolled-up leaf. Doug mentions this because things that look structural "
+    "sometimes are not.",
+    "Bananas are faintly radioactive, thanks to the potassium in them. The dose "
+    "is so small that physicists measure small doses in bananas. Doug likes any "
+    "unit that keeps a scary number in proportion.",
 ]
 
 

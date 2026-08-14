@@ -18,17 +18,40 @@ rather than a fixed year, so the projection is always the larger half of the
 chart, and every timeline is bounded to its own data — you cannot pan or zoom
 off into empty space and lose your way back.
 
-The running version is shown in the app header and under **Help → About**; see `CHANGELOG.md` for what changed between versions.
+The running version is shown in the app header and under **Help → About**; see
+[`CHANGELOG.md`](CHANGELOG.md) for what changed between versions, or
+[`docs/whats-new.md`](docs/whats-new.md) for the same thing in plain sentences.
 
-## Quick start
+## Install it
+
+Grab `FinancingWithDoug-<version>-Setup.exe` from the
+[latest release](https://github.com/harpe119/Financing-With-Doug/releases/latest)
+and double-click it. Next, Next, Finish. It installs **per-user** into
+`%LOCALAPPDATA%`, so Windows never asks for an administrator password, and it
+offers a desktop shortcut. The first run of an unsigned installer shows
+SmartScreen's *"Windows protected your PC"* — **More info → Run anyway**; that
+happens once, and it is unavoidable without a code-signing certificate.
+
+After that it keeps itself current: it asks GitHub once a day whether there is
+anything newer, stays silent unless there is, and when there is it shows the
+release notes and offers **Download and install** — it verifies the published
+SHA-256 before running anything. **Help → Check for updates…** does the same on
+demand and always answers, including "you're up to date". Your data is never
+touched by an update or by an uninstall; it lives in `~/.ledgerline/` and the
+uninstaller says so before it runs.
+
+macOS and Linux have no installer — run from source (below), or build a bundle
+with the spec described under *Building an executable*.
+
+## Running from source
 
 ```bash
 pip install -r requirements.txt
 python run.py
 ```
 
-Then use **File → Load demo dataset** to explore immediately. Five situations
-are offered:
+Python ≥ 3.10. Either way, use **File → Load demo dataset** to explore
+immediately. Five situations are offered:
 
 | | grade | what it shows |
 |---|---|---|
@@ -41,7 +64,7 @@ are offered:
 Each opens in its **own database file**, so a demo never touches your ledger and
 **File → Return to my own data** puts you back where you were; a banner marks
 demo data while you are in it. Your data lives at `~/.ledgerline/ledgerline.db`
-by default; pass `--db path.db` to use another file. Python ≥ 3.10.
+by default; pass `--db path.db` to use another file.
 
 New to it? **Help → Getting started** (or `F1`) opens a walkthrough that
 covers importing a CSV, fixing categories, setting goals and reading the
@@ -93,8 +116,10 @@ whether the fan deserves to be believed. **What-if events** add dated one-off
 shocks so the projection can answer "can I absorb this, and when is the worst
 moment?". The ▶ **Explain me** button plays a short video on what the shaded
 bands actually mean — it sits on the forecast page rather than under Help
-because that is where the misreading happens. If this build's multimedia
-backend cannot decode it, the file is handed to the system's own video player
+because that is where the misreading happens. It ends on a card of text, so the
+player holds that last frame on screen when the video finishes rather than
+blanking, and **Pause** becomes **Replay**. If this build's multimedia backend
+cannot decode the file at all, it is handed to the system's own video player
 rather than failing silently.
 
 Investment shocks are Student-t (ν=5) rescaled to unit variance rather than
@@ -113,6 +138,15 @@ reads **$0** — a loan taken out in 2025 was not a debt in 2023 — unless the
 account is set to hold its first known balance flat instead, for one that was
 transferred in already carrying a balance. An account with no snapshots at
 all is held flat, so a manually entered loan never appears out of nowhere.
+
+When an account's ledger doesn't reconcile against the balance you entered, the
+dashboard says so — and a **Got it** button puts that warning away, because a
+warning nobody can dismiss stops being read and takes the next one down with
+it. The acknowledgement is recorded against the discrepancy as it currently
+stands, not against the account, so importing another partial export moves the
+figure and the warning comes back. **Accounts → Check my balances** lists every
+account regardless — a page opened on purpose should not hide a finding — and
+carries a **Show dashboard warning again** button.
 
 Anything that writes to the database can be taken back. **Ctrl+Z** undoes the
 last change and **Ctrl+Shift+Z** (or **Ctrl+Y**) redoes it; both sit on the
@@ -176,10 +210,28 @@ column mapping is remembered on first import, so **Update from CSV…**
 re-imports a newer export with no re-setup — dedup by row hash means only new
 rows are added.
 
-## Building an executable
+## Building a release
 
-`packaging/doug.spec` is ready to use: `pip install pyinstaller` then
-`pyinstaller packaging/doug.spec`, and the result lands in `dist/`.
+On Windows, one command does the lot:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File packaging\build.ps1
+```
+
+It runs the test suite first and refuses to build if anything fails — a broken
+build that auto-installs itself onto five other machines is the one outcome
+worth engineering against — then runs PyInstaller, wraps the result with Inno
+Setup (`packaging/installer.iss`), and writes `FinancingWithDoug-<version>-Setup.exe`
+plus a `SHA256SUMS.txt` into `dist/installer/`. Upload **both** to the GitHub
+release: the checksum file is what the in-app updater checks the download
+against, and the tag has to match `__version__` for existing installs to notice.
+The version is read from `finfore/__init__.py`, so it is written in one place
+and cannot drift from what the app reports. [`docs/releasing.md`](docs/releasing.md)
+covers the whole loop.
+
+**The bundle underneath.** `packaging/doug.spec` is usable on its own —
+`pip install pyinstaller` then `pyinstaller packaging/doug.spec`, and the result
+lands in `dist/`.
 PyInstaller does not cross-compile, so build on the OS you are shipping to. The
 spec defaults to a folder build rather than one-file because one-file unpacks
 itself on every launch; flip `ONEFILE` if a single icon matters more. Bundled
@@ -198,19 +250,16 @@ works for Windows; `iconutil` or ImageMagick for macOS). Linux ignores this —
 icons there come from a `.desktop` file, a separate step not covered by the
 spec.
 
-**What to send.** After the build, `dist/Financing with Doug/` is the whole
-program — the `.exe`/binary plus every DLL/library it needs. Zip that entire
-folder and send the zip; the executable will not run if separated from the
-files beside it. Don't send just the `.exe`. On Windows, family unzips it
-anywhere and can right-click the `.exe` inside → **Send to → Desktop (create
-shortcut)** — that shortcut is safe to move around; the target folder is not.
-On macOS, if you enable the `BUNDLE` step in the spec (commented out by
-default) you get a proper `Financing with Doug.app`, which is itself the
-double-clickable, Dock-draggable unit — zip and send that instead of the raw
-`dist/` folder. Either way, first launch will need a right-click → Open on
-macOS (Gatekeeper) or "More info → Run anyway" on Windows (SmartScreen), since
-the build isn't code-signed — worth a heads-up so it doesn't look like a virus
-warning.
+**What to send when there is no installer.** On Windows the answer is the
+`Setup.exe` above. Everywhere else, `dist/Financing with Doug/` is the whole
+program — the binary plus every library it needs — so zip that entire folder
+and send the zip; it will not run if separated from the files beside it. Don't
+send just the executable. On macOS, enabling the `BUNDLE` step in the spec
+(commented out by default) gets you a proper `Financing with Doug.app`, which
+is itself the double-clickable, Dock-draggable unit — zip and send that
+instead of the raw `dist/` folder. First launch will need a right-click → Open
+on macOS (Gatekeeper), since the build isn't code-signed — worth a heads-up so
+it doesn't look like a virus warning.
 
 ## Methodology
 
@@ -594,13 +643,22 @@ finfore/
   history.py              balance reconstruction and headline statistics
   forecast.py             deterministic + Monte Carlo engine, loans, goals
   pipeline.py             import + refresh-derived orchestration
+  alerts.py               bills that moved, gated on each bill's own MAD
+  dedup.py                one transaction a bank exported twice, found by balance
+  report.py               one calendar month as a self-contained HTML page
   store.py                SQLite persistence
   undo.py                 snapshot undo/redo stack (Ctrl+Z), bounded in memory
+  update.py               "is there something newer?" — stdlib only, no Qt
   demo.py                 one-click demo loader
-  ui/                     PyQt6 theme, charts, dialogs, seven pages
+  ui/                     PyQt6 theme, charts, dialogs, eight pages
   ui/video.py             bundled explainer videos, with a system-player fallback
   ui/guide.py             renders docs/getting-started.md in-app
 docs/getting-started.md   the user-facing walkthrough (Help -> Getting started)
+docs/releasing.md         bump, build, tag, publish — and what family sees
+docs/whats-new.md         plain-English release notes (published with the release)
+packaging/build.ps1       test → PyInstaller → Inno Setup → checksums
+packaging/doug.spec       the PyInstaller bundle
+packaging/installer.iss   the per-user Windows installer
 assets/                   explainer videos (bundled into the build)
 scripts/generate_sample_data.py   seeded synthetic bank exports
 sample_data/              bundled demo CSVs + meta.json
