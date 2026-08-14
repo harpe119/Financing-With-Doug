@@ -6,6 +6,231 @@ intended to hand to someone else. The running version is shown in the app
 header and under **Help → About**, so a downloaded copy always identifies
 itself.
 
+## 1.16.0 — an installer, and a program that can update itself
+
+Doug can now be handed to somebody who has never seen a terminal.
+
+- **A real Windows installer.** `packaging/installer.iss` (Inno Setup) wraps the
+  PyInstaller bundle into `FinancingWithDoug-<version>-Setup.exe`: double-click,
+  Next, Next, Finish, Start-menu and desktop shortcuts, an entry in Add/Remove
+  Programs. It installs **per-user**, into `%LOCALAPPDATA%`, so there is no
+  administrator prompt — which for a program handed to family is the difference
+  between "double-click it" and "ring me". The uninstaller deliberately leaves
+  `~/.ledgerline` alone and says so in the confirmation: uninstalling a program
+  is not the same as asking it to destroy your financial records.
+- **`packaging/build.ps1` does the whole thing in one command.** Tests, then
+  PyInstaller, then Inno Setup, then a `SHA256SUMS.txt`. It refuses to build if
+  a single test fails — a broken build that auto-installs itself onto five
+  other machines is the one outcome worth engineering against. The version is
+  read from `finfore/__init__.py`, so it is written once and cannot drift from
+  what the app reports. It also works out *which interpreter* to build with by
+  probing for PyInstaller rather than trusting `python` on PATH, because the
+  PATH one here is a different Python from the one the app runs on, and
+  PyInstaller silently bundles whichever it is given.
+- **Help → Check for updates…** asks GitHub for the newest release, shows the
+  notes, and offers to install it. It downloads to a temp folder, verifies the
+  published SHA-256, closes the app, and hands over to the installer — in that
+  order, because Windows cannot replace a running executable. There is also a
+  background check at startup: once a day at most, on a worker thread so it
+  cannot stall the window, and silent unless there is genuinely something new.
+  A laptop opened on a train gets no network error.
+- **The updater is deliberately small and readable.** `finfore/update.py` uses
+  nothing but the standard library, holds no Qt, and does not install anything
+  — it answers "is there something newer?" and downloads a file when asked.
+  Running it is the caller's code. It refuses any URL that is not HTTPS to a
+  known GitHub host, treats an unparseable tag as "no update" rather than "some
+  update", and deletes the part-file if a download is cancelled or fails its
+  checksum. Something that can fetch and execute code should be readable in one
+  sitting.
+- **`docs/releasing.md`** covers the whole loop: bump, build, tag, publish; what
+  the SmartScreen warning is and why it is unavoidable without a certificate;
+  and the three ways to share a private repo with family, with a recommendation.
+
+One thing the updater now refuses to get wrong: GitHub answers **404** both for
+"this repository has no releases yet" and for "you cannot see this repository",
+and the first draft treated them the same. On a **private** repo that means
+every installed copy is told *"You're up to date"* — for ever, silently, with no
+way for anyone to notice. It now asks a second question when the first one
+404s, and says plainly that a private repository cannot be reached anonymously.
+
+Also fixed, found while reviewing the last release:
+
+- **A deactivated loan payment no longer vanishes from "What's causing this?"**
+  Switching the detected pattern off does not stop the projection amortising
+  the loan — it falls back to the account's own monthly payment — but the
+  attribution list treated the account as covered and dropped the largest fixed
+  outflow of the month.
+- **A double-click no longer restores a stale view.** The analysis panel draws
+  a tornado and a backtest into the same widget, and `unlock_view` was leaving
+  the previous chart's home range behind.
+- **A corrupt numeric column can no longer stop the ledger opening.** The dtype
+  coercion added in 1.14.0 now falls back to floats rather than raising if a
+  file carries a null where the schema says it cannot.
+
+## 1.15.1 — the button nobody could find, and a dashboard that folds
+
+- **"What's causing this?" is now actually reachable.** It shipped gated to
+  short, self-correcting dips on the reasoning that a structural shortfall has
+  no nameable cause — which confused an argument about *framing* with one about
+  usefulness and hid the button on three of the five demo profiles and on every
+  real ledger in trouble, i.e. exactly the people asking the question. It now
+  appears whenever the cash line goes under at all. What changes with the
+  verdict is the dialog: a timing problem gets the run-up and a **Move** button
+  per bill, while a structural one gets the same list of commitments — knowing
+  what leaves is useful either way — and no Move buttons, because offering to
+  reschedule a payment to somebody spending more than they earn is the app
+  recommending a fix it knows will not work. It says so, and points at the
+  sliders and the sensitivity panel instead.
+- **The two lower dashboard charts fold away.** Monthly cash flow and Spending
+  by category are references you glance at; the net worth history is the one
+  people sit and read, and a divider could give it most of the page but never
+  all of it, because two cards will not shrink past their own minimum height.
+  Both now carry the same ▾ chevron the Forecast scenario cards use, and
+  folding them hands the freed height straight to the history rather than
+  leaving two title strips floating in a full-height pane.
+
+## 1.15.0 — a bill that went up, a squeeze you can move, and a page to hand over
+
+Four new things and a chart that stops fighting back.
+
+- **Doug notices when a bill goes up on its own.** Nobody spots a subscription
+  going from $15.49 to $19.49 — it is four dollars on a statement with forty
+  other lines, and by the time it is obvious it has been running a year. A new
+  `alerts.py` compares every active recurring pattern against **its own
+  history**, and a strip appears on the dashboard when something moved. The
+  hard part is not spotting a change, it is *not* spotting one: a bill that
+  varies by nature — electricity in August, a phone bill with roaming — differs
+  every month, and an alert that fires on all of them is one nobody reads. So a
+  charge has to move by more than **three times its own median absolute
+  deviation** before it is mentioned, and clear a dollar and $24 a year on top.
+  A subscription that has been $9.99 eleven times running has a deviation of
+  zero and a two-dollar rise is enormous; a power bill that swings $60 either
+  way has to move a very long way. Pay rises and price *cuts* are reported the
+  same way, as good news. Two demo profiles now carry quiet price rises,
+  because a demo with perfectly constant bills cannot show the app noticing one.
+- **"What's causing this?" on the forecast.** A dated warning immediately
+  provokes *caused by what?*, and the page could not answer — it knew the low
+  point was in August and nothing else. The projection has always known: it
+  replays every bill and pay cheque by name to build the path, then throws the
+  names away. Now it keeps them, and the button lists what is scheduled to
+  leave in the run-up, when the next money lands, and offers to **move one
+  payment past payday** — modelled as the pair of offsetting one-off events it
+  really is, so it appears in the what-if list where it can be undone. Offered
+  only for a *bounded* dip: ask this of a ledger three years under water and
+  the honest answer is "every rent payment since 2026", which is true, is not a
+  cause, and is not something anyone can move.
+- **A "Simple view / Everything" switch in the header, and it starts simple.**
+  The app has grown controls that are genuinely useful to the person who built
+  it and pure noise to the person who was handed it: a Monte Carlo path count,
+  a backtest panel, a table of every checkpoint, a red Clear button in front of
+  somebody still working out what a checkpoint *is*. Simple view puts them
+  away. It hides no findings — the cash chart, the verdict, the grade and every
+  For nerds panel stay exactly where they were — only the apparatus for
+  interrogating them. The choice is remembered. **It defaults to simple**,
+  because a default that has to be discovered is not a default, and this app's
+  stated purpose is to be handed to family.
+- **File → Save a month in review…** One finished calendar month on one
+  printable page: where you stand, what came in and went out, where it went,
+  the grade in plain words, anything that changed, and the year ahead. Plain
+  HTML with the styling inline — no JavaScript, no external anything — so it
+  opens in any browser on any machine, offline, and Ctrl-P turns it into a PDF
+  you can send to a partner who does not have the program. That is why it is
+  not a print dialog: a print dialog produces paper and nothing else. It covers
+  the last *finished* month, never a part-month, because a month in progress
+  always looks like an unusually thrifty one.
+- **The charts stop snapping back.** Two changes. Zoomed all the way out, the
+  ledger now sits in the **left half** of the chart with a full chart-width of
+  working room to its right, which is the side the newest data and any
+  projection live on. And the **y axis has no limits at all** any more:
+  stretching it with a right-drag to pull a flat-looking line apart used to be
+  undone by the next scroll, because the vertical bounds reasserted themselves
+  every time. Time stays bounded — the left edge is still pinned to the first
+  point, which is what stops a chart being scrolled off into nowhere — and
+  since unbounded is only safe if there is a way back, **double-clicking any
+  chart returns it to where it opened**.
+
+## 1.14.0 — a dip is not a shortfall, and the maths moves one click right
+
+Four things, three of which are about saying the same true thing in words
+somebody's sibling would recognise.
+
+- **"High risk of running out of cash" now means it.** The line under the cash
+  chart was driven by one number — the share of simulated paths that touch zero
+  at any point — and that number cannot tell a solvency problem from a Thursday.
+  Ten dollars in the account, a fifteen-dollar bill on Thursday and a new job
+  paying six figures a month scores **100%**, and the page duly announced a high
+  risk of running out of money about somebody who is about to be extremely
+  comfortable. The probability was right; the sentence was a lie. What replaces
+  it weighs three things instead of one — **how far** below zero the dips go
+  against what a day of your own life actually costs, **how long** they last,
+  and **whether they come back** — and picks from six verdicts accordingly:
+  *cash holds up*, *cash gets thin*, *a short dip, not a shortfall*, *a tight
+  patch, then it clears*, *worth watching*, and the original, now reserved for
+  the case that is deep **and** does not self-correct. The middle two are new
+  and are where the wrongly-alarmed cases land. A dip shallower than about three
+  days of essential spending is a payment-timing artefact and is now described
+  as one; the fix offered is *move a bill to the other side of payday*, which is
+  the actual fix. Dips deep enough to bounce a payment still get said plainly,
+  with a **date** and the amount, even when the future after them is excellent —
+  "most runs go short around August 2026, typically about $280 below zero for
+  five days, and then recover." Two of the five demo profiles found bugs in this
+  during development, which is what demo profiles are for: *turnaround* was
+  briefly calling a rare 53-day $1,600 hole "brief" on the grounds that only one
+  path in ten fell into it, and rare is not the same thing as small.
+- **A "🤓 For nerds" button on Forecast, Progress and Insights.** This app knows
+  a great deal about how sure it is and had taken to saying so in place, which
+  turned three otherwise readable pages into statistics coursework: a p-value in
+  a stat card, two coverage fractions in a caption, `FESR 0.62 vs 0.60 target`
+  under a letter grade. None of it was wrong and none of it is gone — it is one
+  click to the right, in a window that opens with the numbers currently on
+  screen. The page now says *"yes, you really are spending less, and it is not
+  just a quiet few weeks — about $180 a month"*; the window behind it says why
+  anyone should believe that, at four decimal places, with the permutation
+  count, the bootstrap interval, Cohen's d, the minimum detectable effect, and
+  the reason there are no per-category p-values. The Progress card leads with a
+  monthly figure rather than a weekly one, because nobody budgets by the week.
+- **The Progress page explains itself.** *Checkpoint* sounds like a save file,
+  which is close enough to be dangerous — the obvious guess is that clearing
+  them loses your data — and *Reconstruct history* sounds like it edits the
+  ledger. Neither does. A permanent strip under the toolbar now says what both
+  are in two sentences, a **What is a checkpoint?** button opens the full
+  version, both buttons have tooltips that describe consequences rather than
+  mechanics, and the Reconstruct dialog explains why the no-hindsight rule is
+  the whole point instead of mentioning it in passing. Every one of them states
+  plainly that nothing on this page touches an account, a transaction or a goal.
+- **The dashboard charts have room to move.** The pan/zoom bounds and the
+  opening frame used to be the same rectangle, so the top and right-hand corners
+  had nowhere to travel to and simply stopped responding to the wheel while the
+  point you were trying to inspect sat jammed against an edge. They are now two
+  rectangles: the chart opens on exactly the same view as before, with roughly a
+  third of the chart height of slack above and below it and six weeks past the
+  newest point. The left bound stays tight against the first point, which is
+  what stops a chart being scrolled off into blank space. Maximum zoom-in depth
+  is measured against the drawn data rather than the padded box, so the extra
+  room costs nothing.
+
+**Fixed: the app could not start on a ledger with no transactions in it.** One
+account added, nothing imported yet — the state every new user is in for their
+first few minutes — and the dashboard died with `ufunc 'isfinite' not supported
+for the input types`. pandas infers a SQL result's dtypes from the rows it got
+back, so a query returning *no* rows handed back `object` columns, `amount`
+included. Almost everything downstream then worked by accident: sums still
+added up, because Python floats add, and the frame passed through the entire
+app looking healthy. numpy is less forgiving — `np.isfinite` refuses an object
+array outright, and pyqtgraph calls it from inside a Qt callback, where an
+escaping exception aborts the process rather than raising into anything that
+could catch it. `Store` now declares the dtypes its own schema already knows
+(`transactions`, `snapshots`, `category_feedback`), so a frame leaving the
+store is what it claims to be whether or not there were any rows, and the chart
+layer coerces at the boundary as well, because one dtype surprise should
+produce a wrong-looking chart, never a crash. Note this was only ever visible
+on an empty table: a populated query infers correctly, which is why every demo
+profile and the whole test suite sailed past it.
+
+Also: fixed a test that asserted the sample CSVs reach into the current calendar
+month — true when they were written, false ever since, and a fact about the
+fixture's age rather than about the code.
+
 ## 1.13.0 — typing a number, and owing money
 
 Four things that were harder to use than they needed to be.

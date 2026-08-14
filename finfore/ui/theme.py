@@ -169,6 +169,24 @@ QLabel#ledgerWarning {{
     border-radius: 6px; padding: 9px 12px; font-size: 12px;
 }}
 
+/* The reading surface inside an InfoDialog — "for nerds" panels and the
+   what-does-this-button-do explanations. Inset and slightly darker than the
+   card behind it, so several hundred words read as a document rather than as
+   more dashboard. */
+QTextBrowser#infoBody {{
+    background: {FIELD}; border: 1px solid {BORDER}; border-radius: 8px;
+    padding: 10px 12px;
+}}
+
+/* "A bill went up." News, not an error — nothing is broken and nothing was
+   done wrong, so this is informational blue rather than the amber the ledger
+   warning uses. It still has to catch the eye: the whole point is that the
+   change was invisible on a statement. */
+QLabel#billAlert {{
+    background: #12202E; color: {TEXT}; border: 1px solid {BLUE};
+    border-radius: 6px; padding: 8px 12px; font-size: 12px;
+}}
+
 /* Demo banner. Deliberately loud: a screen full of someone else's money must
    never be mistakable for your own, and a subtle grey note would be. */
 QLabel#demoBanner {{

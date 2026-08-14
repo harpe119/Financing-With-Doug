@@ -269,9 +269,31 @@ The shading is the honest part:
 video on it.
 
 Three reference lines sit on the cash chart: **$0** in red, the **$1,000 starter
-buffer**, and an **emergency fund** sized from your own essential spending. Under
-the chart it reports the chance of dipping below each *at any point*, which is a
-different and more useful question than where you end up.
+buffer**, and an **emergency fund** sized from your own essential spending.
+
+Under the chart, one sentence says whether the money actually runs out. It is
+not a probability, because a probability cannot tell the difference between
+being $5 short on a Thursday and sliding quietly into insolvency — and *"how
+often does the line touch zero"* answers **100%** to both. What it weighs
+instead is how far below zero you go, for how long, and whether it comes back:
+
+| It says | It means |
+|---|---|
+| **Cash holds up** | Nothing goes under. |
+| **Cash gets thin** | Never negative, but the buffer keeps being eaten. |
+| **A short dip, not a shortfall** | It crosses zero by trivial amounts and recovers. Move a payment. |
+| **A tight patch, then it clears** | A real squeeze — deep enough to bounce a payment — on a date, followed by recovery. |
+| **Worth watching** | Some futures go genuinely short, most come back. |
+| **High risk of running out of cash** | Deep *and* not self-correcting. This is the one that means what it says. |
+
+The exact percentages behind all of that are under **🤓 For nerds**.
+
+When the dip is a bounded one, a **What's causing this?** button appears beside
+it. That lists what is actually scheduled to leave in the run-up — rent, a car
+payment, a subscription — says when the next money lands, and offers to move one
+of them past that date. Moving a payment does not make it go away; it is the
+right fix when two things land in the wrong order, and the wrong one when there
+simply is not enough coming in.
 
 Then have a play. Drag the category sliders, add extra loan payments, add a
 **what-if event** for a dated one-off like a new car or a bonus, and watch the
@@ -339,7 +361,68 @@ want to mark a particular moment — just before a big change, say — there is
 
 > **Already have a year of history?** **Progress → Reconstruct history…** builds
 > the missing checkpoints from data you already have, so the page works today
-> instead of in six months.
+> instead of in six months. Each reconstructed one is worked out using *only*
+> the data that existed on its own date, never with hindsight, which is what
+> keeps the page honest about how accurate Doug has actually been.
+
+Nothing on the Progress page touches your money. Taking a checkpoint,
+reconstructing them, or clearing every last one never alters an account, a
+transaction, a goal or an imported row — the **What is a checkpoint?** button
+in the toolbar says so at more length.
+
+### Keeping it up to date
+
+**Help → Check for updates…** asks whether a newer version has been released,
+shows what changed, and — if you want it — downloads and installs it for you.
+The app also checks quietly in the background once a day and stays silent
+unless there is something new.
+
+Updating never touches your accounts, transactions, goals or settings. They are
+stored separately from the program itself, so an update (or even uninstalling
+and reinstalling) picks up exactly where you left off.
+
+### Simple view
+
+The header carries a **Simple view / Everything** switch, and it starts on
+Simple. That puts away the machinery — Monte Carlo path counts, the sensitivity
+and backtest panels, the checkpoint table, the Clear button — and leaves the
+pages to what most people actually want. It hides no findings: the charts, the
+verdicts and every **For nerds** panel stay exactly where they are. Click it
+once for everything, and it is remembered.
+
+### Save a month in review
+
+**File → Save a month in review…** writes one finished month to a single
+printable page: where you stand, what came in and went out, where it went, your
+grade in plain words, anything that changed, and the year ahead. It is a plain
+web page with nothing attached — it opens in any browser, offline, and
+**Ctrl-P** turns it into a PDF you can send to someone who does not have this
+program.
+
+### When a bill goes up on its own
+
+Nobody notices a subscription creeping from $15.49 to $19.49. Doug does: each
+recurring charge is compared against **its own** history, and a blue strip
+appears on the Dashboard when one moves, with **What changed?** for the detail.
+
+The trick is not spotting a change, it is not spotting hundreds. A bill that
+varies by nature — electricity in August, a phone bill with roaming on it — is
+different every month, so a charge has to move by more than three times its own
+usual swing before it is mentioned at all. A subscription that has been the same
+eleven months running has no usual swing, so a two-dollar rise is enormous and
+gets flagged; the power bill mostly stays quiet. Price *cuts* and pay rises are
+reported the same way, as good news.
+
+Switching a pattern off on the **Recurring** page stops it being checked.
+
+### For nerds
+
+The Progress, Forecast and Insights pages each carry a **🤓 For nerds** button.
+The page itself sticks to plain sentences — *yes, you really are spending
+less* — and the button opens the working behind it: p-values, confidence
+intervals, how the permutation test is built, how well-calibrated the forecast
+bands have been, and how the habits grade is put together. Nothing is hidden;
+it is just not in the way.
 
 ---
 

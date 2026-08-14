@@ -15,7 +15,7 @@ from ..insights import (breakdown, monthly_aggregates, spending_score,
 from ..store import Store
 from ..util import fmt_money
 from . import theme
-from .widgets import Card, DonutChart, hint, hsplit, vsplit
+from .widgets import Card, DonutChart, hint, hsplit, nerd_button, vsplit
 
 _KIND_ACCENT = {
     "subscriptions": theme.PURPLE, "trim": theme.AMBER,
@@ -49,6 +49,14 @@ class InsightsPage(QWidget):
 
         # ---- score panel ----
         self.score_card = Card("Spending habits")
+        # The score is two benchmarked sub-scores blended with an interaction
+        # penalty, and saying that on the card helped nobody. What goes on the
+        # card is the grade and the sentence; the ratios, the targets they are
+        # measured against and the weighting live behind the button.
+        nrow = QHBoxLayout()
+        nrow.addStretch(1)
+        nrow.addWidget(nerd_button(self._nerd_panel))
+        self.score_card.body.addLayout(nrow)
         srow = QHBoxLayout()
         srow.setSpacing(18)
         self.grade = QLabel("—")
@@ -84,11 +92,12 @@ class InsightsPage(QWidget):
         self.components.setObjectName("statSub")
         self.components.setWordWrap(True)
         self.explain = hint(
-            "Two things are scored separately: how you spend (wants against "
-            "essentials, benchmarked to the 50/30/20 guideline of 0.60) and how "
-            "you're doing (net income against the 20% savings target). A tight "
-            "month with disciplined spending still grades well; the same "
-            "shortfall caused by discretionary spending does not.")
+            "Two separate things are graded: how you spend — wants measured "
+            "against necessities — and how you're doing — what's left over at "
+            "the end of the month. A tight month with careful spending still "
+            "grades well; the same shortfall caused by wants does not. Both "
+            "are measured against the widely-taught 50/30/20 budget: half your "
+            "income on needs, a third on wants, a fifth saved.")
         # Say how far back this looks, in the terms people actually ask about.
         # "24 months" on its own invites the reading that two years are treated
         # evenly; the half-life is what makes the recent quarter half the answer.
@@ -139,6 +148,17 @@ class InsightsPage(QWidget):
         root.addWidget(vsplit(self.score_card, bottom, sizes=[330, 380]), 1)
 
     # ---------------------------------------------------------------
+    def set_simple(self, on: bool) -> None:
+        """Drop the score's arithmetic; keep the grade and the sentence.
+
+        "how you spend 8.5/10 · how you're doing 4.4/10" is the grade shown
+        working, and the working is only interesting once you already trust the
+        grade. Same for the two-year weighting note. Both are in For nerds.
+        """
+        self._simple = on
+        self.components.setVisible(not on)
+        self.window_note.setVisible(not on)
+
     def refresh(self) -> None:
         tx = self.store.transactions()
         agg = monthly_aggregates(tx)
@@ -153,6 +173,7 @@ class InsightsPage(QWidget):
 
         # score
         sc = spending_score(agg)
+        self._agg, self._score = agg, sc
         col = _grade_color(sc.value)
         self.grade.setText(sc.letter)
         self.grade.setStyleSheet(f"font-size: 58px; font-weight: 700; color: {col};")
@@ -160,12 +181,13 @@ class InsightsPage(QWidget):
         self.means.setText(sc.means_line)
         self.means.setStyleSheet(f"font-size: 17px; font-weight: 600; color: {col};")
         self.detail.setText(sc.detail)
-        pen = (f"   −  overspending penalty {sc.danger_penalty:.1f}"
-               if sc.danger_penalty >= 0.05 else "")
+        # Two plainly-named halves and no acronym. "FESR 0.62 vs 0.60 target"
+        # is a precise statement of something the reader has no unit for; "for
+        # every $1 on necessities you spend 62c on wants" is the same fact in
+        # money they recognise.
         self.components.setText(
-            f"habits (FESR {sc.fesr:.2f} vs 0.60 target)  {sc.habit_component:.1f}/10"
-            f"      means (saving {sc.savings_rate * 100:.0f}% vs 20% target)  "
-            f"{sc.means_component:.1f}/10{pen}")
+            f"how you spend  {sc.habit_component:.1f}/10   ·   "
+            f"how you're doing  {sc.means_component:.1f}/10")
         self.verdict.setText(sc.headline)
         self.verdict.setStyleSheet(f"font-size: 13px; color: {col};")
         self.provisional.setVisible(sc.provisional)
@@ -178,6 +200,80 @@ class InsightsPage(QWidget):
 
         # suggestions
         self._rebuild_suggestions(suggestions(agg, self.store.recurring(), tx))
+
+    # ---------------- for nerds ----------------
+    def _nerd_panel(self) -> tuple[str, str]:
+        """How the grade is actually constructed, for whoever wants to argue."""
+        title = "Habits score · how the grade is built"
+        sc = getattr(self, "_score", None)
+        agg = getattr(self, "_agg", None)
+        if sc is None or agg is None:
+            return title, "<p>Nothing scored yet — import some transactions.</p>"
+        from ..insights import (FESR_TARGET, HALF_LIFE_MONTHS, LOOKBACK_MONTHS,
+                                SAVINGS_TARGET, weight_shares)
+        sh = weight_shares()
+        rows = [
+            "<h3>Two sub-scores, blended</h3>",
+            "<table>",
+            f"<tr><th>Wants ÷ needs (FESR)</th>"
+            f"<td>{sc.fesr:.2f} <span class='m'>· target ≤ "
+            f"{FESR_TARGET:.2f}, the 30/50 of 50/30/20</span></td></tr>",
+            f"<tr><th>→ how you spend</th>"
+            f"<td>{sc.habit_component:.2f} / 10</td></tr>",
+            f"<tr><th>Savings rate</th>"
+            f"<td>{sc.savings_rate * 100:.1f}% <span class='m'>· target "
+            f"{SAVINGS_TARGET * 100:.0f}%</span></td></tr>",
+            f"<tr><th>→ how you're doing</th>"
+            f"<td>{sc.means_component:.2f} / 10</td></tr>",
+            f"<tr><th>Overspending penalty</th>"
+            f"<td>−{sc.danger_penalty:.2f}</td></tr>",
+            f"<tr><th>Final</th><td><b>{sc.value:.2f} / 10 "
+            f"({sc.letter})</b></td></tr>",
+            f"<tr><th>Quadrant</th><td><code>{sc.quadrant}</code></td></tr>",
+            "</table>",
+            f"<p class='m'>The penalty is an interaction term: it only bites "
+            f"when both halves are weak, so a shortfall caused by circumstance "
+            f"is not punished the way the same shortfall caused by "
+            f"discretionary spending is.</p>",
+            f"<p class='m'>FESR compares wants to <i>needs</i> rather than to "
+            f"income on purpose — grading someone against their income "
+            f"punishes a low earner for a circumstance rather than a habit. It "
+            f"is scale-free, though, so wants and needs can inflate together "
+            f"and the ratio still reads as fine; the shares of income are what "
+            f"catch that, and the verdict consults them before blaming or "
+            f"absolving spending habits.</p>",
+            "<h3>The monthly figures being scored</h3><table>",
+            f"<tr><th>Income</th><td>{fmt_money(agg.income)}</td></tr>",
+            f"<tr><th>Necessities</th><td>{fmt_money(agg.essential)}</td></tr>",
+            f"<tr><th>Wants</th><td>{fmt_money(agg.frivolous)}</td></tr>",
+            f"<tr><th>Giving</th><td>{fmt_money(agg.giving)} "
+            f"<span class='m'>· own bucket, kept out of the ratio</span>"
+            f"</td></tr>",
+            f"<tr><th>Not yet categorised</th><td>{fmt_money(agg.unknown)} "
+            f"({sc.unknown_share * 100:.0f}% of spending)</td></tr>",
+            f"<tr><th>Left over</th>"
+            f"<td>{fmt_money(agg.surplus, signed=True)}</td></tr>",
+            "</table>",
+            "<h3>The window</h3>",
+            f"<p>{agg.n_months} complete months contribute, up to "
+            f"{LOOKBACK_MONTHS}, each weighted by an exponential decay with a "
+            f"{HALF_LIFE_MONTHS:.0f}-month half-life. The most recent quarter "
+            f"therefore carries about {sh[3] * 100:.0f}% of the answer, the "
+            f"last six months about {sh[6] * 100:.0f}%, and anything beyond a "
+            f"year is a rounding error.</p>",
+            f"<p class='m'>A hard \"last three months\" window would throw away "
+            f"usable history and put a cliff at the boundary — a big purchase "
+            f"silently stops counting the day it ages out. The decay has no "
+            f"edge to fall off. The current, incomplete month is "
+            f"{'excluded' if agg.partial_current else 'included'}.</p>",
+        ]
+        if sc.provisional:
+            rows.append(
+                f"<p style='color:{theme.AMBER}'>Provisional: "
+                f"{sc.unknown_share * 100:.0f}% of spending is still "
+                f"uncategorised and excluded from the ratio, which is above the "
+                f"25% threshold at which the grade stops being trustworthy.</p>")
+        return title, "".join(rows)
 
     # ---- legend ----
     def _clear_legend(self) -> None:

@@ -78,6 +78,10 @@ def main() -> int:
     if splash:
         splash.hold(win)          # keep it up long enough to actually read
     win.show()
+    # Best-effort, off the GUI thread, at most once a day, and silent unless
+    # there is genuinely something newer. Only in a packaged build — there is
+    # nothing for an installer to replace in a source checkout.
+    win.check_for_updates_quietly()
     return app.exec()
 
 

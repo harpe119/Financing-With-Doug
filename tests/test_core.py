@@ -5,6 +5,7 @@ day-of-month clamping), history reconstruction, and forecast invariants.
 """
 from __future__ import annotations
 
+import copy
 import os
 import sys
 import tempfile
@@ -28,6 +29,9 @@ from finfore.models import Account, AccountType, RecurringItem, Scenario
 from finfore.pipeline import import_csv
 from finfore.recurrence import occurrences
 from finfore.store import Store
+
+
+_APP_EXE = "Financing with Doug.exe"
 
 
 def check(name: str, cond: bool) -> None:
@@ -318,10 +322,27 @@ def main() -> None:
     # aggregates exclude the current partial month and transfers
     agg_demo = monthly_aggregates(store.transactions())
     check("aggregates computed from complete months only",
-          agg_demo is not None and agg_demo.partial_current
-          and agg_demo.n_months >= 1)
+          agg_demo is not None and agg_demo.n_months >= 1)
     check("transfers excluded from spending",
           agg_demo.income > 0 and agg_demo.spending > 0)
+    # The partial-month rule is tested against rows placed here, not against
+    # the demo. The sample CSVs are fixed files with fixed dates, so whether
+    # they happen to reach into the current calendar month depends on how long
+    # ago they were written — which is a fact about the fixture's age, not
+    # about the code, and it silently turned into a failing assertion the
+    # month real time moved past the last sample row.
+    _pm_this = pd.Timestamp(_date.today().replace(day=1))
+    _pm_prev = _pm_this - pd.offsets.MonthBegin(1)
+    _pm = monthly_aggregates(pd.DataFrame([
+        {"account_id": 1, "date": _pm_this, "description": "THIS MONTH",
+         "amount": -900.0, "category": "Dining", "import_hash": "pm1"},
+        {"account_id": 1, "date": _pm_prev, "description": "LAST MONTH",
+         "amount": -100.0, "category": "Dining", "import_hash": "pm2"},
+    ]))
+    check("the current partial month is noticed",
+          _pm is not None and _pm.partial_current)
+    check("but kept out of the monthly average",
+          _pm.n_months == 1 and abs(_pm.frivolous - 100.0) < 1e-6)
 
     print("csv history import + re-import")
     import tempfile as _tf
@@ -536,6 +557,132 @@ def main() -> None:
     _added, _ = _s6.add_transactions(_junk)
     check("add_transactions skips rows with unparseable dates", _added == 0)
 
+    print("an empty ledger still has real numbers in it")
+    # The state every new user is in for their first few minutes: one account
+    # added, nothing imported yet. pandas infers a SQL result's dtypes from the
+    # rows it got back, so a query returning *no* rows handed back `object`
+    # columns — which survived every arithmetic operation in the app (Python
+    # floats add) and then made numpy refuse the array outright. The dashboard
+    # drew that series straight into pyqtgraph, which calls np.isfinite on it
+    # from inside a Qt callback, where an exception aborts the process. The app
+    # crashed on startup with "ufunc 'isfinite' not supported for the input
+    # types" and no clue that an empty table was the cause.
+    _t6b = Path(tempfile.mkdtemp())
+    _s6b = Store(_t6b / "brandnew.db")
+    _empty = _s6b.transactions()
+    check("an empty transactions frame is still typed",
+          _empty.empty and _empty["amount"].dtype == np.float64
+          and _empty["account_id"].dtype == np.int64)
+    _s6b.add_account(Account("C", AccountType.CHECKING, 52.22, date.today()))
+    _nh = networth_history(_s6b)
+    check("and so is the history built from it",
+          len(_nh) > 1
+          and all(_nh[c].dtype == np.float64 for c in _nh.columns))
+    for _c in _nh.columns:
+        # The exact call that aborted the process, on the exact series.
+        np.isfinite(_nh[_c].values)
+    check("so numpy will accept every column of it", True)
+    check("an empty snapshot frame is typed too",
+          _s6b.snapshots(_s6b.accounts()[0].id)["balance"].dtype == np.float64)
+    # And the chart layer refuses to hand pyqtgraph anything it cannot plot,
+    # whatever upstream does — an abort inside a Qt callback is not a failure
+    # mode worth leaving one dtype away.
+    from finfore.ui.charts import nums as _nums
+    check("the chart boundary coerces object arrays to float",
+          _nums(pd.Series([1, 2.5, None], dtype=object)).dtype == np.float64)
+    _s6b.close()
+
+    print("bills that went up while nobody was looking")
+    from finfore import alerts as _AL
+
+    def _series(vals, start_months_ago=None, day=14):
+        """Monthly occurrences ending last month, oldest first."""
+        n = len(vals)
+        out = {}
+        for i, v in enumerate(vals):
+            k = n - 1 - i
+            m = _add_months(_date.today().replace(day=1), -(k + 1))
+            out[_date(m.year, m.month, day)] = float(v)
+        return pd.Series(out).sort_index()
+
+    from finfore.util import add_months as _add_months
+    _sub = RecurringItem(key="NETFLIX|-", name="Netflix", cadence="monthly",
+                         amount=-15.49, last_date=_date.today(), kind="bill")
+    _flat = _AL.detect_change(_sub, _series([-15.49] * 8), _date.today())
+    check("a bill that has not moved is not reported", _flat is None)
+
+    _rise = _AL.detect_change(
+        _sub, _series([-15.49] * 6 + [-19.49] * 2), _date.today())
+    check("a step change on a steady bill is caught",
+          _rise is not None and _rise.worse and _rise.direction == "up")
+    check("reported in money out, not ledger signs",
+          abs(_rise.old_amount - 15.49) < 1e-6
+          and abs(_rise.new_amount - 19.49) < 1e-6
+          and abs(_rise.delta - 4.0) < 1e-6)
+    check("and priced per year at its own cadence",
+          abs(_rise.per_year - 48.0) < 0.5 and _rise.steady)
+    check("the whole run at the new level is one finding, not three",
+          _rise.n_after == 2 and _rise.n_before == 6)
+
+    # The test that matters. A bill that swings by its nature must clear its own
+    # noise, not a fixed threshold — otherwise every August electricity bill is
+    # an alert and nobody reads any of them.
+    _power = RecurringItem(key="ELECTRIC|-", name="Electric", cadence="monthly",
+                           amount=-118.0, last_date=_date.today(), kind="bill")
+    _noisy = [-95.0, -142.0, -108.0, -161.0, -99.0, -134.0, -117.0]
+    check("the same dollar move on a naturally variable bill is not reported",
+          _AL.detect_change(_power, _series(_noisy + [-122.0]),
+                            _date.today()) is None)
+    check("but a move far outside its own swing still is",
+          _AL.detect_change(_power, _series(_noisy + [-260.0]),
+                            _date.today()) is not None)
+
+    _cut = _AL.detect_change(
+        _sub, _series([-19.49] * 6 + [-12.49] * 2), _date.today())
+    check("a bill going down is reported as good news",
+          _cut is not None and not _cut.worse and _cut.direction == "down")
+    _pay = RecurringItem(key="PAYROLL|+", name="Payroll", cadence="monthly",
+                         amount=2650.0, last_date=_date.today(), kind="income")
+    _raise_ = _AL.detect_change(
+        _pay, _series([2650.0] * 6 + [2900.0] * 2), _date.today())
+    check("a pay rise counts as income going the right way",
+          _raise_ is not None and _raise_.is_income and not _raise_.worse)
+    _drop = _AL.detect_change(
+        _pay, _series([2900.0] * 6 + [2650.0] * 2), _date.today())
+    check("and a pay cut as the wrong way", _drop is not None and _drop.worse)
+
+    check("a change too small to matter in a year is left alone",
+          _AL.detect_change(_sub, _series([-15.49] * 6 + [-16.49] * 2),
+                            _date.today()) is None
+          or abs(_AL.detect_change(
+              _sub, _series([-15.49] * 6 + [-16.49] * 2),
+              _date.today()).per_year) >= _AL.MIN_ANNUAL)
+    check("too few occurrences to have a 'usual' says nothing",
+          _AL.detect_change(_sub, _series([-15.49, -15.49, -19.49]),
+                            _date.today()) is None)
+    _stale = _AL.detect_change(
+        _sub, _series([-15.49] * 8 + [-19.49] * 14), _date.today())
+    check("a rise from two years ago is history, not news", _stale is None)
+
+    _t7 = Path(tempfile.mkdtemp())
+    _s7 = Store(_t7 / "shock.db")
+    load_demo(_s7, "struggling")
+    _ch = _AL.bill_changes(_s7)
+    check("the demo ledger's seeded price rises are found",
+          len(_ch) == 2 and all(c.worse for c in _ch))
+    check("worst news first, by yearly cost",
+          abs(_ch[0].per_year) >= abs(_ch[1].per_year))
+    check("and summed into one line for the dashboard",
+          "recurring charges changed" in _AL.summarise(_ch)
+          and abs(_AL.annual_total(_ch) - 144.0) < 1.0)
+    _off = next(i for i in _s7.recurring() if "Netflix" in i.name)
+    _s7.update_recurring(_off.id, active=False)
+    check("switching a pattern off stops it being reported",
+          len(_AL.bill_changes(_s7)) == 1)
+    check("a ledger with no transactions reports nothing",
+          _AL.bill_changes(Store(_t7 / "bare.db")) == [])
+    _s7.close()
+
     print("adaptive categorisation")
     from finfore.learning import (build_chain, predict_one, feedback_key,
                                   record_corrections, training_frame, coverage)
@@ -695,6 +842,154 @@ def main() -> None:
     check("omitting the emergency target drops only that floor",
           set(run_forecast(_s10, 365, 60).cash_breach) == {"zero", "starter"})
     check("starter buffer constant is the $1,000 milestone", _SB == 1000.0)
+
+    print("a dip is not the same thing as a shortfall")
+    from finfore.forecast import (MATERIAL_MIN as _MMIN, SUSTAINED_DAYS as _SD,
+                                  assess_shortfall as _assess)
+    # The case that broke the old headline: $10 in the account, a $15 bill on
+    # Thursday, and a new job paying $100k a month from here on. Every single
+    # path crosses zero and not one of them is in trouble, so "P(cash < 0)"
+    # reported 100% and the page said *high risk of running out of cash*.
+    _nd = 365
+    _rich = np.zeros((50, _nd))
+    _rich[:, :3] = 10.0
+    _rich[:, 3:5] = -5.0
+    _rich[:, 5:] = np.linspace(100_000.0, 1_200_000.0, _nd - 5)
+    _brief = _assess(_rich, essential_monthly=3000.0, horizon_days=_nd)
+    check("a path that crosses zero is still noticed",
+          _brief.prob_any == 1.0)
+    check("but a $5 dip in front of a fortune is not a shortfall",
+          _brief.level == "brief" and _brief.prob_material == 0.0)
+    check("and the sentence says so rather than crying wolf",
+          "not a shortfall" in _brief.headline
+          and "timing" in _brief.detail)
+    check("the dip is described by depth and duration, not just frequency",
+          abs(_brief.median_depth - 5.0) < 1e-6 and _brief.median_days == 2.0)
+    check("the recovery is reported, not buried",
+          _brief.recovers and _brief.end_cash_p50 > 1_000_000.0)
+
+    # The same shape as the toy case but deep enough to bounce a payment:
+    # $10 and a fortnight of groceries before the new salary lands. That is a
+    # real problem for those weeks and emphatically not "running out of cash",
+    # so it gets its own level, a date, and a way out.
+    _squeeze = np.zeros((50, _nd))
+    _squeeze[:, :2] = 10.0
+    _squeeze[:, 2:14] = -600.0
+    _squeeze[:, 14:] = np.linspace(50_000.0, 900_000.0, _nd - 14)
+    _crunch = _assess(_squeeze, essential_monthly=3000.0, horizon_days=_nd,
+                      dates=[_date.today() + timedelta(days=i)
+                             for i in range(_nd)])
+    check("a deep dip that clears is a crunch, not a collapse",
+          _crunch.level == "crunch" and _crunch.prob_material == 1.0)
+    check("it is dated, so it can be planned around",
+          _crunch.low_date is not None
+          and _crunch.low_date.strftime("%B") in _crunch.detail)
+    check("and it says the money comes back",
+          _crunch.recovers and not _crunch.severe
+          and "clears" in _crunch.headline)
+
+    _doom = np.tile(np.linspace(4_000.0, -18_000.0, _nd), (50, 1))
+    _high = _assess(_doom, essential_monthly=3000.0, horizon_days=_nd)
+    check("a genuine slide is still called high risk",
+          _high.level == "high" and _high.prob_unrecovered == 1.0)
+    check("and is not described as recovering",
+          not _high.recovers and _high.severe)
+    # Deep *and* lasting is the intersection that earns the strong wording;
+    # neither one alone does.
+    _lasting = np.full((50, _nd), 800.0)
+    _lasting[:, 30:120] = -4_000.0
+    check("deep and lasting together is the only route to high risk",
+          _assess(_lasting, essential_monthly=3000.0,
+                  horizon_days=_nd).level == "high")
+
+    _fine = np.tile(np.linspace(5_000.0, 40_000.0, _nd), (50, 1))
+    check("cash that never dips is left alone",
+          _assess(_fine, essential_monthly=3000.0).level == "ok")
+    _low = np.tile(np.linspace(900.0, 700.0, _nd), (50, 1))
+    check("a buffer worn down without ever going negative reads as thin",
+          _assess(_low, starter_breach=1.0, essential_monthly=3000.0
+                  ).level == "thin")
+
+    # Shallow but relentless. Depth alone would wave this through; duration is
+    # what catches it.
+    _nag = np.full((50, _nd), 500.0)
+    _nag[:, 100:100 + _SD + 5] = -50.0
+    _nagged = _assess(_nag, essential_monthly=3000.0, horizon_days=_nd)
+    check("two months under water is not a timing problem, however shallow",
+          _nagged.level == "watch" and _nagged.prob_sustained == 1.0)
+
+    # Rare is not the same as small. A dip one path in ten falls into, $1,600
+    # deep and two months long, must not be called brief just because it is
+    # uncommon — the wording for brief asserts the dip is trivial, and it has
+    # to be true.
+    _rare = np.full((40, _nd), 3_000.0)
+    _rare[:4, 60:120] = -1_600.0
+    _rarely = _assess(_rare, essential_monthly=3000.0, horizon_days=_nd)
+    check("a rare dip is judged on its own depth, not its frequency",
+          _rarely.prob_any == 0.10 and _rarely.level == "watch")
+
+    check("materiality scales with what a day of living actually costs",
+          _assess(_rich, essential_monthly=90_000.0).material > 5_000.0
+          and _assess(_rich).material == _MMIN)
+    check("a trivial dip does not get a date attached to it",
+          run_forecast(_s10, 365, 60).first_breach_day is None
+          or _fr.cash_breach["zero"] > 0)
+
+    print("naming what causes a squeeze")
+    from finfore.forecast import (MAX_CAUSE_WINDOW as _MCW, crunch_causes,
+                                  scheduled_flows)
+    _low = _date.today() + timedelta(days=200)
+    _flows = scheduled_flows(_s10, _low - timedelta(days=30),
+                             _low + timedelta(days=30))
+    check("the projection can name its own dated flows",
+          _flows and all(f.when <= _low + timedelta(days=30) for f in _flows))
+    check("they arrive in date order",
+          all(a.when <= b.when for a, b in zip(_flows, _flows[1:])))
+    check("both directions are represented",
+          any(f.is_out for f in _flows) and any(not f.is_out for f in _flows))
+    check("a pay cheque is not offered as something to reschedule",
+          all(not f.movable for f in _flows if not f.is_out))
+    check("but a bill is",
+          any(f.movable for f in _flows
+              if f.is_out and f.source == "recurring"))
+    _causes, _next_in = crunch_causes(_s10, _low, 5.0)
+    check("causes are the outflows before the low point, biggest first",
+          _causes and all(c.is_out and c.when <= _low for c in _causes)
+          and all(a.amount <= b.amount for a, b in zip(_causes, _causes[1:])))
+    check("and the next money in is dated after it",
+          _next_in is None or _next_in.when > _low)
+    # Attribution is meaningless over a long window: "every rent payment since
+    # 2026" is true, is not a cause, and is not something anyone can move.
+    _wide = crunch_causes(_s10, _low, 5000.0)[0]
+    check("the look-back is capped however long the dip is",
+          all(c.when >= _low - timedelta(days=_MCW + 1) for c in _wide))
+
+    # Deactivating a detected loan payment does not stop the loan being
+    # amortised — the engine falls back to the account's own monthly_payment —
+    # so the attribution list must not quietly lose the largest fixed outflow
+    # of the month along with the pattern.
+    _loan_item = next((i for i in _s10.recurring()
+                       if i.kind == "loan_payment" and i.linked_account_id),
+                      None)
+    if _loan_item is not None:
+        _win_a, _win_b = _date.today(), _date.today() + timedelta(days=60)
+        _lf = lambda: [f for f in scheduled_flows(_s10, _win_a, _win_b)
+                       if f.source == "loan"]
+        _before = len(_lf())
+        _s10.update_recurring(_loan_item.id, active=False)
+        check("a loan payment survives its pattern being switched off",
+              _before > 0 and len(_lf()) == _before)
+        _s10.update_recurring(_loan_item.id, active=True)
+
+    _verdict = run_forecast(_s10, 730, 200, emergency_target=_ef3,
+                            essential_monthly=_ess)
+    check("every forecast carries a verdict, not just a probability",
+          _verdict.shortfall is not None
+          and _verdict.shortfall.level in ("ok", "thin", "brief", "crunch",
+                                           "watch", "high"))
+    check("and states it in a sentence, in the engine rather than the page",
+          len(_verdict.shortfall.headline) > 10
+          and len(_verdict.shortfall.detail) > 40)
 
     print("fat tails, runway, what-if events")
     from finfore.forecast import (_shocks, sensitivity, backtest_cash, T_DOF)
@@ -870,21 +1165,36 @@ def main() -> None:
     _ys = np.array([100.0, 250.0, 175.0])
     _charts.lock_view(_plot, 0.0, 100.0 * 86400.0, [_ys])
     _lim = _plot.getViewBox().state["limits"]
-    check("locking bounds both axes",
-          all(v is not None for v in _lim["xLimits"] + _lim["yLimits"]))
-    check("the y bounds contain the data with headroom",
-          _lim["yLimits"][0] < 100.0 and _lim["yLimits"][1] > 250.0)
+    _, (_y0, _y1) = _plot.getViewBox().viewRange()
+    check("locking bounds time", all(v is not None for v in _lim["xLimits"]))
+    # Money is deliberately unbounded: clamping it made a view stretched with a
+    # right-drag snap back to the data on the next scroll, undoing the gesture.
+    check("but deliberately leaves money unbounded",
+          _lim["yLimits"] == [None, None]
+          and _lim["yRange"] == [None, None])
+    check("the opening frame contains the data with headroom",
+          _y0 < 100.0 and _y1 > 250.0)
     check("zoom-out is capped at the full extent",
-          _lim["xRange"][1] is not None and _lim["yRange"][1] is not None)
+          _lim["xRange"][1] is not None)
     check("zoom-in is capped so a wheel-scroll cannot reach one pixel",
           _lim["xRange"][0] is not None)
     _charts.lock_view(_plot, 0.0, 100.0 * 86400.0, [_ys], include_y=[0.0])
-    check("a nearby reference floor is pulled into view",
-          _plot.getViewBox().state["limits"]["yLimits"][0] <= 0.0)
+    check("a nearby reference floor is pulled into the opening frame",
+          _plot.getViewBox().viewRange()[1][0] <= 0.0)
     _charts.lock_view(_plot, 0.0, 100.0 * 86400.0, [_ys + 500_000.0],
                       include_y=[0.0])
     check("a far-away floor is left out rather than flattening the data",
-          _plot.getViewBox().state["limits"]["yLimits"][0] > 1000.0)
+          _plot.getViewBox().viewRange()[1][0] > 1000.0)
+    # Unbounded y would be a trap without a way back, because this app hides
+    # pyqtgraph's auto-range button and its context menu.
+    _vb_home = _plot.getViewBox()
+    _vb_home.setRange(yRange=(-9e6, 9e6), padding=0)
+
+    class _Ev:                       # QGraphicsSceneMouseEvent cannot be built
+        def accept(self): pass       # from Python; the handler only accepts it
+    _vb_home.mouseDoubleClickEvent(_Ev())
+    check("double-click puts a chart back where it opened",
+          abs(_plot.getViewBox().viewRange()[1][0] - 500_000.0) < 5_000.0)
     _charts.unlock_view(_plot)
     check("unlocking clears the bounds",
           _plot.getViewBox().state["limits"]["xLimits"] == [None, None])
@@ -913,11 +1223,9 @@ def main() -> None:
     check("and zoom-out still spans the whole ledger",
           _lim["xRange"][1] >= (_lim["xLimits"][1] - _lim["xLimits"][0]) - 1.0)
     check("the opening y-range is scaled to that window, not the whole run",
-          (_vy1 - _vy0) < 0.5 * (_lim["yLimits"][1] - _lim["yLimits"][0]))
+          (_vy1 - _vy0) < 0.5 * (_long.max() - _long.min()))
     check("with every recent point inside it",
           _vy0 <= _long[-365:].min() and _vy1 >= _long[-365:].max())
-    check("while the y bounds still cover the oldest values",
-          _lim["yLimits"][0] <= _long.min())
     _charts.lock_view(_plot, float(_x[0]), float(_x[-1]), [_long],
                       initial_days=_charts.HISTORY_INITIAL_DAYS, x_data=_x,
                       zoom_y=False)
@@ -931,6 +1239,28 @@ def main() -> None:
     (_sx0, _sx1), _ = _plot.getViewBox().viewRange()
     check("a history shorter than the window is shown whole",
           _sx0 <= float(_short_x[0]) and _sx1 >= float(_short_x[-1]))
+    _charts.unlock_view(_plot)
+
+    # Cushion. Framing and travel used to be the same rectangle, so the newest
+    # point had nowhere to move to and would not zoom. Zoomed all the way out
+    # the ledger should now sit in the left half of the chart.
+    _cy = np.array([100.0, 250.0, 175.0])
+    _cspan = 100.0 * _day
+    _charts.lock_view(_plot, 0.0, _cspan, [_cy])
+    _lim = _plot.getViewBox().state["limits"]
+    (_cvx0, _cvx1), _ = _plot.getViewBox().viewRange()
+    check("the view still opens framed on the data, not on the cushion",
+          _cvx1 < _lim["xLimits"][1])
+    check("the left edge stays tight against the first point",
+          abs(_lim["xLimits"][0] - _cvx0) < 1.0)
+    check("zoomed fully out, the ledger occupies the left half",
+          abs((_lim["xLimits"][1] - _lim["xLimits"][0]) - 2 * _cspan)
+          < 0.06 * _cspan)
+    check("zoom-out reaches the whole cushioned span",
+          abs(_lim["xRange"][1]
+              - (_lim["xLimits"][1] - _lim["xLimits"][0])) < 1.0)
+    check("a very short chart still gets six weeks of room",
+          _charts.SLACK_RIGHT_DAYS >= 45.0)
     _charts.unlock_view(_plot)
 
     print("forecast leads with the projection")
@@ -1633,7 +1963,9 @@ def main() -> None:
     for _lbl in ("Add account", "Import CSV…", "Review uncategorized…",
                  "Add goal…", "Add emergency fund…", "Update from CSV…",
                  "Reconstruct history…", "Load demo dataset",
-                 "Return to my own data", "Take a checkpoint now"):
+                 "Return to my own data", "Take a checkpoint now",
+                 "Save a month in review…", "What changed?",
+                 "What's causing this?", "Simple view"):
         check(f"guide and app agree on {_lbl!r}",
               _lbl in _gt and _lbl in _ui_src)
     for _pg in ("Dashboard", "Accounts", "Transactions", "Recurring",
@@ -2071,6 +2403,360 @@ def main() -> None:
     check("the real balance is untouched",
           abs(_win.store.accounts()[0].balance - 1234.56) < 1e-9)
     check("the demo banner is gone", _win.banner.isHidden())
+
+    print("a month that can leave the app")
+    from finfore import report as _RP
+    _rp_store = Store(Path(tempfile.mkdtemp()) / "rep.db")
+    load_demo(_rp_store, "struggling")
+    _lcm = _RP.last_complete_month(_date(2026, 8, 13))
+    check("the month covered is the last finished one, never a part-month",
+          _lcm == _date(2026, 7, 1))
+    _rep = _RP.build(_rp_store)
+    check("it reports a real month of activity",
+          _rep.n_transactions > 10 and _rep.income > 0 and _rep.spending > 0)
+    check("with a category breakdown, ranked",
+          _rep.categories
+          and all(a[1] >= b[1] for a, b in zip(_rep.categories,
+                                               _rep.categories[1:])))
+    check("the grade and the outlook come along",
+          _rep.grade and _rep.outlook_head)
+    check("and so does anything that changed", len(_rep.changes) == 2)
+    _html = _RP.render_html(_rep)
+    check("it renders as one self-contained page",
+          _html.startswith("<!DOCTYPE html")
+          and "<style>" in _html and _html.rstrip().endswith("</html>"))
+    # The whole point is that it survives leaving this machine.
+    for _bad in ("<script", "http://", "https://", "src=", "@import"):
+        check(f"nothing fetched or executed: no {_bad!r}",
+              _bad not in _html.lower())
+    check("it prints on paper, so it is styled light",
+          "@media print" in _html and "background: #fff" in _html)
+    check("and it says whose data it is and what it is not",
+          "your own records" in _html and "not financial advice" in _html)
+    _rp_path = Path(tempfile.mkdtemp()) / "m.html"
+    _RP.write_html(_rp_store, _rp_path, with_outlook=False)
+    check("writing it produces a readable file",
+          _rp_path.exists() and _rp_path.stat().st_size > 2000)
+    check("a merchant named like markup cannot break the page",
+          "&lt;b&gt;" in _RP.render_html(
+              _RP.MonthReport(month=_date(2026, 7, 1), generated=_date.today(),
+                              grade="A", grade_line="<b>hi</b>",
+                              grade_detail="x")))
+    _rp_store.close()
+
+    print("the dashboard can give the history the whole page")
+    _dash = _win.pages[0]
+    _win.nav.setCurrentRow(0)
+    _open = list(_dash.split.sizes())
+    check("the bottom charts start open",
+          _dash.flow_card.expanded and _dash.cat_card.expanded)
+    _dash.flow_card.set_expanded(False)
+    _dash.cat_card.set_expanded(False)
+    _dash._sync_split()
+    _folded = list(_dash.split.sizes())
+    check("folding both hides their plots",
+          not _dash.plot_flow.isVisibleTo(_dash)
+          and not _dash.plot_cat.isVisibleTo(_dash))
+    # The freed height has to go somewhere, or folding buys nothing: a splitter
+    # keeps the sizes it was given and would leave two strips floating in a
+    # full-height pane. Measured as a share of the page, because a splitter
+    # rescales its panes to whatever geometry it actually has and the absolute
+    # pixel counts are not comparable across a relayout.
+    _share = lambda s: s[0] / max(1, sum(s))
+    check("and hands the height to the net worth history",
+          _share(_folded) > _share(_open) and _share(_folded) > 0.85
+          and _folded[1] < _open[1])
+    _dash.flow_card.set_expanded(True)
+    _dash._sync_split()
+    check("reopening one gives the room back",
+          _dash.plot_flow.isVisibleTo(_dash)
+          and _dash.split.sizes()[1] > _folded[1])
+    _dash.refresh()
+    check("a redraw does not silently unfold them",
+          not _dash.cat_card.expanded)
+
+    print("simple view hides the machinery, not the answer")
+    _pg_by_name = {type(p).__name__: p for p in _win.pages}
+    _fcp, _prp, _insp = (_pg_by_name["ForecastPage"], _pg_by_name["ProgressPage"],
+                         _pg_by_name["InsightsPage"])
+    check("it defaults to simple, because a default nobody finds is not one",
+          _win.simple_mode is True)
+    _win._apply_mode(refresh=False)
+    check("the advanced forecast controls are put away",
+          not _fcp.paths_row.isVisibleTo(_fcp)
+          and not _fcp.debt_card.isVisibleTo(_fcp)
+          and not _fcp.view_row.isVisibleTo(_fcp))
+    check("and the destructive Progress button with them",
+          not _prp.clear_btn.isVisibleTo(_prp)
+          and not _prp.table_card.isVisibleTo(_prp))
+    check("and the score's arithmetic on Insights",
+          not _insp.components.isVisibleTo(_insp))
+    # The answer itself must never be what gets hidden.
+    check("but the cash chart, the verdict and For nerds all stay",
+          _fcp.cash_card.isVisibleTo(_fcp) and _fcp.risk.isVisibleTo(_fcp)
+          and _fcp.horizon.isVisibleTo(_fcp))
+    _win._toggle_mode()
+    check("toggling brings everything back",
+          _win.simple_mode is False
+          and _fcp.paths_row.isVisibleTo(_fcp)
+          and _prp.clear_btn.isVisibleTo(_prp)
+          and _insp.components.isVisibleTo(_insp))
+    check("and the header button says which face is on",
+          _win.mode_btn.text() == "Everything")
+    _win._toggle_mode()
+    check("and back again", _win.simple_mode is True
+          and _win.mode_btn.text() == "Simple view")
+
+    print("for nerds: the maths is one click away, not on the page")
+    from finfore.ui.widgets import InfoDialog as _Info
+    _win._load_demo("thriving", confirm=False)
+    _pages = {type(p).__name__: p for p in _win.pages}
+    _fc, _pr, _ins = (_pages["ForecastPage"], _pages["ProgressPage"],
+                      _pages["InsightsPage"])
+    for _p in (_ins, _fc):
+        _p.refresh()
+    from finfore.progress import backfill as _bf
+    _bf(_win.store, n=3, spacing_days=70, n_paths=60)
+    _pr.refresh()
+
+    _panels = {"forecast": _fc._nerd_panel(), "progress": _pr._nerd_panel(),
+               "insights": _ins._nerd_panel()}
+    for _name, (_title, _html) in _panels.items():
+        check(f"the {_name} page can explain itself",
+              len(_title) > 5 and len(_html) > 400)
+        _d = _Info(_title, _html)
+        check(f"and the {_name} panel renders as prose, not markup",
+              len(_d.view.toPlainText()) > 200 and "<p>" not in
+              _d.view.toPlainText())
+        _d.close()
+    check("the p-value is in the nerd panel",
+          "p-value" in _panels["progress"][1])
+    check("with the permutation count and the effect size beside it",
+          "20,000" in _panels["progress"][1]
+          and "Cohen" in _panels["progress"][1])
+    check("and the calibration fractions moved there too",
+          "nominal 80%" in _panels["progress"][1])
+    check("the forecast panel carries the shortfall breakdown",
+          "materiality threshold" in _panels["forecast"][1]
+          and "Monte Carlo paths" in _panels["forecast"][1])
+    check("and the insights panel carries FESR",
+          "FESR" in _panels["insights"][1])
+
+    # …and is gone from the page itself. These are the exact strings that used
+    # to greet somebody's sibling on arrival.
+    check("no p-value on the Progress page",
+          "p = " not in _pr.sig_body.text()
+          and "p = " not in _pr.card_spend.sub.text())
+    check("no percentile jargon in the path verdict",
+          "P50" not in _pr.path_note.text()
+          and "calibrated" not in _pr.path_note.text())
+    check("no FESR on the Insights page",
+          "FESR" not in _ins.components.text())
+    check("the risk line leads with a verdict, not a percentage",
+          _fc.risk.text()[:1].isalpha()
+          and _fc._res.shortfall.headline in _fc.risk.text())
+
+    print("and the cash line says what is draining it")
+    from finfore.ui.forecast_page import CrunchDialog as _CD
+    # Every ledger whose cash goes under gets the button. It was briefly gated
+    # to short dips, which hid it on three of the five demo profiles and on any
+    # real ledger in trouble — the exact people with the question.
+    _sf = _fc._res.shortfall
+    check("the button appears whenever the cash line goes under",
+          _fc.cause_btn.isVisibleTo(_fc) ==
+          (_sf.low_date is not None
+           and _sf.level in ("brief", "crunch", "watch", "high")))
+    # Built from its own store rather than from whatever demo the window is
+    # showing, so the two branches are exercised deterministically.
+    _cs = Store(Path(tempfile.mkdtemp()) / "causes.db")
+    load_demo(_cs, "struggling")
+    _csf = run_forecast(_cs, 1095, 200,
+                        essential_monthly=essential_monthly(_cs)).shortfall
+    check("a ledger spending more than it earns reads as structural",
+          _csf.level == "high" and _csf.median_days > 60)
+    _cc, _nn = crunch_causes(_cs, _csf.low_date, _csf.median_days)
+    _dlg = _CD(_cs, _csf, _cc, _nn)
+    check("a structural shortfall still gets its commitments listed",
+          not _dlg.timing and len(_cc) > 0)
+    # Offering "move this bill" to somebody spending more than they earn is the
+    # app recommending a fix it knows does not work.
+    check("but is not offered rescheduling as a fix", _dlg._movers == [])
+    _dlg.close()
+    _tsf = copy.copy(_csf)
+    _tsf.level, _tsf.median_days = "crunch", 4.0
+    _tdlg = _CD(_cs, _tsf, _cc, _nn)
+    check("a timing problem is offered it, on the movable items only",
+          _tdlg.timing and _tdlg._movers
+          and all(f.movable for f, _d, _b in _tdlg._movers))
+    _tdlg.close()
+    _cs.close()
+
+    print("the Progress page says what a checkpoint is")
+    from PyQt6.QtWidgets import QLabel as _QLabel
+    from finfore.ui.progress_page import _WHAT_IS_THIS as _WIT
+    _pp_src = (Path(__file__).resolve().parent.parent / "finfore" / "ui"
+               / "progress_page.py").read_text(encoding="utf-8")
+    for _phrase in ("dated snapshot", "every time you import a CSV",
+                    "only from data that existed", "Reconstruct history"):
+        check(f"the long explanation covers {_phrase!r}", _phrase in _WIT)
+    check("it promises the ledger is not touched",
+          "never" in _WIT and "transaction" in _WIT)
+    check("and is reachable without pressing anything destructive",
+          "What is a checkpoint?" in _pp_src)
+    # The short version has to be on the page unprompted: a caption that only
+    # appears when the page is empty is only ever read by people who cannot yet
+    # use it.
+    check("the short version sits under the toolbar at all times",
+          any("dated snapshot" in w.text() and w.isVisibleTo(_pr)
+              for w in _pr.findChildren(_QLabel)))
+    check("the buttons explain themselves in their tooltips",
+          "never changes it" in _pp_src
+          and "clean line to measure from" in _pp_src)
+    _win.return_to_real()
+
+    print("checking for updates")
+    from finfore import update as _UP
+    for _a, _b, _want in [
+            ("1.15.2", "1.15.1", True), ("1.15.1", "1.15.1", False),
+            ("1.15.0", "1.15.1", False), ("1.16", "1.15.9", True),
+            ("1.15.1", "1.15", True), ("2.0.0", "1.99.99", True),
+            ("v1.16.0", "1.15.1", True), ("1.9.0", "1.10.0", False)]:
+        check(f"{_a} {'>' if _want else 'is not >'} {_b}",
+              _UP.is_newer(_a, _b) is _want)
+    # The failure mode of a malformed tag must be "offer nothing", never
+    # "offer everything" — this decides whether an executable gets downloaded.
+    check("an unparseable tag is never newer",
+          not _UP.is_newer("nightly", "1.15.1")
+          and not _UP.is_newer("", "1.15.1"))
+    check("version parsing tolerates the usual tag spellings",
+          _UP.parse_version("v1.15.1") == (1, 15, 1)
+          and _UP.parse_version("release-2.3") == (2, 3)
+          and _UP.parse_version("nonsense") == ())
+
+    # Asset picking, against a GitHub payload shaped like the real one.
+    _payload = {
+        "tag_name": "v1.16.0", "name": "1.16.0", "body": "# Notes\nthings",
+        "html_url": "https://github.com/o/r/releases/tag/v1.16.0",
+        "published_at": "2026-09-01T10:00:00Z",
+        "assets": [
+            {"name": "SHA256SUMS.txt", "size": 90,
+             "browser_download_url": "https://github.com/o/r/releases/download/v1.16.0/SHA256SUMS.txt"},
+            {"name": "FinancingWithDoug-1.16.0-Setup.exe", "size": 41943040,
+             "browser_download_url": "https://github.com/o/r/releases/download/v1.16.0/FinancingWithDoug-1.16.0-Setup.exe"},
+            {"name": "source.zip", "size": 10,
+             "browser_download_url": "https://github.com/o/r/releases/download/v1.16.0/source.zip"},
+        ]}
+    _rel = _UP._release_from(_payload)
+    check("the installer is picked out of the release assets",
+          _rel.has_installer and _rel.asset_name.endswith("-Setup.exe")
+          and abs(_rel.size_mb - 40.0) < 0.1)
+    check("the checksum file is found alongside it",
+          _rel.checksums_url.endswith("SHA256SUMS.txt"))
+    check("the tag's v prefix is stripped for display",
+          _rel.version == "1.16.0" and _rel.published == _date(2026, 9, 1))
+    check("the notes and the page link come through",
+          "things" in _rel.notes and _rel.page_url.startswith("https://github.com/"))
+
+    # An updater downloads and runs an executable, so where it will fetch from
+    # is not a detail. Anything off the known hosts is refused, not followed.
+    check("only GitHub's own hosts are ever fetched from",
+          _UP._host_ok("https://github.com/o/r/x.exe")
+          and _UP._host_ok("https://objects.githubusercontent.com/x")
+          and not _UP._host_ok("https://evil.example.com/x.exe")
+          and not _UP._host_ok("http://github.com/o/r/x.exe"))
+    check("an asset served from anywhere else is dropped, not offered",
+          not _UP._release_from({
+              "tag_name": "v9.9.9", "assets": [
+                  {"name": "evil-Setup.exe", "size": 1,
+                   "browser_download_url": "https://evil.example.com/evil-Setup.exe"}]
+          }).has_installer)
+    check("a release with no installer attached says so",
+          not _UP._release_from({"tag_name": "v1.16.0"}).has_installer)
+    # GitHub answers 404 both for "no releases yet" and for "you cannot see
+    # this repository". Conflating them is the worst bug this module could
+    # have: a private repo would report every installed copy as up to date,
+    # for ever, silently, and nobody would find out until somebody mentioned
+    # they were still on an old version. Both branches are exercised with the
+    # network stubbed out, so the test says the same thing on a train.
+    import io as _io
+    import urllib.error as _ue
+    _real_open = _UP._open
+
+    def _stub(visible):
+        def _fake(url, timeout=_UP.TIMEOUT):
+            if url.endswith("/releases/latest"):
+                raise _ue.HTTPError(url, 404, "Not Found", None, None)
+            if visible:
+                return _io.BytesIO(b'{"full_name":"o/r"}')
+            raise _ue.HTTPError(url, 404, "Not Found", None, None)
+        return _fake
+    try:
+        _UP._open = _stub(visible=True)
+        check("a visible repo with no releases reads as 'nothing newer'",
+              _UP.latest_release(owner="o", repo="r") is None)
+        _UP._open = _stub(visible=False)
+        _msg = ""
+        try:
+            _UP.latest_release(owner="o", repo="r")
+        except _UP.UpdateError as e:
+            _msg = str(e)
+        check("an invisible one is reported, never as 'up to date'",
+              "Can't see" in _msg and "private" in _msg)
+    finally:
+        _UP._open = _real_open
+
+    def _stub_code(code):
+        def _fake(url, timeout=_UP.TIMEOUT):
+            raise _ue.HTTPError(url, code, "nope", None, None)
+        return _fake
+    try:
+        _UP._open = _stub_code(403)
+        _msg = ""
+        try:
+            _UP.latest_release(owner="o", repo="r")
+        except _UP.UpdateError as e:
+            _msg = str(e)
+        check("being rate-limited says so rather than blaming the network",
+              "rate-limit" in _msg)
+    finally:
+        _UP._open = _real_open
+    # With the constants blanked, so this says the same thing whether or not
+    # this checkout has been pointed at a repository yet.
+    _saved_owner, _saved_repo = _UP.GITHUB_OWNER, _UP.GITHUB_REPO
+    try:
+        _UP.GITHUB_OWNER, _UP.GITHUB_REPO = "", ""
+        check("an unconfigured build reports itself as such",
+              not _UP.configured())
+        _fetched = []
+        try:
+            _UP.latest_release()
+        except _UP.UpdateError as e:
+            _fetched.append(str(e))
+        check("and asking anyway raises a message meant for a human",
+              _fetched and "GITHUB_OWNER" in _fetched[0])
+    finally:
+        _UP.GITHUB_OWNER, _UP.GITHUB_REPO = _saved_owner, _saved_repo
+
+    # Packaging: the installer script and the build script have to agree with
+    # the app about its own name and version, or the updater compares the wrong
+    # things and the shortcut points at nothing.
+    _pkg = Path(__file__).resolve().parent.parent / "packaging"
+    _iss = (_pkg / "installer.iss").read_text(encoding="utf-8")
+    check("an Inno Setup script ships with the project", len(_iss) > 500)
+    check("it installs the executable PyInstaller actually produces",
+          f'"{_APP_EXE}"' in _iss.replace("{#ExeName}", _APP_EXE))
+    check("it takes its version from the build rather than hard-coding one",
+          "AppVersion={#AppVersion}" in _iss and "#ifndef AppVersion" in _iss)
+    check("it needs no administrator rights, so nobody has to ring you",
+          "PrivilegesRequired=lowest" in _iss)
+    check("and it does not delete the ledger on uninstall",
+          ".ledgerline" in _iss and "will NOT be deleted" in _iss)
+    _ps1 = (_pkg / "build.ps1").read_text(encoding="utf-8")
+    check("the build script reads the version from one place",
+          "__version__" in _ps1 and "DAppVersion=$version" in _ps1)
+    check("runs the tests before shipping anything", "test_core.py" in _ps1)
+    check("and publishes the checksum the updater looks for",
+          "SHA256SUMS.txt" in _ps1 and "SHA256" in _ps1)
 
     print("splash & chart floors")
     from finfore.ui.splash import DOUG_LINES, DOUG_FACTS, doug_fact

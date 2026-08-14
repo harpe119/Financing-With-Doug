@@ -3,10 +3,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import QSettings, Qt
 from PyQt6.QtGui import QAction
 from PyQt6.QtWidgets import (QApplication, QHBoxLayout, QLabel, QListWidget,
-                             QMainWindow, QMessageBox, QSizePolicy,
+                             QMainWindow, QMessageBox, QPushButton, QSizePolicy,
                              QStackedWidget, QVBoxLayout, QWidget)
 
 from ..history import headline_stats
@@ -91,12 +91,31 @@ class MainWindow(QMainWindow):
         tag.setObjectName("appTag")
         self.header_nw = QLabel("")
         self.header_nw.setObjectName("appTag")
+
+        # Simple / Everything. The app has grown a lot of controls that are
+        # genuinely useful to the person who built it and pure noise to the
+        # person who was handed it — Monte Carlo path counts, a backtest panel,
+        # a destructive Clear button. Hiding them is not dumbing the app down:
+        # every number they produce is still reachable, and the toggle is one
+        # click away in the header rather than buried in a preferences dialog.
+        #
+        # It defaults to Simple. The app's whole stated purpose is to be
+        # approachable to someone's family, and a default that has to be
+        # discovered is a default that will not be. Flipping it is remembered.
+        self.mode_btn = QPushButton("")
+        self.mode_btn.setObjectName("small")
+        self.mode_btn.setCheckable(True)
+        self.mode_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.mode_btn.clicked.connect(self._toggle_mode)
+
         hl.addWidget(title)
         hl.addSpacing(6)
         hl.addWidget(ver)
         hl.addSpacing(10)
         hl.addWidget(tag)
         hl.addStretch(1)
+        hl.addWidget(self.mode_btn)
+        hl.addSpacing(10)
         hl.addWidget(self.header_nw)
         outer.addWidget(header)
 
@@ -141,10 +160,50 @@ class MainWindow(QMainWindow):
 
         self.setCentralWidget(central)
         self.nav.currentRowChanged.connect(self._on_nav)
+
+        self._settings = QSettings("Doug", "Financing with Doug")
+        self.simple_mode = self._settings.value("simple_mode", True, type=bool)
+        self._apply_mode(refresh=False)
         self.nav.setCurrentRow(0)
 
         self._build_menu()
         self.statusBar().showMessage(f"Database: {store.path}")
+
+    # ---------------------------------------------------------------
+    def _toggle_mode(self) -> None:
+        self.simple_mode = not self.simple_mode
+        self._settings.setValue("simple_mode", self.simple_mode)
+        self._apply_mode()
+        self.status("Simple view — the advanced panels are hidden, and every "
+                    "number they produce is still under For nerds."
+                    if self.simple_mode else
+                    "Everything shown.")
+
+    def _apply_mode(self, refresh: bool = True) -> None:
+        """Tell every page which face to wear.
+
+        Pages opt in by defining ``set_simple``; the ones that are already a
+        single task — Accounts, Transactions — have nothing to hide and simply
+        do not implement it.
+        """
+        on = self.simple_mode
+        self.mode_btn.setChecked(not on)
+        self.mode_btn.setText("Simple view" if on else "Everything")
+        self.mode_btn.setToolTip(
+            "Showing the essentials. Click for the advanced panels — path "
+            "counts, sensitivity, backtesting, checkpoint tables."
+            if on else
+            "Showing everything. Click to hide the advanced panels and keep "
+            "the pages to what most people need.")
+        for p in self.pages:
+            fn = getattr(p, "set_simple", None)
+            if fn is not None:
+                try:
+                    fn(on)
+                except Exception:
+                    pass          # a page that cannot simplify must still work
+        if refresh:
+            self.refresh_current()
 
     # ---------------------------------------------------------------
     def _build_menu(self) -> None:
@@ -175,6 +234,13 @@ class MainWindow(QMainWindow):
         m_file.addAction(self.a_back)
         m_file.addSeparator()
 
+        a_report = QAction("Save a month in review…", self)
+        a_report.setToolTip("One printable page about a finished month, in "
+                            "plain language, that can leave this app")
+        a_report.triggered.connect(self.save_month_report)
+        m_file.addAction(a_report)
+        m_file.addSeparator()
+
         a_reset = QAction("Reset all data…", self)
         a_reset.triggered.connect(self._reset)
         a_quit = QAction("Quit", self)
@@ -188,6 +254,12 @@ class MainWindow(QMainWindow):
         a_guide.setShortcut("F1")
         a_guide.triggered.connect(self.show_guide)
         m_help.addAction(a_guide)
+        m_help.addSeparator()
+        a_update = QAction("Check for updates…", self)
+        a_update.setToolTip("Ask GitHub whether a newer version has been "
+                            "released, and install it if so")
+        a_update.triggered.connect(self.check_for_updates)
+        m_help.addAction(a_update)
         m_help.addSeparator()
         a_meth = QAction("Methodology", self)
         a_meth.triggered.connect(self._methodology)
@@ -375,6 +447,57 @@ class MainWindow(QMainWindow):
             f"File → Return to my own data.")
         self.banner.setVisible(True)
 
+    # ---------------- month in review ----------------
+    def save_month_report(self) -> None:
+        """Write one finished month to a page that can be printed or sent.
+
+        HTML rather than a print dialog on purpose: it opens in any browser on
+        any machine with nothing installed, Ctrl-P turns it into a PDF, and it
+        can be emailed to a partner who does not have this program. A print
+        dialog would produce paper and nothing else.
+        """
+        from PyQt6.QtWidgets import QFileDialog
+        from .. import report as _report
+
+        if not self.store.accounts() and self.store.transactions().empty:
+            QMessageBox.information(
+                self, "Nothing to report yet",
+                "Import a month of transactions first — there is nothing to "
+                "review.")
+            return
+        month = _report.last_complete_month()
+        default = Path.home() / f"month-in-review-{month:%Y-%m}.html"
+        path, _ = QFileDialog.getSaveFileName(
+            self, f"Save {month:%B %Y} in review", str(default),
+            "Web page (*.html)")
+        if not path:
+            return
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            _report.write_html(self.store, path, month)
+        except Exception as e:
+            QMessageBox.warning(self, "Couldn't write the report", str(e))
+            return
+        finally:
+            QApplication.restoreOverrideCursor()
+
+        box = QMessageBox(self)
+        box.setWindowTitle("Month in review saved")
+        box.setText(f"{month:%B %Y} saved to:\n{path}")
+        box.setInformativeText(
+            "It is a single self-contained page — no internet, no other "
+            "files. Open it in a browser to read it, or press Ctrl-P there to "
+            "turn it into a PDF you can send on.")
+        box.setStandardButtons(QMessageBox.StandardButton.Close)
+        open_it = box.addButton("Open it now", QMessageBox.ButtonRole.AcceptRole)
+        box.setDefaultButton(open_it)
+        box.exec()
+        if box.clickedButton() is open_it:
+            from PyQt6.QtCore import QUrl
+            from PyQt6.QtGui import QDesktopServices
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+        self.status(f"Month in review saved to {path}")
+
     def _reset(self) -> None:
         what = ("this demo" if self.demo_key else "your")
         ok = QMessageBox.question(
@@ -397,6 +520,16 @@ class MainWindow(QMainWindow):
     def show_guide(self) -> None:
         from .guide import show_guide
         show_guide(self)
+
+    # ---------------- updates ----------------
+    def check_for_updates(self) -> None:
+        from .update_dialog import check_now
+        check_now(self)
+
+    def check_for_updates_quietly(self) -> None:
+        """Called once after the window is up. Silent unless there is news."""
+        from .update_dialog import check_quietly
+        check_quietly(self)
 
     def _about(self) -> None:
         from .. import __version__

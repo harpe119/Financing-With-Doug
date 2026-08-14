@@ -3,9 +3,10 @@ from __future__ import annotations
 
 from PyQt6.QtCore import QPoint, QRect, QRectF, QSize, Qt, QTimer
 from PyQt6.QtGui import QColor, QFont, QPainter, QPen, QValidator
-from PyQt6.QtWidgets import (QCheckBox, QDoubleSpinBox, QFrame, QHBoxLayout,
-                             QLabel, QLayout, QPushButton, QSizePolicy,
-                             QSpinBox, QSplitter, QVBoxLayout, QWidget)
+from PyQt6.QtWidgets import (QCheckBox, QDialog, QDoubleSpinBox, QFrame,
+                             QHBoxLayout, QLabel, QLayout, QPushButton,
+                             QSizePolicy, QSpinBox, QSplitter, QTextBrowser,
+                             QVBoxLayout, QWidget)
 
 from . import theme
 from ..util import fmt_money
@@ -302,6 +303,10 @@ class CollapsibleCard(QFrame):
         self._content.setVisible(on)
         self.header.setText(f"{'▾' if on else '▸'}  {self._title.upper()}")
 
+    @property
+    def expanded(self) -> bool:
+        return self.header.isChecked()
+
     def set_expanded(self, on: bool) -> None:
         self.header.setChecked(on)
         self._sync()
@@ -531,5 +536,116 @@ def fan_entries(color: str, extras: list[tuple] | None = None) -> list[tuple]:
         ("band50", "50% of outcomes (P25–P75)", color, "band_inner"),
         ("median", "median (P50)", color, "line"),
     ] + list(extras or [])
+
+
+# ---------------------------------------------------------------------------
+# Explanations that don't belong on the page
+# ---------------------------------------------------------------------------
+class InfoDialog(QDialog):
+    """A scrollable rich-text window for prose the page has no room for.
+
+    Two things use it. The **for nerds** panels hold the statistics — p-values,
+    coverage fractions, the effective sample size behind a band — which are all
+    real and all worth keeping and none of which belong in front of somebody
+    who opened the app to find out whether they can afford a car. The **what
+    does this do?** panels explain buttons whose names are honest but not
+    self-explanatory, which is most of the Progress page.
+
+    Both are the same shape — a title, a paragraph or several, a way out — so
+    they are the same window rather than two near-identical ones.
+    """
+
+    def __init__(self, title: str, html: str, parent=None,
+                 subtitle: str = "", width: int = 720, height: int = 620):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.setMinimumSize(440, 300)
+        self.resize(width, height)
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(16, 14, 16, 12)
+        lay.setSpacing(9)
+
+        head = QLabel(title)
+        head.setStyleSheet("font-size: 17px; font-weight: 600;")
+        head.setWordWrap(True)
+        lay.addWidget(head)
+        if subtitle:
+            sub = QLabel(subtitle)
+            sub.setObjectName("hint")
+            sub.setWordWrap(True)
+            lay.addWidget(sub)
+
+        self.view = QTextBrowser()
+        self.view.setObjectName("infoBody")
+        self.view.setOpenExternalLinks(True)
+        # Reading-length styling, as the guide does — this is prose, not a
+        # dashboard caption, and the dense page styling is wrong for it.
+        self.view.document().setDefaultStyleSheet(
+            f"body {{ color: {theme.TEXT}; }}"
+            f"h3 {{ color: {theme.ACCENT}; }}"
+            f"h4 {{ color: {theme.BLUE}; margin-bottom: 2px; }}"
+            f"b {{ color: {theme.TEXT}; }}"
+            f"code {{ color: {theme.AMBER}; }}"
+            f"td {{ padding-right: 14px; }}"
+            f"th {{ color: {theme.MUTED}; text-align: left; padding-right: 14px; }}"
+            f".m {{ color: {theme.MUTED}; }}")
+        self.view.setHtml(html)
+        self.view.moveCursor(self.view.textCursor().MoveOperation.Start)
+        lay.addWidget(self.view, 1)
+
+        row = QHBoxLayout()
+        row.addStretch(1)
+        close = QPushButton("Close")
+        close.setObjectName("primary")
+        close.setDefault(True)
+        close.clicked.connect(self.accept)
+        row.addWidget(close)
+        lay.addLayout(row)
+
+
+def info_button(label: str, provider, tooltip: str = "",
+                subtitle: str = "") -> QPushButton:
+    """A small button that opens an :class:`InfoDialog`.
+
+    ``provider`` is called at click time and returns ``(title, html)``, so the
+    window always describes the numbers on screen right now rather than
+    whatever they were when the page was built. It is allowed to fail — an
+    explanation that cannot be produced should say so in the window, not take
+    the page down with it.
+    """
+    btn = QPushButton(label)
+    btn.setObjectName("small")
+    if tooltip:
+        btn.setToolTip(tooltip)
+
+    def _open() -> None:
+        try:
+            title, html = provider()
+        except Exception as e:                       # noqa: BLE001
+            title, html = label, f"<p>Nothing to show yet — {e}</p>"
+        InfoDialog(title, html, btn.window(), subtitle=subtitle).exec()
+
+    btn.clicked.connect(_open)
+    return btn
+
+
+NERD_LABEL = "🤓  For nerds"
+NERD_TIP = ("The statistics behind this page — how each number was computed, "
+            "what was tested, and how much to trust it")
+
+
+def nerd_button(provider, label: str = NERD_LABEL,
+                tooltip: str = NERD_TIP) -> QPushButton:
+    """The button that keeps the interesting maths off the main page.
+
+    This app knows a lot about how sure it is, and saying so in place was
+    turning ordinary pages into statistics coursework: a p-value in a stat
+    card, coverage percentages in a caption, a permutation count in a footnote.
+    None of it is wrong and none of it is going away — it moves one click to
+    the right, so the page can say *"yes, you really are spending less"* and
+    the window behind it can say why anyone should believe that.
+    """
+    return info_button(label, provider, tooltip)
 
 

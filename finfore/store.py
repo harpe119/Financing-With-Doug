@@ -15,6 +15,42 @@ import pandas as pd
 
 from .models import Account, AccountType, Goal, OneOffEvent, RecurringItem
 
+
+def _numeric(df: pd.DataFrame, **columns: str) -> pd.DataFrame:
+    """Force the named columns to a real numeric dtype, in place.
+
+    pandas infers a SQL result's dtypes from the rows it got back, so a query
+    that returns **no rows** hands back `object` columns — `amount` included.
+    Almost everything downstream then works by accident: `sum()` still adds up
+    because Python floats add, and comparisons still compare, so the frame
+    passes through the whole app looking fine.
+
+    numpy is less forgiving. `np.isfinite` refuses an object array outright,
+    which is how a brand-new ledger — one account added, nothing imported yet —
+    crashed the dashboard: the empty ledger produced an object `amount`,
+    `cash_history` carried the dtype into its output, `float + object` gave an
+    object net-worth series, and pyqtgraph raised *ufunc 'isfinite' not
+    supported* from inside a Qt callback, where an exception aborts the
+    process rather than politely returning.
+
+    Declaring the dtypes here rather than repairing them at each consumer is
+    the fix: the schema knows what these columns are, and a frame leaving the
+    store should already be what it claims to be.
+    """
+    for col, dtype in columns.items():
+        if col not in df.columns:
+            continue
+        s = pd.to_numeric(df[col], errors="coerce")
+        try:
+            df[col] = s.astype(dtype)
+        except (ValueError, TypeError):
+            # A null in a column the schema declares NOT NULL means a
+            # hand-edited or half-migrated file. Keeping the float version is
+            # still an improvement on `object`, and is not worth refusing to
+            # open somebody's ledger over.
+            df[col] = s
+    return df
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS accounts (
     id INTEGER PRIMARY KEY,
@@ -209,7 +245,7 @@ class Store:
             "SELECT id, date, balance FROM snapshots WHERE account_id=? ORDER BY date",
             self.con, params=(account_id,), parse_dates=["date"],
         )
-        return df
+        return _numeric(df, id="int64", balance="float64")
 
     def update_snapshot(self, snapshot_id: int, d: date, balance: float) -> None:
         """Change a snapshot's date and/or balance. Raises ValueError if
@@ -319,7 +355,7 @@ class Store:
         # format makes pandas give up on inference and hand back NaT (or plain
         # strings), which then blows up every consumer that calls .strftime().
         df["date"] = pd.to_datetime(df["date"], format="ISO8601", errors="coerce")
-        return df
+        return _numeric(df, id="int64", account_id="int64", amount="float64")
 
     # ---------------- removing rows ----------------
     def suppressed_hashes(self) -> set[str]:
@@ -461,8 +497,10 @@ class Store:
 
     def category_feedback(self) -> pd.DataFrame:
         """The full labelled corpus, oldest first."""
-        return pd.read_sql_query(
-            "SELECT * FROM category_feedback ORDER BY id", self.con)
+        return _numeric(
+            pd.read_sql_query("SELECT * FROM category_feedback ORDER BY id",
+                              self.con),
+            id="int64", amount="float64")
 
     def learned_categories(self) -> dict[str, str]:
         """Current best label per normalised description: the most recent

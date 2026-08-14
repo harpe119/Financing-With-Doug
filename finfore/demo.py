@@ -145,9 +145,19 @@ def _rows_for(months: int, end: date, *, income: float, rent: float,
         add(clamp_day(y, m, 5), "XFINITY INTERNET 8842", -79.99)
         add(clamp_day(y, m, 20), "T-MOBILE WIRELESS PMT", -65.00)
         add(clamp_day(y, m, 8), "GEICO INSURANCE AUTOPAY", -138.40)
-        add(clamp_day(y, m, 22), "NETFLIX.COM", -15.49)
+        # Two quiet price rises, because every real ledger has some and a demo
+        # with perfectly constant bills cannot show the app noticing one. The
+        # streaming bump is the classic: small enough that nobody spots it on a
+        # statement, four months old, $48/year. The gym is bigger and more
+        # recent. Both sit on top of an otherwise flat charge, which is exactly
+        # the shape the detector is built to catch — and the electricity line
+        # above stays noisy, which is the shape it must ignore.
+        months_ago = (end.year - y) * 12 + (end.month - m)
+        add(clamp_day(y, m, 22), "NETFLIX.COM",
+            -15.49 if months_ago >= 4 else -19.49)
         add(clamp_day(y, m, 24), "SPOTIFY USA", -11.99)
-        add(clamp_day(y, m, 3), "PLANET FITNESS MEMBER", -24.99)
+        add(clamp_day(y, m, 3), "PLANET FITNESS MEMBER",
+            -24.99 if months_ago >= 2 else -32.99)
         for pay_day, desc, amt in (debt_payments or []):
             add(clamp_day(y, m, pay_day), desc, -abs(amt))
 

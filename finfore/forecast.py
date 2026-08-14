@@ -82,6 +82,8 @@ class ForecastResult:
     first_breach_day: int | None = None
     runway_months: float | None = None      # cash / essential spend per month
     as_of: date | None = None               # None = projected from today
+    # How bad the dips actually are, as opposed to how often they happen.
+    shortfall: "Shortfall | None" = None
 
 
 def token_set(s: str) -> set[str]:
@@ -117,6 +119,220 @@ def _crossing(dates: list[date], series: np.ndarray, target: float) -> date | No
 # widely-taught "first $1,000 before anything else" milestone; the emergency
 # target is months of essential spending and is supplied by the caller.
 STARTER_BUFFER = 1000.0
+
+
+# ===========================================================================
+# Shortfall — is this running out of money, or is it a Tuesday?
+# ===========================================================================
+# "P(cash goes below zero at some point in three years)" is a bad headline on
+# its own, and it produced a genuinely wrong one: $10 in the account, a $15 bill
+# on Thursday and a new job paying $100k a month from now on scores a 100%
+# chance of going negative, and the app said *high risk of running out of cash*
+# about a person who is about to be extremely comfortable. The probability was
+# right. The sentence was not.
+#
+# What separates the two cases is not how often the line is crossed but how far
+# below it goes, for how long, and whether it comes back. A $5 dip for two days
+# is a payment-timing problem — move the direct debit. A $5,000 dip that lasts a
+# quarter is insolvency. Three measurements tell them apart:
+#
+#   depth     — how far under, against what a day of living actually costs
+#   duration  — how many days the balance stays under
+#   recovery  — whether it is still under at the end of the horizon
+#
+# A dip is *material* when it is worth more than a few days of essential
+# spending. Below that it is a scheduling detail, and calling it a shortfall
+# trains people to ignore the warning that matters.
+MATERIAL_MONTHS = 0.1                   # ≈ three days of essentials
+MATERIAL_MIN = 100.0                    # floor, for a ledger with no essentials
+SUSTAINED_DAYS = 21                     # three weeks under is not a timing gap
+
+
+@dataclass
+class Shortfall:
+    """A verdict on the dips, not just a count of them.
+
+    ``level`` drives the wording and the colour, and is deliberately coarse:
+
+    * ``ok``       — the paths hold up.
+    * ``thin``     — never negative, but the buffer keeps getting eaten.
+    * ``brief``    — it does go under, by trivial amounts, and comes straight
+                     back. The case the old headline got wrong.
+    * ``watch``    — real dips, or lasting ones, but not most of the time.
+    * ``crunch``   — a genuine squeeze that genuinely clears. Deep enough to
+                     bounce a payment, shallow in time, and followed by
+                     recovery. Worth a date and a plan; not worth the word
+                     "risk of running out".
+    * ``high``     — deep *and* lasting, or still under at the end. The only
+                     level that means what it sounds like.
+    """
+    prob_any: float = 0.0           # P(cash < 0 at any point)
+    prob_material: float = 0.0      # P(dips deeper than `material`)
+    prob_sustained: float = 0.0     # P(under for ≥ SUSTAINED_DAYS)
+    prob_unrecovered: float = 0.0   # P(still under on the last day)
+    median_depth: float = 0.0       # typical worst dip, among paths that dip
+    median_days: float = 0.0        # typical days spent under, same paths
+    low_day: int | None = None      # typical day index of the low point
+    low_date: date | None = None    # …as a calendar date, when known
+    end_cash_p50: float = 0.0
+    end_cash_p10: float = 0.0
+    material: float = MATERIAL_MIN
+    level: str = "ok"
+    headline: str = ""
+    detail: str = ""
+
+    @property
+    def recovers(self) -> bool:
+        """Does the money come back on its own?"""
+        return self.level in ("ok", "thin", "brief", "crunch")
+
+    @property
+    def severe(self) -> bool:
+        return self.level == "high"
+
+
+def _money(v: float) -> str:
+    """Local money formatting — forecast.py stays free of UI imports."""
+    return f"${abs(v):,.0f}" if abs(v) >= 10 else f"${abs(v):,.2f}"
+
+
+def assess_shortfall(cash_paths: np.ndarray, starter_breach: float = 0.0,
+                     essential_monthly: float | None = None,
+                     horizon_days: int | None = None,
+                     dates: list[date] | None = None) -> Shortfall:
+    """Classify the dips in a set of simulated cash paths.
+
+    Separated from ``run_forecast`` so it can be tested against hand-built
+    paths — the interesting cases (a $5 dip in front of a fortune, a squeeze
+    that clears, a slow slide that never returns) are far easier to construct
+    directly than to coax a demo ledger into producing.
+    """
+    material = max(MATERIAL_MIN,
+                   float(essential_monthly or 0.0) * MATERIAL_MONTHS)
+    paths = np.atleast_2d(np.asarray(cash_paths, dtype=float))
+    if paths.size == 0:
+        s = Shortfall(material=material)
+        _narrate(s, horizon_days)
+        return s
+    below = paths < 0.0
+    dips = below.any(axis=1)
+    path_min = paths.min(axis=1)
+    days_below = below.sum(axis=1)
+    end_cash = paths[:, -1]
+
+    s = Shortfall(
+        prob_any=float(dips.mean()),
+        prob_material=float((path_min < -material).mean()),
+        prob_sustained=float((days_below >= SUSTAINED_DAYS).mean()),
+        prob_unrecovered=float((end_cash < 0.0).mean()),
+        material=material,
+        end_cash_p50=float(np.percentile(end_cash, 50)),
+        end_cash_p10=float(np.percentile(end_cash, 10)),
+    )
+    if dips.any():
+        s.median_depth = float(np.median(-path_min[dips]))
+        s.median_days = float(np.median(days_below[dips]))
+        s.low_day = int(np.median(np.argmin(paths[dips], axis=1)))
+        if dates and 0 <= s.low_day < len(dates):
+            s.low_date = dates[s.low_day]
+
+    # Depth and duration are separate axes and the verdict needs both. Depth
+    # alone would call a fortnight of being $600 down the same thing as a slow
+    # two-year slide into insolvency; duration alone would wave through a
+    # single catastrophic month. "Running out of money" is the intersection —
+    # deep *and* not coming back — and everything short of it gets a name that
+    # says what is actually happening instead.
+    lasting = s.prob_sustained >= 0.25 or s.prob_unrecovered >= 0.10
+    deep = s.prob_material
+    # Is the typical dip itself trivial? Frequency and severity are independent
+    # and both directions of the confusion are wrong: an ever-present $5 dip is
+    # not a crisis, and a rare 53-day $1,600 hole is not "brief" merely because
+    # only one path in ten falls into it. The population thresholds above sort
+    # on how *often*; this sorts on how *badly*, and nothing is called brief
+    # unless it earns the word on its own terms.
+    trivial = s.median_depth <= s.material and s.median_days < SUSTAINED_DAYS
+    if s.prob_unrecovered >= 0.25 or (deep >= 0.15 and lasting):
+        s.level = "high"
+    elif deep >= 0.5:
+        s.level = "crunch"          # it hurts, it is dated, and it ends
+    elif deep >= 0.15 or lasting:
+        s.level = "watch"
+    elif s.prob_any >= 0.10:
+        s.level = "brief" if trivial else "watch"
+    elif starter_breach >= 0.35:
+        s.level = "thin"
+    else:
+        s.level = "ok"
+
+    _narrate(s, horizon_days)
+    return s
+
+
+def _narrate(s: Shortfall, horizon_days: int | None) -> None:
+    """Plain-English headline and body for a verdict.
+
+    Written here rather than in the page because the wording *is* the finding —
+    the numbers are the same either way, and the whole bug this replaces was a
+    sentence, not an arithmetic error.
+    """
+    yrs = (horizon_days or 0) / 365.0
+    when = (f"in {yrs:.0f} years' time" if yrs >= 1.6 else
+            "in a year's time" if yrs >= 0.9 else
+            "by the end of this projection")
+    amount = _money(s.end_cash_p50) + ("" if s.end_cash_p50 >= 0
+                                       else " in the red")
+    ends = f"The middle of the range is {amount} {when}."
+
+    around = (f" around {s.low_date:%B %Y}" if s.low_date else "")
+    days = (f"{s.median_days:.0f} day"
+            f"{'s' if round(s.median_days) != 1 else ''}")
+
+    if s.level == "high":
+        s.headline = "High risk of running out of cash."
+        bits = [f"{s.prob_material:.0%} of simulated runs dip more than "
+                f"{_money(s.material)} below zero"]
+        if s.prob_sustained >= 0.15:
+            bits.append(f"{s.prob_sustained:.0%} stay under for three weeks or "
+                        f"more")
+        if s.prob_unrecovered >= 0.05:
+            bits.append(f"{s.prob_unrecovered:.0%} are still under water on the "
+                        f"last day — those ones do not recover on their own")
+        s.detail = ("; ".join(bits) + ". " + ends + " This is the case worth "
+                    "acting on: a lower bill, a delayed purchase or more income "
+                    "all move it.")
+    elif s.level == "crunch":
+        # The squeeze that clears. Deep enough to bounce a payment and worth a
+        # date on the calendar, but calling it "running out of cash" is how a
+        # perfectly solvent person gets told they are in trouble.
+        s.headline = "A tight patch, then it clears."
+        s.detail = (f"Most runs go short{around} — typically about "
+                    f"{_money(s.median_depth)} below zero for {days} — and then "
+                    f"recover. Those weeks are a real problem in their own "
+                    f"right, because payments bounce and cards decline, but "
+                    f"they are not where this ends up: {ends[0].lower()}"
+                    f"{ends[1:]} Bridging the gap is usually enough — delay one "
+                    f"purchase, or move a bill to the other side of payday.")
+    elif s.level == "watch":
+        s.headline = "Worth watching — some runs go genuinely short."
+        s.detail = (f"{s.prob_material:.0%} of runs dip more than "
+                    f"{_money(s.material)} below zero, typically by "
+                    f"{_money(s.median_depth)} for {days}{around}. Most come "
+                    f"back. {ends}")
+    elif s.level == "brief":
+        s.headline = "A short dip, not a shortfall."
+        s.detail = (f"Cash crosses zero in {s.prob_any:.0%} of runs, but only "
+                    f"by about {_money(s.median_depth)} and for roughly "
+                    f"{days}{around} before it recovers — less than a few days "
+                    f"of essential spending. That is a timing problem, not "
+                    f"running out of money: moving one payment usually settles "
+                    f"it. {ends}")
+    elif s.level == "thin":
+        s.headline = "Cash gets thin, though it stays above zero."
+        s.detail = (f"No run goes negative, but the buffer is repeatedly worn "
+                    f"down. {ends}")
+    else:
+        s.headline = "Cash holds up across the simulations."
+        s.detail = ends
 
 
 # Student-t degrees of freedom for investment shocks. Real equity returns have
@@ -524,10 +740,17 @@ def run_forecast(store: Store, horizon_days: int, n_paths: int,
     runway = None
     if essential_monthly and essential_monthly > 0:
         runway = max(0.0, cash0 / essential_monthly)
-    below_zero = cash_paths < 0.0
+    shortfall = assess_shortfall(cash_paths,
+                                 starter_breach=cash_breach.get("starter", 0.0),
+                                 essential_monthly=essential_monthly,
+                                 horizon_days=H, dates=dates)
+    # Dated only when the dip is worth dating. "1 in 10 paths are underwater by
+    # March" is alarming language for a balance that touches −$4 that week, and
+    # the page quotes this line directly.
+    below_zero = cash_paths < -shortfall.material
     first_breach_day = None
     if below_zero.any():
-        # earliest day on which at least 10% of paths are underwater
+        # earliest day on which at least 10% of paths are materially underwater
         frac = below_zero.mean(axis=0)
         hits = np.nonzero(frac >= 0.10)[0]
         if len(hits):
@@ -555,12 +778,145 @@ def run_forecast(store: Store, horizon_days: int, n_paths: int,
         warnings=warnings, monthly_recurring_net=monthly_net,
         cash_breach=cash_breach, min_cash_pct=min_cash_pct,
         first_breach_day=first_breach_day, runway_months=runway, as_of=as_of,
+        shortfall=shortfall,
     )
 
 
 def _cad_days(it: RecurringItem) -> float:
     from .models import CADENCE_DAYS
     return CADENCE_DAYS[it.cadence]
+
+
+# ===========================================================================
+# What is actually causing the squeeze
+# ===========================================================================
+# The furthest back attribution will look. Beyond about six weeks a "cause" is
+# no longer an event, it is a pattern of living.
+MAX_CAUSE_WINDOW = 45
+
+
+@dataclass
+class ScheduledFlow:
+    """One dated, known movement of money — a bill, a payment, a pay cheque.
+
+    The projection already replays all of these to build its cash path; it just
+    throws away which was which. Keeping them lets the page answer the question
+    a dated warning immediately provokes — *caused by what?* — with names and
+    dates instead of a shrug, and lets the answer be acted on: knowing that the
+    low point is rent landing two days before payday is knowing the fix.
+    """
+    label: str
+    when: date
+    amount: float                    # signed; negative is money out
+    source: str                      # recurring | loan | event | investment
+    item_id: int | None = None
+    event_id: int | None = None
+
+    @property
+    def is_out(self) -> bool:
+        return self.amount < 0
+
+    @property
+    def movable(self) -> bool:
+        """Can this be shifted by a few days without inventing anything?
+
+        A bill or a subscription can usually be moved; a pay cheque cannot, and
+        an investment contribution is already the user's own choice made
+        elsewhere.
+        """
+        return self.source in ("recurring", "event") and self.is_out
+
+
+def scheduled_flows(store: Store, start: date, end: date,
+                    scenario: Scenario | None = None) -> list[ScheduledFlow]:
+    """Every dated flow the projection knows about in a window, by date.
+
+    Deterministic only — recurring patterns, loan payments, investment
+    contributions and one-off events. Bootstrapped day-to-day spending is
+    deliberately absent: it has no date and no name, so it cannot be pointed at
+    or moved, and listing "about $60 of groceries" beside a $1,795 rent payment
+    would suggest the two are equally addressable.
+    """
+    scenario = scenario or Scenario()
+    accounts = store.accounts()
+    loans = {a.id: a for a in accounts if a.type == AccountType.LOAN}
+    out: list[ScheduledFlow] = []
+
+    # Only *active* patterns count as covering a loan, exactly as the
+    # projection decides it. Deactivating a detected payment does not stop the
+    # loan being amortised — the engine falls back to the account's own
+    # monthly_payment — so treating the account as covered here dropped the
+    # largest fixed outflow of the month out of the attribution list.
+    linked = {it.linked_account_id for it in store.recurring()
+              if it.kind == "loan_payment" and it.active
+              and it.linked_account_id is not None}
+    for it in store.recurring():
+        if not it.active or it.kind == "ignore":
+            continue
+        if it.kind == "loan_payment" and it.linked_account_id not in loans:
+            continue                 # dropped by the projection too, as a double-count
+        if it.kind == "income":
+            amt = it.amount * scenario.income_multiplier
+        else:
+            amt = it.amount * scenario.category_multipliers.get(
+                categorize(it.name, it.amount), 1.0)
+        src = "loan" if it.kind == "loan_payment" else "recurring"
+        for d in occurrences(it, start - timedelta(days=1), end):
+            out.append(ScheduledFlow(it.name, d, amt, src, item_id=it.id))
+
+    # Loans with no detected payment: the projection amortises them anyway, so
+    # they have to appear here or the largest outflow of the month is missing.
+    for a in loans.values():
+        if a.id in linked or a.monthly_payment <= 0:
+            continue
+        d = clamp_day(start.year, start.month, int(a.payment_day))
+        while d <= end:
+            if d >= start:
+                out.append(ScheduledFlow(a.name, d, -abs(a.monthly_payment),
+                                         "loan"))
+            nxt = add_months(date(d.year, d.month, 1), 1)
+            d = clamp_day(nxt.year, nxt.month, int(a.payment_day))
+
+    for a in accounts:
+        if a.type == AccountType.INVESTMENT and a.monthly_contribution > 0:
+            for d in month_firsts_between(start, end):
+                out.append(ScheduledFlow(f"{a.name} contribution", d,
+                                         -abs(a.monthly_contribution),
+                                         "investment"))
+
+    for ev in list(store.events(active_only=True)) + list(scenario.events or []):
+        if getattr(ev, "active", True) and start <= ev.when <= end:
+            out.append(ScheduledFlow(ev.label, ev.when, float(ev.amount),
+                                     "event", event_id=getattr(ev, "id", None)))
+
+    out.sort(key=lambda f: (f.when, f.amount))
+    return out
+
+
+def crunch_causes(store: Store, low_date: date, days_under: float = 7.0,
+                  scenario: Scenario | None = None,
+                  lead_days: int = 14) -> tuple[list[ScheduledFlow],
+                                                ScheduledFlow | None]:
+    """The dated outflows that dig the hole, and the next money in after it.
+
+    Returns ``(outflows_largest_first, next_inflow)``. The window reaches back
+    far enough to catch the run-up rather than only the day itself, because a
+    low point is the *end* of a sequence of withdrawals, not a single event.
+
+    It is also capped, hard. Attribution only means anything for a *bounded*
+    dip: ask this about a ledger that has been underwater for three years and
+    the honest answer is "every rent payment since 2026", which is true, is not
+    a cause, and is not something anyone can move. A structural shortfall is a
+    question for the sensitivity panel, not for this.
+    """
+    span = min(max(lead_days, int(round(days_under)) + 7), MAX_CAUSE_WINDOW)
+    start = low_date - timedelta(days=span)
+    end = low_date + timedelta(days=45)
+    flows = scheduled_flows(store, start, end, scenario)
+    causes = sorted((f for f in flows if f.is_out and f.when <= low_date),
+                    key=lambda f: f.amount)
+    nxt = next((f for f in flows if not f.is_out and f.when > low_date), None)
+    return causes, nxt
 
 
 # ===========================================================================

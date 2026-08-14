@@ -6,17 +6,18 @@ the fan; goals render as target lines with arrival estimates.
 """
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 
 import numpy as np
 from PyQt6.QtCore import QDate, Qt
-from PyQt6.QtWidgets import (QCheckBox, QComboBox, QDateEdit,
+from PyQt6.QtWidgets import (QCheckBox, QComboBox, QDateEdit, QDialog,
                              QDoubleSpinBox, QFormLayout,
                              QHBoxLayout, QLabel, QLineEdit, QPushButton,
                              QScrollArea, QSizePolicy, QSlider, QSplitter,
                              QVBoxLayout, QWidget)
 
-from ..forecast import (STARTER_BUFFER, ForecastResult, backtest_cash,
+from ..forecast import (MATERIAL_MIN, STARTER_BUFFER, SUSTAINED_DAYS, T_DOF,
+                        ForecastResult, backtest_cash, crunch_causes,
                         run_forecast, sensitivity)
 from ..insights import emergency_fund_target, essential_monthly
 from ..history import category_spending, networth_history
@@ -25,7 +26,7 @@ from ..store import Store
 from ..util import fmt_money
 from . import charts, theme, video
 from .widgets import (Card, CollapsibleCard, IntSpinBox, LegendToggles,
-                      SeriesRegistry, fan_entries, hint, vsplit)
+                      SeriesRegistry, fan_entries, hint, nerd_button, vsplit)
 from .account_dialog import _money_spin
 
 _HORIZONS = [("6 months", 183), ("1 year", 365), ("2 years", 730),
@@ -79,6 +80,172 @@ class SliderRow(QWidget):
         self.slider.setValue(self._start)
 
 
+# A dip short enough that a *thing* caused it, rather than a way of living.
+# Past this, "what caused it" has no answer worth acting on and the honest
+# response is the sensitivity panel, not a list of rent payments.
+CAUSE_MAX_DAYS = 60
+
+_SOURCE_LABEL = {
+    "recurring": "recurring bill",
+    "loan": "loan payment",
+    "event": "planned one-off",
+    "investment": "investment contribution",
+}
+
+
+class CrunchDialog(QDialog):
+    """What is digging the hole, and one gesture to climb out of it.
+
+    A dated warning immediately provokes "caused by what?", and until now the
+    page could not answer: it knew the low point was in August and nothing
+    else. The projection has always known — it replays every bill and pay
+    cheque by name to build the path — it simply threw the names away.
+
+    The move is the point, though. Knowing that rent lands two days before
+    payday is only useful if the next step is easy, so each movable outflow
+    gets a date box and an Apply: shifting one is modelled as the pair of
+    offsetting one-off events it really is — the money back on the old date,
+    out again on the new one — which the projection already understands and
+    which shows up in the what-if list where it can be undone.
+    """
+
+    def __init__(self, store: Store, sf, causes, next_in, parent=None):
+        super().__init__(parent)
+        self.store = store
+        self.applied = False
+        # Two quite different situations arrive here. A *timing* problem is one
+        # payment landing on the wrong side of payday, and rescheduling it is
+        # the actual fix. A *structural* one is more going out than coming in
+        # for years, where rescheduling moves the hole rather than filling it —
+        # so the same list of bills is shown, because knowing what leaves is
+        # useful either way, and the Move buttons are withheld. Offering a fix
+        # the app knows will not work is worse than offering none.
+        self.timing = sf.recovers and sf.median_days <= CAUSE_MAX_DAYS
+        self.setWindowTitle("What's causing this")
+        self.setMinimumWidth(560)
+        self.resize(640, 540)
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(16, 14, 16, 12)
+        lay.setSpacing(10)
+
+        head = QLabel(sf.headline)
+        head.setStyleSheet("font-size: 16px; font-weight: 600;")
+        head.setWordWrap(True)
+        lay.addWidget(head)
+
+        when = sf.low_date.strftime("%d %B %Y") if sf.low_date else "the low point"
+        if self.timing:
+            intro = [f"Around <b>{when}</b> the balance bottoms out near "
+                     f"<b>{fmt_money(-sf.median_depth)}</b>."]
+            if next_in is not None:
+                intro.append(f"The next money in is {next_in.label} on "
+                             f"<b>{next_in.when.strftime('%d %b')}</b> "
+                             f"({fmt_money(next_in.amount)}) — anything moved "
+                             f"past that date is paid out of it instead.")
+        else:
+            intro = [f"This is not one payment landing at a bad moment. The "
+                     f"balance stays under for about "
+                     f"<b>{sf.median_days:.0f} days</b>, which means more is "
+                     f"going out than is coming in — so no amount of "
+                     f"rescheduling will fix it, and this window only shows "
+                     f"what the money is currently committed to."]
+        blurb = QLabel(" ".join(intro))
+        blurb.setWordWrap(True)
+        blurb.setObjectName("hint")
+        lay.addWidget(blurb)
+
+        lay.addWidget(QLabel("Scheduled to leave over the next few weeks:"
+                             if not self.timing else
+                             "Scheduled to leave in the run-up:"))
+        host = QWidget()
+        rows = QVBoxLayout(host)
+        rows.setContentsMargins(0, 0, 6, 0)
+        rows.setSpacing(6)
+        self._movers: list[tuple] = []
+        for f in causes[:8]:
+            rows.addWidget(self._row(f, next_in))
+        if not causes:
+            rows.addWidget(hint("Nothing dated is scheduled in that window — "
+                                "the dip is day-to-day spending rather than "
+                                "any one payment, so there is nothing here to "
+                                "move. The category sliders are the lever."))
+        rows.addStretch(1)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(host)
+        lay.addWidget(scroll, 1)
+
+        lay.addWidget(hint(
+            "Moving a payment does not make it go away — it is the same money, "
+            "paid later. It is the right fix when the problem is that two "
+            "things land in the wrong order, and the wrong one when there is "
+            "simply not enough coming in."
+            if self.timing else
+            "The things worth changing here are the recurring commitments "
+            "themselves, or what comes in. The income and category sliders on "
+            "the left re-run the projection instantly, and the Sensitivity "
+            "panel ranks which of them actually moves the outcome."))
+
+        bar = QHBoxLayout()
+        bar.addStretch(1)
+        close = QPushButton("Close")
+        close.setObjectName("primary")
+        close.clicked.connect(self.accept)
+        bar.addWidget(close)
+        lay.addLayout(bar)
+
+    def _row(self, f, next_in) -> QWidget:
+        w = QWidget()
+        rl = QHBoxLayout(w)
+        rl.setContentsMargins(0, 0, 0, 0)
+        rl.setSpacing(8)
+        col = QVBoxLayout()
+        col.setSpacing(1)
+        title = QLabel(f"{f.label} · {fmt_money(f.amount)}")
+        title.setStyleSheet(f"color: {theme.RED};")
+        title.setWordWrap(True)
+        sub = QLabel(f"{f.when.strftime('%a %d %b')} · "
+                     f"{_SOURCE_LABEL.get(f.source, f.source)}")
+        sub.setObjectName("hint")
+        col.addWidget(title)
+        col.addWidget(sub)
+        rl.addLayout(col, 1)
+        if f.movable and self.timing:
+            to = QDateEdit()
+            to.setCalendarPopup(True)
+            to.setDisplayFormat("d MMM yyyy")
+            # Default: the day after the next money lands, which is the move
+            # that actually fixes a timing problem.
+            target = (next_in.when + timedelta(days=1)) if next_in is not None \
+                else f.when + timedelta(days=7)
+            to.setDate(QDate(target.year, target.month, target.day))
+            to.setToolTip("Pay it on this date instead")
+            go = QPushButton("Move")
+            go.setObjectName("small")
+            go.clicked.connect(lambda _c, ff=f, dd=to: self._move(ff, dd))
+            rl.addWidget(to)
+            rl.addWidget(go)
+            self._movers.append((f, to, go))
+        return w
+
+    def _move(self, f, date_edit) -> None:
+        qd = date_edit.date()
+        target = date(qd.year(), qd.month(), qd.day())
+        if target == f.when:
+            return
+        # The pair the projection already understands: the money stays in on the
+        # original date, and goes out on the new one.
+        self.store.add_event(OneOffEvent(
+            f"{f.label} — not paid {f.when.strftime('%d %b')}", f.when,
+            abs(f.amount)))
+        self.store.add_event(OneOffEvent(
+            f"{f.label} — paid {target.strftime('%d %b')} instead", target,
+            -abs(f.amount)))
+        self.applied = True
+        self.accept()
+
+
 def _clear_layout(lay) -> None:
     while lay.count():
         item = lay.takeAt(0)
@@ -98,6 +265,15 @@ class ForecastPage(QWidget):
         self._cat_sliders: list[SliderRow] = []
         self._analysis = "tornado"
         self._goal_labels: dict[int, QLabel] = {}
+        # Last run's results, kept so the "for nerds" window can describe what
+        # is currently on screen rather than recomputing it (a second forecast
+        # with a fresh seed would quote different numbers to the ones the page
+        # is showing, which is worse than useless in an explanation).
+        self._res: ForecastResult | None = None
+        self._bt = None
+        self._sens: list = []
+        self._ef_target = 0.0
+        self._ef_months = 3
 
         root = QHBoxLayout(self)
         root.setContentsMargins(18, 16, 18, 16)
@@ -138,7 +314,15 @@ class ForecastPage(QWidget):
             "own essential spending — bills, groceries, insurance, medical, "
             "fuel and loan payments — not a generic figure.")
         form.addRow("Horizon", self.horizon)
-        form.addRow("Monte Carlo paths", self.paths)
+        # Wrapped rather than added straight to the form, so Simple view can
+        # hide the label and the spinner as one thing.
+        self.paths_row = QWidget()
+        prl = QHBoxLayout(self.paths_row)
+        prl.setContentsMargins(0, 0, 0, 0)
+        prl.setSpacing(8)
+        prl.addWidget(QLabel("Monte Carlo paths"))
+        prl.addWidget(self.paths, 1)
+        form.addRow(self.paths_row)
         form.addRow("Emergency fund", self.ef_months)
         proj.body.addLayout(form)
         self.overlay = QCheckBox("Overlay baseline comparison")
@@ -178,6 +362,7 @@ class ForecastPage(QWidget):
         reset.clicked.connect(self._reset_scenario)
         debt.body.addWidget(reset)
         cv.addWidget(debt)
+        self.debt_card = debt
 
         ev = CollapsibleCard("What-if events", expanded=False)
         self.event_box = QVBoxLayout()
@@ -247,7 +432,11 @@ class ForecastPage(QWidget):
         right.setSpacing(12)
 
         picker = QHBoxLayout()
-        picker.addWidget(QLabel("Show"))
+        self.view_row = QWidget()
+        vrl = QHBoxLayout(self.view_row)
+        vrl.setContentsMargins(0, 0, 0, 0)
+        vrl.setSpacing(6)
+        vrl.addWidget(QLabel("Show"))
         self.view_pick = QComboBox()
         for lbl, key in (("Cash + net worth", "both"), ("Cash only", "cash"),
                          ("Net worth only", "networth"),
@@ -257,7 +446,8 @@ class ForecastPage(QWidget):
         self.view_pick.setToolTip("Hide charts you aren't using to give the "
                                   "rest more room")
         self.view_pick.currentIndexChanged.connect(self._apply_view)
-        picker.addWidget(self.view_pick)
+        vrl.addWidget(self.view_pick)
+        picker.addWidget(self.view_row)
         self.show_analysis = QCheckBox("Analysis panel")
         self.show_analysis.setChecked(False)
         self.show_analysis.stateChanged.connect(lambda _s: self._apply_view())
@@ -275,6 +465,9 @@ class ForecastPage(QWidget):
         self.explain_btn.clicked.connect(self._explain)
         self.explain_btn.setVisible(video.has_video("monte_carlo"))
         picker.addWidget(self.explain_btn)
+        # The page says what it thinks; this says how it knows. Everything
+        # quantitative that used to crowd the risk caption lives behind it.
+        picker.addWidget(nerd_button(self._nerd_panel))
         right.addLayout(picker)
         # Cash leads. It is the account that actually runs out, and the floors
         # below (zero, starter buffer, emergency fund) are cash concepts — net
@@ -299,6 +492,21 @@ class ForecastPage(QWidget):
         self.risk.setWordWrap(True)
         self.risk.setObjectName("statSub")
         cash_card.body.addWidget(self.risk)
+        # "Caused by what?" is the next question every dated warning provokes,
+        # and it only has an answer worth giving for a bounded dip — so the
+        # button appears exactly when there is something nameable to name.
+        risk_row = QHBoxLayout()
+        risk_row.setContentsMargins(0, 0, 0, 0)
+        self.cause_btn = QPushButton("What's causing this?")
+        self.cause_btn.setObjectName("small")
+        self.cause_btn.setToolTip(
+            "The bills and payments scheduled in the run-up to the low point, "
+            "and a way to move one past payday")
+        self.cause_btn.clicked.connect(self._show_causes)
+        self.cause_btn.setVisible(False)
+        risk_row.addWidget(self.cause_btn)
+        risk_row.addStretch(1)
+        cash_card.body.addLayout(risk_row)
         self.cash_card = cash_card
 
         nw_card = Card("Net worth — projection")
@@ -366,6 +574,31 @@ class ForecastPage(QWidget):
         split.setSizes([356, 900])
 
     # ---------------------------------------------------------------
+    def set_simple(self, on: bool) -> None:
+        """Hide the machinery, keep the answer.
+
+        What goes is the apparatus of *running* a simulation — how many paths,
+        which charts, sensitivity, backtesting, the debt-and-investing knobs.
+        What stays is the question people came with: how long, what if I spent
+        less, what if this bill landed, and does the money hold up. None of the
+        hidden panels are the answer; they are ways of interrogating it, and
+        the numbers they produce are all still under For nerds.
+        """
+        self._simple = on
+        self.paths_row.setVisible(not on)
+        self.overlay.setVisible(not on)
+        self.debt_card.setVisible(not on)
+        self.view_row.setVisible(not on)
+        self.show_analysis.setVisible(not on)
+        if on:
+            # Cash is the account that actually runs out, and the floors under
+            # the chart are cash concepts — it is the right single chart.
+            i = self.view_pick.findData("cash")
+            if i >= 0:
+                self.view_pick.setCurrentIndex(i)
+            self.show_analysis.setChecked(False)
+        self._apply_view()
+
     def refresh(self) -> None:
         # rebuild category sliders, preserving positions by name
         prev = {s.name: s.slider.value() for s in self._cat_sliders}
@@ -579,6 +812,7 @@ class ForecastPage(QWidget):
             self.analysis_note.setText("No levers to compare.")
             return
         sens = sens[:8]
+        self._sens = sens
         levers = [x.lever for x in sens]
         lows = np.array([x.worst for x in sens])
         highs = np.array([x.best for x in sens])
@@ -596,6 +830,7 @@ class ForecastPage(QWidget):
         days = self.bt_lookback.currentData()
         bt = backtest_cash(self.store, lookback_days=days,
                            n_paths=max(200, self.paths.value() // 2))
+        self._bt = bt
         if bt is None:
             self.analysis_note.setText(
                 "Not enough history to refit that far back — import more, or "
@@ -609,63 +844,218 @@ class ForecastPage(QWidget):
         col = (theme.MUTED if bt.thin else
                theme.ACCENT if bt.coverage_80 >= 0.75 else
                theme.AMBER if bt.coverage_80 >= 0.5 else theme.RED)
+        # The plain version. Coverage against its own target is the one figure
+        # that answers "should I believe this?"; the second band, the ending
+        # error and the bias term are measurements of that answer and live in
+        # the For nerds window instead.
         self.analysis_note.setText(
-            f"Refit as of {bt.as_of.strftime('%b %Y')} using only data that "
-            f"existed then ({bt.train_days // 7} weeks of it), then compared "
-            f"against what actually happened. Reality stayed inside the 80% "
-            f"band {bt.coverage_80 * 100:.0f}% of the time "
-            f"({bt.coverage_50 * 100:.0f}% inside the 50% band); typical miss "
-            f"{fmt_money(bt.median_abs_error)}, ending "
-            f"{fmt_money(abs(bt.end_error))} "
-            f"{'above' if bt.end_error > 0 else 'below'} the median line. "
+            f"Doug re-ran this forecast as if it were "
+            f"{bt.as_of.strftime('%B %Y')}, knowing only what it knew then, "
+            f"and compared it with what actually happened. Reality stayed "
+            f"inside the shaded band {bt.coverage_80 * 100:.0f}% of the time — "
+            f"a forecast this honest about its own uncertainty should land near "
+            f"80%. It was typically off by {fmt_money(bt.median_abs_error)}. "
             f"{bt.note}")
         self.analysis_note.setStyleSheet(f"color: {col};")
 
     def _render_risk(self, res, ef_target: float, months: int) -> None:
-        """Say plainly how often the simulated paths run dry.
+        """Say plainly whether the paths run dry — and mean the same thing by it.
 
-        A median line that never dips below zero can still sit on top of a
-        distribution where a quarter of paths do. Percentiles answer "where do
-        I end up"; this answers "how likely am I to run out on the way", which
-        is the question a cash chart is really being asked.
+        This line used to be driven by one number: the share of simulated paths
+        that touch zero at any point. That is a real measurement and a terrible
+        headline. Ten dollars in the account, a fifteen-dollar bill on Thursday
+        and a new job paying six figures a month scores 100% and printed *high
+        risk of running out of cash*, which is not merely unhelpful — it teaches
+        people that the warning means nothing, so the one that matters gets
+        ignored too.
+
+        ``forecast.assess_shortfall`` now decides, from how deep the dips go,
+        how long they last and whether they come back. The percentages have not
+        gone anywhere; they are one click away, under *For nerds*, where they
+        are a measurement rather than a verdict.
         """
-        b = res.cash_breach or {}
-        if not b:
+        sf = res.shortfall
+        if sf is None:
             self.risk.setText("")
+            self.cause_btn.setVisible(False)
             return
-        zero = b.get("zero", 0.0)
-        starter = b.get("starter", 0.0)
-        emerg = b.get("emergency")
-        worst = res.min_cash_pct.get(10)
+        col = {"high": theme.RED, "crunch": theme.AMBER, "watch": theme.AMBER,
+               "brief": theme.BLUE, "thin": theme.AMBER}.get(sf.level,
+                                                             theme.ACCENT)
 
-        if zero >= 0.5:
-            col, lead = theme.RED, "High risk of running out of cash."
-        elif zero >= 0.15:
-            col, lead = theme.AMBER, "Meaningful risk of running out of cash."
-        elif starter >= 0.35:
-            col, lead = theme.AMBER, "Cash gets thin, though rarely negative."
-        else:
-            col, lead = theme.ACCENT, "Cash holds up across the simulations."
-
-        parts = [f"{zero * 100:.0f}% of simulated paths go negative at some "
-                 f"point", f"{starter * 100:.0f}% dip under "
-                 f"{fmt_money(STARTER_BUFFER)}"]
-        if emerg is not None:
-            parts.append(f"{emerg * 100:.0f}% fall below the {months}-month "
-                         f"fund ({fmt_money(ef_target)})")
-        if worst is not None:
-            parts.append(f"in the worst 10% of paths the low point is "
-                         f"{fmt_money(worst, signed=True)}")
+        text = f"{sf.headline}  {sf.detail}"
         if res.runway_months is not None:
-            parts.insert(0, f"cash covers {res.runway_months:.1f} months of "
-                            f"essentials at today's balance")
-        text = lead + "  " + " · ".join(parts) + "."
-        if res.first_breach_day is not None:
+            text += (f"  Today's balance alone covers about "
+                     f"{res.runway_months:.1f} months of essentials.")
+        # Dating the breach only earns its alarm when the breach is material —
+        # run_forecast applies the same threshold before setting the day. The
+        # crunch wording already carries its own date, so it is left out here.
+        if sf.level in ("high", "watch") and res.first_breach_day is not None:
             when = res.dates[min(res.first_breach_day, len(res.dates) - 1)]
-            text += (f"  1 in 10 paths are underwater by "
-                     f"{when.strftime('%b %Y')}.")
+            text += (f"  The earliest it shows up in 1 run in 10 is "
+                     f"{when.strftime('%B %Y')}.")
         self.risk.setText(text)
         self.risk.setStyleSheet(f"color: {col}; font-size: 12px;")
+        # Shown whenever the cash line actually goes under, which is the only
+        # time the question arises. It was briefly restricted to short dips, on
+        # the theory that a structural shortfall has no nameable cause — which
+        # confused an argument about *framing* with one about usefulness, and
+        # hid the button on almost every real ledger. Knowing what is scheduled
+        # to leave next month is worth having either way; what changes with the
+        # verdict is whether rescheduling one of them is offered as a fix, and
+        # that is the dialog's job to get right.
+        self.cause_btn.setVisible(
+            sf.low_date is not None
+            and sf.level in ("brief", "crunch", "watch", "high"))
+
+    def _show_causes(self) -> None:
+        res = getattr(self, "_res", None)
+        sf = res.shortfall if res is not None else None
+        if sf is None or sf.low_date is None:
+            return
+        causes, next_in = crunch_causes(self.store, sf.low_date,
+                                        sf.median_days, self._scenario())
+        dlg = CrunchDialog(self.store, sf, causes, next_in, self)
+        dlg.exec()
+        if dlg.applied:
+            self._rebuild_events()
+            self.main.status("Payment moved — added as a pair of what-if "
+                             "events, which you can undo in the list.")
+            self.run()
+
+    # ---------------- for nerds ----------------
+    def _nerd_panel(self) -> tuple[str, str]:
+        """Everything the page deliberately does not say out loud."""
+        res = getattr(self, "_res", None)
+        if res is None:
+            return ("Forecast · the numbers underneath",
+                    "<p>Run a forecast first — there is nothing to take apart "
+                    "yet.</p>")
+        H = self.horizon.currentData()
+        n = self.paths.value()
+        months = getattr(self, "_ef_months", self.ef_months.value())
+        ef_target = getattr(self, "_ef_target", 0.0)
+        sf = res.shortfall
+        b = res.cash_breach or {}
+        m = theme.MUTED
+        rows = [
+            f"<h3>How the fan is built</h3>",
+            f"<p>{n:,} Monte Carlo paths over {H:,} days ({H / 365:.1f} years), "
+            f"on a daily grid. Each path is one internally consistent future, "
+            f"not a scenario anybody chose. The shaded bands are percentiles "
+            f"taken <i>across</i> paths at each day, so the P90 line is not any "
+            f"single path — it is the level 10% of them exceed on that day.</p>",
+            f"<p class='m'>Four layers stack into every path: detected "
+            f"recurring flows replayed at their median amount; loans amortised "
+            f"monthly at APR/12 on their own payment day; investments as "
+            f"geometric Brownian motion with Student-<i>t</i> shocks "
+            f"(ν = {T_DOF:.0f}, so crashes are more frequent than a normal "
+            f"distribution admits); and everything left over bootstrapped as "
+            f"whole historical weeks, which preserves the correlation between "
+            f"categories inside a week.</p>",
+            f"<p class='m'>One drift offset is drawn per path and held for its "
+            f"whole length. Without it the week-to-week noise averages out like "
+            f"√t and the band collapses to a few percent by the one-year mark — "
+            f"which quietly asserts that your average weekly net flow is known "
+            f"exactly. It is estimated, with standard error s/√n, and that "
+            f"error grows linearly in t. Under recency weighting the divisor is "
+            f"Kish's effective sample size 1/Σw², not the raw week count.</p>",
+        ]
+        if sf is not None:
+            rows += [
+                "<h3>Shortfall — the numbers behind the sentence</h3>",
+                "<table>",
+                f"<tr><th>Touches zero at any point</th>"
+                f"<td>{sf.prob_any * 100:.1f}% of paths</td></tr>",
+                f"<tr><th>Dips more than {fmt_money(sf.material)} under</th>"
+                f"<td>{sf.prob_material * 100:.1f}%</td></tr>",
+                f"<tr><th>Under water ≥ {SUSTAINED_DAYS} days</th>"
+                f"<td>{sf.prob_sustained * 100:.1f}%</td></tr>",
+                f"<tr><th>Still under on the final day</th>"
+                f"<td>{sf.prob_unrecovered * 100:.1f}%</td></tr>",
+                f"<tr><th>Typical worst dip (of paths that dip)</th>"
+                f"<td>{fmt_money(sf.median_depth)} for "
+                f"{sf.median_days:.0f} days</td></tr>",
+                f"<tr><th>Ending cash</th>"
+                f"<td>P10 {fmt_money(sf.end_cash_p10)} · "
+                f"P50 {fmt_money(sf.end_cash_p50)}</td></tr>",
+                f"<tr><th>Verdict</th><td><code>{sf.level}</code></td></tr>",
+                "</table>",
+                f"<p class='m'>The materiality threshold is "
+                f"{fmt_money(sf.material)}: the greater of "
+                f"{fmt_money(MATERIAL_MIN)} and a tenth of a month of your own "
+                f"essential spending, i.e. about three days of living. A dip "
+                f"shallower than that is a payment-timing artefact, and "
+                f"reporting it as running out of money is how a warning stops "
+                f"being read. Depth, duration and recovery are measured "
+                f"separately because a $5 dip and a $5,000 dip are the same "
+                f"event to a probability and different events to a person.</p>",
+            ]
+        if b:
+            floors = [("$0", "zero"), (fmt_money(STARTER_BUFFER), "starter"),
+                      (f"{months}-month fund ({fmt_money(ef_target)})",
+                       "emergency")]
+            rows.append("<h3>Floor breach probabilities</h3><table>")
+            for label, key in floors:
+                if key in b:
+                    rows.append(f"<tr><th>Below {label} at any point</th>"
+                                f"<td>{b[key] * 100:.1f}%</td></tr>")
+            rows.append("</table>")
+            if res.min_cash_pct:
+                pcts = " · ".join(
+                    f"P{p} {fmt_money(res.min_cash_pct[p], signed=True)}"
+                    for p in sorted(res.min_cash_pct))
+                rows.append(f"<p class='m'>Distribution of each path's "
+                            f"<i>lowest</i> point: {pcts}. This is a running "
+                            f"minimum, not an end-state — it is the question "
+                            f'"how bad does it get on the way" rather than '
+                            f'"where do I finish".</p>')
+        bt = getattr(self, "_bt", None)
+        if bt is not None:
+            rows += [
+                "<h3>Backtest — has this model earned belief?</h3>",
+                f"<p>Refit as of {bt.as_of:%b %Y} using only data that existed "
+                f"then ({bt.train_days // 7} weeks of it), then scored against "
+                f"what happened over {bt.n_days} days.</p><table>"
+                f"<tr><th>Inside the 80% band</th>"
+                f"<td>{bt.coverage_80 * 100:.1f}% <span class='m'>"
+                f"(nominal 80%)</span></td></tr>"
+                f"<tr><th>Inside the 50% band</th>"
+                f"<td>{bt.coverage_50 * 100:.1f}% <span class='m'>"
+                f"(nominal 50%)</span></td></tr>"
+                f"<tr><th>Median absolute error</th>"
+                f"<td>{fmt_money(bt.median_abs_error)}</td></tr>"
+                f"<tr><th>Bias, mean(actual − P50)</th>"
+                f"<td>{fmt_money(bt.bias, signed=True)} <span class='m'>"
+                f"(&gt;0 = the model was too pessimistic)</span></td></tr>"
+                "</table>",
+                f"<p class='m'>Three lookahead leaks are closed explicitly: "
+                f"recurring patterns are re-detected from the truncated ledger, "
+                f"the behavioural bootstrap is truncated the same way, and "
+                f"starting cash is read from the reconstructed history at that "
+                f"date. One is not: loan and investment balances are "
+                f"current-day, which is why only cash is scored.</p>",
+            ]
+        sens = getattr(self, "_sens", None)
+        if sens:
+            rows.append("<h3>Sensitivity</h3><table>"
+                        "<tr><th>Lever</th><th>Worst</th><th>Best</th>"
+                        "<th>Swing</th></tr>")
+            for s in sens[:8]:
+                rows.append(
+                    f"<tr><td>{s.lever}</td>"
+                    f"<td>{fmt_money(s.worst, signed=True)}</td>"
+                    f"<td>{fmt_money(s.best, signed=True)}</td>"
+                    f"<td>{fmt_money(s.swing)}</td></tr>")
+            rows.append("</table><p class='m'>Each lever is moved ±20% (or "
+                        "±$200/month for the dollar levers) with everything "
+                        "else held fixed, on the deterministic path only — "
+                        "sensitivity is a question about the mean response, and "
+                        "Monte Carlo noise would swamp the small differences "
+                        "without adding anything.</p>")
+        rows.append(f"<p style='color:{m}'>Every figure here comes from your "
+                    f"own ledger. None of it is financial advice.</p>")
+        return "Forecast · the numbers underneath", "".join(rows)
 
     # ---------------------------------------------------------------
     def run(self) -> None:
@@ -677,6 +1067,7 @@ class ForecastPage(QWidget):
         ef_target = max(0.0, ess * months)
         res = run_forecast(store, H, self.paths.value(), scenario,
                            emergency_target=ef_target, essential_monthly=ess)
+        self._res, self._ef_target, self._ef_months = res, ef_target, months
         base: ForecastResult | None = None
         if self.overlay.isChecked() and not scenario.is_baseline():
             base = run_forecast(store, H, self.paths.value(), Scenario(),

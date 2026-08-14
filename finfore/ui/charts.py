@@ -78,7 +78,7 @@ def new_plot(date_axis: bool = True, money_left: bool = True,
 # way back is to know that double-click-free "auto range" exists. Bounding the
 # view to the data it is drawing makes every gesture land somewhere meaningful.
 MIN_SPAN_DAYS = 21.0        # furthest you can zoom *in* on a date axis
-_PAD_Y = 0.08               # headroom above and below the data
+_PAD_Y = 0.08               # headroom above and below the data, as *drawn*
 _PAD_X = 0.01
 DAY = 86400.0
 
@@ -87,6 +87,21 @@ DAY = 86400.0
 # exactly backwards, since the short chart is the one being read closely. A
 # floor in days keeps the last marker off the axis whatever the span.
 _PAD_RIGHT_DAYS = 12.0
+
+# --- slack: the room the *gestures* get, as opposed to the framing ----------
+# The padding above decides how the chart looks when it opens. This decides how
+# far it can be pushed afterwards, and the two were once the same number — which
+# made the bounds feel like walls. Zooming toward the newest point ran out of
+# travel almost immediately: with 1% headroom there is nowhere for the point of
+# interest to move *to*, so the wheel stops responding while the thing being
+# inspected is still hard against the edge.
+#
+# A full chart-width past the newest point. Zoomed all the way out, the ledger
+# occupies the left half and the right half is room to work in — which is the
+# side you want space on, because the newest data is the data being read and it
+# is the end that a projection grows into.
+SLACK_RIGHT_FRAC = 1.0      # of the drawn width, past the newest point
+SLACK_RIGHT_DAYS = 45.0     # …but never less than this, on a very short chart
 
 # How much of a long history a chart opens on. The bounds still cover every
 # point — this only decides where the view starts. Recent months are what a
@@ -153,14 +168,33 @@ def lock_view(plot: pg.PlotWidget, x_min: float, x_max: float, y_series,
               include_y=(), pad_y: float = _PAD_Y,
               min_span_days: float = MIN_SPAN_DAYS,
               initial_days: float | None = None, x_data=None,
-              zoom_y: bool = True) -> None:
-    """Fix a date chart's pan/zoom envelope to its own data, and show it.
+              zoom_y: bool = True, slack_right: bool = True) -> None:
+    """Bound a date chart in time, frame it in money, and show it.
+
+    The two axes are deliberately not treated the same way.
+
+    **Time is bounded.** The left edge sits tight against the first point,
+    which is what stops a chart being scrolled off into blank space with no
+    hint of which way it went. The right edge carries a full chart-width of
+    slack, so the newest data — the part actually being read — has somewhere to
+    move to when you zoom toward it.
+
+    **Money is not bounded at all.** There are no y limits. Clamping the
+    vertical range meant a view deliberately stretched with a right-drag, to
+    pull a flat-looking line apart, snapped straight back to the data the
+    moment the wheel was touched: the y limits reasserted themselves on every
+    scroll and undid the gesture. Stretching the y axis is a legitimate way to
+    read a chart and it should survive being scrolled. The x bounds are what
+    keep the chart findable; the y axis can be left alone.
+
+    Nothing is lost by that, because double-clicking any locked chart puts it
+    back where it opened — see ``_install_home``.
 
     ``y_series`` are the plotted arrays; ``include_y`` are reference values
     (the floors) that should be visible *if they are anywhere near the data*.
     A $0 line a full chart-height below a $500k projection tells you nothing
     and costs every pixel of detail to display, so a reference further than one
-    data-span away is left out of the bounds rather than dragged into them.
+    data-span away is left out of the opening frame rather than dragged into it.
 
     ``initial_days`` opens the chart on that many trailing days instead of the
     whole span — the *limits* are unchanged, so zooming out to the beginning
@@ -178,46 +212,111 @@ def lock_view(plot: pg.PlotWidget, x_min: float, x_max: float, y_series,
     x_lo, x_max = float(x_min), float(x_max)
     x_span = max(x_max - x_lo, DAY)
     x_lo -= x_span * _PAD_X
-    x_hi = x_max + max(x_span * _PAD_X, _PAD_RIGHT_DAYS * DAY)
-    full_x, full_y = x_hi - x_lo, hi - lo
+    frame_x_hi = x_max + max(x_span * _PAD_X, _PAD_RIGHT_DAYS * DAY)
+    frame_x = frame_x_hi - x_lo
 
-    # Opening window: the trailing slice, scaled to its own detail.
+    # Zoom-out is capped at the whole envelope: the ledger in the left half,
+    # working room in the right.
+    x_hi = frame_x_hi
+    if slack_right:
+        x_hi = max(frame_x_hi, x_max + max(x_span * SLACK_RIGHT_FRAC,
+                                           SLACK_RIGHT_DAYS * DAY))
+    full_x = x_hi - x_lo
+
+    # Opening window: the trailing slice, scaled to its own detail. Measured
+    # against the frame, not the envelope — the slack is somewhere you can go,
+    # not something the chart should open showing.
     view_x_lo, view_y_lo, view_y_hi = x_lo, lo, hi
-    if initial_days and initial_days * DAY < full_x:
-        view_x_lo = x_hi - initial_days * DAY
-        frac = min(1.0, (x_hi - view_x_lo) / full_x)
+    if initial_days and initial_days * DAY < frame_x:
+        view_x_lo = frame_x_hi - initial_days * DAY
+        frac = min(1.0, (frame_x_hi - view_x_lo) / frame_x)
         tail = _tail(y_series, x_data, frac) if zoom_y else np.array([])
         if tail.size:
             t_lo, t_hi = _y_bounds(tail, include_y, pad_y)
-            view_y_lo, view_y_hi = max(lo, t_lo), min(hi, t_hi)
+            view_y_lo, view_y_hi = t_lo, t_hi
             if view_y_hi - view_y_lo < 1.0:      # a perfectly flat window
                 view_y_lo, view_y_hi = lo, hi
-    view_y = view_y_hi - view_y_lo
 
     vb = plot.getViewBox()
     vb.setLimits(
-        xMin=x_lo, xMax=x_hi, yMin=lo, yMax=hi,
-        # maxRange == the full extent: you can never pull back to empty space.
-        maxXRange=full_x, maxYRange=full_y,
-        minXRange=min(min_span_days * DAY, full_x, x_hi - view_x_lo),
-        minYRange=min(full_y * 0.02, full_y, view_y),
+        xMin=x_lo, xMax=x_hi,
+        # maxXRange == the whole envelope: you can pull back to the margin, but
+        # never into open space beyond it.
+        maxXRange=full_x,
+        minXRange=min(min_span_days * DAY, full_x, frame_x_hi - view_x_lo),
+        # Explicitly cleared, not merely omitted — this plot may have been
+        # locked before, and setLimits only touches the keys it is given.
+        yMin=None, yMax=None, minYRange=None, maxYRange=None,
     )
-    vb.setRange(xRange=(view_x_lo, x_hi), yRange=(view_y_lo, view_y_hi),
+    _install_home(plot, (view_x_lo, frame_x_hi), (view_y_lo, view_y_hi))
+    vb.setRange(xRange=(view_x_lo, frame_x_hi), yRange=(view_y_lo, view_y_hi),
                 padding=0)
+
+
+def _install_home(plot: pg.PlotWidget, x_range, y_range) -> None:
+    """Remember where a chart opened, and put it back on a double-click.
+
+    With the y axis unbounded there is no longer anything stopping a stray drag
+    from pushing the data off the top of the screen, and this app hides
+    pyqtgraph's auto-range button and context menu — so without a way home,
+    "unbounded" would mean "one gesture from an empty chart and no way back
+    except changing pages". Double-click is the recovery.
+
+    Rebinding the handler on the instance is the same trick the version label
+    in the header uses, and it is how PyQt looks a virtual up: attribute
+    lookup on the object, so a plain assignment wins over the class method.
+    """
+    vb = plot.getViewBox()
+    vb._home_range = (x_range, y_range)
+    plot.setToolTip("Scroll to zoom · drag to pan · right-drag to stretch an "
+                    "axis · double-click to reset")
+    if getattr(vb, "_home_installed", False):
+        return
+    vb._home_installed = True
+    fallback = vb.mouseDoubleClickEvent
+
+    def go_home(ev) -> None:
+        rng = getattr(vb, "_home_range", None)
+        if rng is None:
+            fallback(ev)
+            return
+        vb.setRange(xRange=rng[0], yRange=rng[1], padding=0)
+        ev.accept()
+
+    vb.mouseDoubleClickEvent = go_home
 
 
 def unlock_view(plot: pg.PlotWidget) -> None:
     """Drop any previously-set bounds so a redraw starts from a clean slate."""
-    plot.getViewBox().setLimits(xMin=None, xMax=None, yMin=None, yMax=None,
-                                minXRange=None, maxXRange=None,
-                                minYRange=None, maxYRange=None)
+    vb = plot.getViewBox()
+    vb.setLimits(xMin=None, xMax=None, yMin=None, yMax=None,
+                 minXRange=None, maxXRange=None,
+                 minYRange=None, maxYRange=None)
+    # And the double-click target with them. The analysis panel draws a tornado
+    # and a backtest into the same widget, so a stale home range would send a
+    # double-click on the tornado back to wherever the backtest happened to sit.
+    vb._home_range = None
+
+
+def nums(a) -> np.ndarray:
+    """Whatever was handed in, as a plain float array.
+
+    pyqtgraph passes plotted arrays straight to `np.isfinite`, which raises on
+    an `object` array — and it does so from inside a Qt callback, where PyQt
+    aborts the process rather than raising into anything that could catch it.
+    A pandas frame that came back from an empty SQL query is exactly that shape
+    (`store._numeric` now stops it at source; this is the seatbelt), and so is
+    a column of `Decimal`. One coercion at the boundary means a dtype surprise
+    anywhere upstream degrades to a wrong-looking chart instead of a crash.
+    """
+    return np.asarray(a, dtype=float).ravel()
 
 
 def line(plot: pg.PlotWidget, x, y, color: str, width: float = 2.0,
          name: str | None = None, dashed: bool = False):
     style = Qt.PenStyle.DashLine if dashed else Qt.PenStyle.SolidLine
     pen = pg.mkPen(color, width=width, style=style)
-    return plot.plot(x, y, pen=pen, name=name)
+    return plot.plot(nums(x), nums(y), pen=pen, name=name)
 
 
 def fan_parts(plot: pg.PlotWidget, x, pct: dict[int, np.ndarray], color: str,
@@ -228,10 +327,11 @@ def fan_parts(plot: pg.PlotWidget, x, pct: dict[int, np.ndarray], color: str,
     independently — the outer band is often the first thing worth hiding when
     comparing two scenarios on one axis.
     """
-    c_outer = pg.PlotDataItem(x, pct[10])
-    c_outer2 = pg.PlotDataItem(x, pct[90])
-    c_inner = pg.PlotDataItem(x, pct[25])
-    c_inner2 = pg.PlotDataItem(x, pct[75])
+    x = nums(x)
+    c_outer = pg.PlotDataItem(x, nums(pct[10]))
+    c_outer2 = pg.PlotDataItem(x, nums(pct[90]))
+    c_inner = pg.PlotDataItem(x, nums(pct[25]))
+    c_inner2 = pg.PlotDataItem(x, nums(pct[75]))
     outer = pg.FillBetweenItem(c_outer, c_outer2,
                                brush=pg.mkBrush(theme.qcolor(color, 34)))
     inner = pg.FillBetweenItem(c_inner, c_inner2,
@@ -274,6 +374,7 @@ def target_line(plot: pg.PlotWidget, value: float, text: str):
 def month_bars(plot: pg.PlotWidget, months: list, income: np.ndarray,
                spending: np.ndarray) -> None:
     x = to_ts(months)
+    income, spending = nums(income), nums(spending)
     w = 86400 * 8.5
     plot.addItem(pg.BarGraphItem(x=x - w / 1.9, height=income, width=w,
                                  brush=pg.mkBrush(theme.qcolor(theme.ACCENT, 190)),
@@ -287,6 +388,7 @@ def category_bars(plot: pg.PlotWidget, names: list[str], values: np.ndarray) -> 
     """Horizontal bars, largest on top."""
     n = len(names)
     ys = np.arange(n)[::-1]
+    values = nums(values)
     plot.addItem(pg.BarGraphItem(x0=0, y=ys, height=0.62, width=values,
                                  brush=pg.mkBrush(theme.qcolor(theme.BLUE, 175)),
                                  pen=pg.mkPen(None)))
@@ -393,10 +495,11 @@ def tornado(plot: pg.PlotWidget, levers: list[str], lows: np.ndarray,
 def backtest_plot(plot: pg.PlotWidget, x, actual: np.ndarray,
                   pct: dict[int, np.ndarray]) -> None:
     """What the model said (band) against what happened (solid white)."""
-    lo = pg.PlotDataItem(x, pct[10])
-    hi = pg.PlotDataItem(x, pct[90])
-    lo2 = pg.PlotDataItem(x, pct[25])
-    hi2 = pg.PlotDataItem(x, pct[75])
+    x = nums(x)
+    lo = pg.PlotDataItem(x, nums(pct[10]))
+    hi = pg.PlotDataItem(x, nums(pct[90]))
+    lo2 = pg.PlotDataItem(x, nums(pct[25]))
+    hi2 = pg.PlotDataItem(x, nums(pct[75]))
     plot.addItem(pg.FillBetweenItem(lo, hi,
                                     brush=pg.mkBrush(theme.qcolor(theme.BLUE, 34))))
     plot.addItem(pg.FillBetweenItem(lo2, hi2,

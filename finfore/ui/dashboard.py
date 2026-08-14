@@ -6,14 +6,15 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (QHBoxLayout, QLabel, QPushButton, QSizePolicy,
                              QVBoxLayout, QWidget)
 
+from ..alerts import annual_total, bill_changes, summarise
 from ..history import (category_spending, headline_stats, monthly_cashflow,
                        networth_history, reconcile)
 from ..insights import emergency_fund_target
 from ..store import Store
 from ..util import fmt_money
 from . import charts, theme
-from .widgets import (Card, LegendToggles, SeriesRegistry, StatCard,
-                      hint, hsplit, vsplit)
+from .widgets import (Card, CollapsibleCard, LegendToggles, SeriesRegistry,
+                      StatCard, hint, hsplit, info_button, vsplit)
 
 
 class DashboardPage(QWidget):
@@ -53,6 +54,29 @@ class DashboardPage(QWidget):
         empty_row.addWidget(self.guide_btn)
         lay.addLayout(empty_row)
 
+        # Bills that moved on their own. This is the one thing on the dashboard
+        # that is *news* rather than a measurement, which is why it gets a strip
+        # of its own at the top rather than a number in a card: a subscription
+        # that went up four dollars is invisible in a net-worth line and obvious
+        # in a sentence. It appears only when there is something to say.
+        self.alert_row = QWidget()
+        arl = QHBoxLayout(self.alert_row)
+        arl.setContentsMargins(0, 0, 0, 0)
+        arl.setSpacing(8)
+        self.alert = QLabel("")
+        self.alert.setObjectName("billAlert")
+        self.alert.setWordWrap(True)
+        self.alert.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse)
+        arl.addWidget(self.alert, 1)
+        self.alert_btn = info_button(
+            "What changed?", self._changes_panel,
+            tooltip="Every recurring charge whose amount has moved, what it "
+                    "used to be, and what it now costs you a year")
+        arl.addWidget(self.alert_btn)
+        self.alert_row.setVisible(False)
+        lay.addWidget(self.alert_row)
+
         # A reconstruction that has been forced somewhere impossible must say
         # so. The alternative is a chart that quietly shows a savings account
         # at −$1,469 for three years, which reads as the program being broken
@@ -81,26 +105,100 @@ class DashboardPage(QWidget):
         hist_card.body.addWidget(self.plot_hist)
         hist_card.body.addWidget(self.hist_legend)
 
-        flow_card = Card("Monthly cash flow")
+        # Foldable, because the net-worth history is the chart people actually
+        # sit and read and the other two are references you glance at. A
+        # divider can already give history most of the page, but it cannot give
+        # it *all* of the page — two cards will not shrink past their own
+        # minimum height. Folding them to their title strips will, and the
+        # chevron is the same control the Forecast page's scenario cards use.
+        flow_card = CollapsibleCard("Monthly cash flow", expanded=True)
         self.plot_flow = charts.new_plot(legend=True)
         self.plot_flow.setMinimumHeight(100)
         flow_card.body.addWidget(self.plot_flow)
-        cat_card = Card("Spending by category · last 90 days")
+        cat_card = CollapsibleCard("Spending by category · last 90 days",
+                                   expanded=True)
         self.plot_cat = charts.new_plot(date_axis=False, money_left=False,
                                         money_bottom=True)
         self.plot_cat.setMinimumHeight(100)
         cat_card.body.addWidget(self.plot_cat)
+        self.flow_card, self.cat_card = flow_card, cat_card
+        for c in (flow_card, cat_card):
+            c.header.setToolTip("Fold this away and give the net worth history "
+                                "the room")
+            c.header.clicked.connect(self._sync_split)
 
         # Draggable dividers rather than fixed 3:2 and 1:1 splits. Which chart
         # deserves the room depends on what is being looked at right now, and
         # that is not a question this file can answer once for everybody.
         bottom = hsplit(flow_card, cat_card, sizes=[500, 500])
+        hist_card.setMinimumHeight(120)
+        # A folded card is a title strip, so its minimum has to allow that.
+        for c in (flow_card, cat_card):
+            c.setMinimumHeight(34)
         for c in (hist_card, flow_card, cat_card):
-            c.setMinimumHeight(120)
             c.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
-        lay.addWidget(vsplit(hist_card, bottom, sizes=[430, 300]), 1)
+        self.split = vsplit(hist_card, bottom, sizes=[430, 300])
+        lay.addWidget(self.split, 1)
 
     # ---------------------------------------------------------------
+    def _sync_split(self) -> None:
+        """Hand the freed height to the history rather than leaving a gap.
+
+        A QSplitter keeps whatever sizes it was given, so folding both cards
+        without this leaves the bottom pane the same height with two title
+        strips floating at the top of it — the space is freed and nobody gets
+        it. Reclaiming it is the entire point of folding them.
+        """
+        folded = not (self.flow_card.expanded or self.cat_card.expanded)
+        # The panes' own sizes, not the splitter's height: height() is the
+        # widget's, which includes the handle and — before the window has been
+        # laid out even once — is not yet anything at all.
+        total = max(1, sum(self.split.sizes()))
+        if folded:
+            strip = max(self.flow_card.minimumHeight(),
+                        self.flow_card.header.sizeHint().height() + 24)
+            self.split.setSizes([max(1, total - strip), strip])
+        else:
+            self.split.setSizes([int(total * 0.58), int(total * 0.42)])
+
+    def _render_alerts(self) -> None:
+        """Say plainly which recurring charges moved on their own."""
+        try:
+            self._changes = bill_changes(self.store)
+        except Exception:
+            self._changes = []
+        self.alert_row.setVisible(bool(self._changes))
+        if self._changes:
+            self.alert.setText(summarise(self._changes))
+
+    def _changes_panel(self) -> tuple[str, str]:
+        changes = getattr(self, "_changes", [])
+        if not changes:
+            return ("What changed",
+                    "<p>Nothing has moved — every recurring charge is still "
+                    "what it was.</p>")
+        net = annual_total(changes)
+        rows = [f"<p>{summarise(changes)}</p>"]
+        if abs(net) >= 1:
+            rows.append(
+                f"<p>Net effect: <b>{fmt_money(abs(net))} a year "
+                f"{'more' if net > 0 else 'less'}</b> than before these "
+                f"changes.</p>")
+        for c in changes:
+            col = theme.RED if c.worse else theme.ACCENT
+            rows.append(
+                f"<h4 style='color:{col}'>{c.headline()}</h4>"
+                f"<p>{c.detail()}</p>")
+        rows.append(
+            "<p class='m'>How this is judged: each charge is compared against "
+            "its own history, not against a fixed threshold. A bill that "
+            "normally varies — electricity, a phone bill with roaming on it — "
+            "has to move by more than three times its usual swing before it is "
+            "mentioned at all, which is why a hot August does not appear here "
+            "and a subscription going up by two dollars does. Deactivating a "
+            "pattern on the Recurring page stops it being checked.</p>")
+        return "What changed without being asked", "".join(rows)
+
     def _render_warnings(self) -> None:
         """Explain a history the arithmetic has forced somewhere impossible."""
         try:
@@ -158,6 +256,7 @@ class DashboardPage(QWidget):
         has_data = bool(store.accounts()) or not tx.empty
         self.empty.setVisible(not has_data)
         self.guide_btn.setVisible(not has_data)
+        self._render_alerts()
         self._render_warnings()
 
         # history

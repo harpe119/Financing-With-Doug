@@ -70,7 +70,22 @@ arrival estimates directly under each goal. The cash chart carries three
 reference floors — $0 in hard red, the $1,000 starter buffer, and an emergency
 fund sized from your own essential spending (months adjustable, default 3) —
 and reports the probability that cash dips below each one *at any point* in the
-horizon, not just where it ends up. Beneath it, two analyses: a **tornado
+horizon, not just where it ends up.
+
+Under the chart, one sentence gives the **verdict**, and it is deliberately not
+that probability. `P(cash < 0 at some point)` cannot distinguish being $5 short
+on a Thursday from sliding into insolvency: it answers 100% to both, which is
+how a warning stops being read. `forecast.assess_shortfall` measures depth
+(against a materiality threshold of roughly three days of the household's own
+essential spending), duration, and recovery separately, and picks one of six
+levels — `ok`, `thin`, `brief`, `crunch`, `watch`, `high`. Only the last means
+*running out of money*, and it requires the dips to be both deep and
+non-self-correcting. `crunch` is a genuine squeeze that genuinely clears: it
+gets a date and an amount, because a fortnight of bounced payments matters even
+when the year after it is excellent. The wording lives in the engine rather
+than the page, because the wording *is* the finding.
+
+Beneath it, two analyses: a **tornado
 chart** ranking every lever by how much a ±20% move changes the outcome, and a
 **backtest** that refits the model at a past date using only data that existed
 then and scores it against what really happened — the one check that says
@@ -309,6 +324,34 @@ progress only once the ones above it are covered. The simulation is monthly and
 deterministic: this is a schedule to act on, and the Monte Carlo fan on the
 Forecast page already answers "what might happen".
 
+**Bills that moved on their own** (`alerts.py`). Each active recurring pattern's
+per-occurrence amounts are rebuilt from the ledger — the stored item keeps only
+the median, and a summary cannot be asked whether it moved — and the newest run
+is compared against the preceding baseline. The gate is the baseline's own
+**median absolute deviation**, not a fixed percentage: a change must exceed
+3·MAD, a dollar, and $24 a year. That is the whole design. A constant
+subscription has MAD = 0, so a two-dollar rise is unmissable; a power bill that
+swings $60 either way has to move a very long way, which is what keeps August
+out of the alert list. Trailing occurrences at the same new level are collapsed
+into one finding, so a rise three months ago is reported once rather than three
+times, and anything older than ~13 months is history rather than news.
+
+**Attribution for a squeeze** (`forecast.scheduled_flows` / `crunch_causes`).
+The projection replays every recurring flow, loan payment, contribution and
+one-off event by name to build its cash path, then discards the names. Keeping
+them lets a dated warning answer *caused by what?*, and lets the answer be
+acted on: moving a payment is stored as the pair of offsetting `OneOffEvent`s
+it really is, which the engine already understands and the user can undo. The
+look-back is capped at 45 days — beyond that a "cause" is not an event, it is a
+pattern of living, and the tornado chart is the right instrument.
+
+**A month that can leave** (`report.py`). One finished calendar month rendered
+to a self-contained HTML page: styling inline, no scripts, no external
+requests, light-themed because it is meant to be printed. Ctrl-P in any browser
+makes a PDF. A rolling recency-weighted window is right for judging habits and
+wrong for a document with a month's name at the top, so this one aggregates the
+calendar month directly.
+
 **Progress over time.** Every import records a *checkpoint*: the balance sheet,
 the habits score with its components, and the forecast fan as it stood at that
 moment. All three are unrecoverable after the fact — the score is
@@ -344,7 +387,14 @@ its fixed monthly timing would violate the independence the test needs.
 
 Beside the p-value sits a bootstrap 95% interval on the dollar difference,
 because that is the number that answers the question — a p-value says only
-"distinguishable from noise", the interval says how much and how sure. A
+"distinguishable from noise", the interval says how much and how sure. Neither
+is on the page: the Forecast, Progress and Insights pages each carry a **for
+nerds** button (`widgets.InfoDialog`, built at click time from the results
+currently on screen), and everything quantitative lives behind it. The page
+states the finding in a sentence; the window states the working. This is not
+about hiding the statistics — it is that a card headed *is this real or is it
+noise* which then answers `p = 0.031` has replied in a unit the reader has no
+intuition for, and the sentence that matters has to compete with it. A
 non-significant result is **never** reported as "no change"; it reports instead
 the smallest shift this many weeks could have resolved, so *"it may not feel
 like I improved, but I did"* stays distinguishable from *"there isn't enough
