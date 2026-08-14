@@ -689,9 +689,10 @@ class DuplicateDialog(QDialog):
         if ok != QMessageBox.StandardButton.Yes:
             return
         from ..dedup import apply as apply_dedup
-        n = apply_dedup(self.store, drop)
         from ..pipeline import refresh_derived
-        refresh_derived(self.store, checkpoint=False)
+        with self.store.undo_group("Remove duplicate rows"):
+            n = apply_dedup(self.store, drop)
+            refresh_derived(self.store, checkpoint=False)
         QMessageBox.information(
             self, "Removed",
             f"Removed {n} row{'s' if n != 1 else ''}.")
@@ -852,14 +853,15 @@ class AccountsPage(QWidget):
         if not path:
             return
         try:
-            added, skipped = reimport_with_saved_mapping(self.store, a.id, path)
+            with self.store.undo_group(f"Update {a.name} from CSV"):
+                added, skipped = reimport_with_saved_mapping(self.store, a.id, path)
+                n_rec = refresh_derived(self.store)
         except LookupError:
             self.main.open_import()
             return
         except ValueError as e:
             QMessageBox.warning(self, "Import problem", str(e))
             return
-        n_rec = refresh_derived(self.store)
         self.main.refresh_current()
         QMessageBox.information(
             self, "Update complete",

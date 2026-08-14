@@ -381,6 +381,24 @@ Updating never touches your accounts, transactions, goals or settings. They are
 stored separately from the program itself, so an update (or even uninstalling
 and reinstalling) picks up exactly where you left off.
 
+### If you get something wrong: Ctrl+Z
+
+Every change can be taken back. Press **Ctrl+Z** — or click the **Undo** button
+that appears at the top of the window the moment there is something to undo —
+and the last thing you did is reversed. **Ctrl+Shift+Z** (or **Ctrl+Y**) puts it
+back again, and both live on the **Edit** menu.
+
+It tells you what it is about to undo, so you never have to guess: the button
+reads *Undo import CSV*, or *Undo delete account*, or *Undo reset all data*. And
+one press takes back one *thing you did*, not one internal step — undoing an
+import removes the transactions, the recurring patterns it found and the
+checkpoint it recorded, all together.
+
+Two things worth knowing. It remembers roughly the last couple of dozen changes,
+not everything since the beginning of time. And the history is kept in memory
+while the program is open, so **closing the app clears it** — if you have just
+deleted something you want back, undo it before you quit.
+
 ### Simple view
 
 The header carries a **Simple view / Everything** switch, and it starts on

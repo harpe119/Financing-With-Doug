@@ -110,6 +110,15 @@ added, edited, deleted, or bulk-imported for *any* account: they draw the
 history line for loans and investments, and act as a corrective balance anchor
 for cash accounts.
 
+Anything that writes to the database can be taken back. **Ctrl+Z** undoes the
+last change and **Ctrl+Shift+Z** (or **Ctrl+Y**) redoes it; both sit on the
+**Edit** menu, and an **Undo** button appears in the header whenever there is
+something to undo. Each names the step it will reverse — *Undo Import CSV*,
+*Undo Delete account* — and one press takes back one *action*, not one database
+write, so undoing an import removes its transactions, patterns and checkpoint
+together. The history is held in memory and bounded, so it covers the last
+couple of dozen changes and does not survive closing the app.
+
 ## Importing real bank exports
 
 Banks disagree about signs. Ledgerline supports four conventions:
@@ -582,6 +591,7 @@ finfore/
   forecast.py             deterministic + Monte Carlo engine, loans, goals
   pipeline.py             import + refresh-derived orchestration
   store.py                SQLite persistence
+  undo.py                 snapshot undo/redo stack (Ctrl+Z), bounded in memory
   demo.py                 one-click demo loader
   ui/                     PyQt6 theme, charts, dialogs, seven pages
   ui/video.py             bundled explainer videos, with a system-player fallback

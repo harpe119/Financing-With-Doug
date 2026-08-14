@@ -16,6 +16,18 @@ from datetime import date as _date
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+# Windows still hands a bare `python tests/test_core.py` a cp1252 stdout, and a
+# single arrow in a section heading was enough to end the run with a
+# UnicodeEncodeError *after* every test had passed — which reads exactly like a
+# failure. The release build was never at risk (build.ps1 sets PYTHONIOENCODING
+# before it runs this), but "run the tests" is the first thing anybody does with
+# a checkout, and it should not appear to fail. The suite describes money, dates
+# and rates, so non-ASCII in its output is normal; the console is what needs
+# fixing, not the text.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 import numpy as np
 import pandas as pd
 
@@ -2757,6 +2769,82 @@ def main() -> None:
     check("runs the tests before shipping anything", "test_core.py" in _ps1)
     check("and publishes the checksum the updater looks for",
           "SHA256SUMS.txt" in _ps1 and "SHA256" in _ps1)
+
+    print("undo and redo")
+    from finfore.models import Goal
+    from finfore.undo import UndoStack
+    _ut = Path(tempfile.mkdtemp())
+    _u = Store(_ut / "undo.db")
+    check("undo is off until it is asked for", _u.undo is None)
+    check("and store methods still work with it off",
+          _u.add_goal(Goal("Before undo", 100, "cash")) is not None)
+    _stack = _u.enable_undo()
+    check("nothing to undo on a freshly armed stack", not _stack.can_undo)
+
+    _u.add_account(Account(name="Chk", type=AccountType.CHECKING,
+                           balance=500.0, balance_date=_date.today()))
+    check("a write becomes an undoable step", _stack.can_undo)
+    check("named the way the user will read it",
+          _stack.undo_label == "Add account")
+    _u.add_goal(Goal("Roof", 8_000, "cash"))
+    check("undo takes back the last step only", _stack.undo() == "Add goal")
+    check("the goal is gone", [g.name for g in _u.goals()] == ["Before undo"])
+    check("and the account it did not touch is still there",
+          len(_u.accounts()) == 1)
+    check("undo again reaches the step before",
+          _stack.undo() == "Add account" and _u.accounts() == [])
+    check("redo puts it back",
+          _stack.redo() == "Add account" and len(_u.accounts()) == 1)
+    check("and redo again restores the goal",
+          _stack.redo() == "Add goal" and len(_u.goals()) == 2)
+    check("nothing left to redo", not _stack.can_redo)
+
+    # One user gesture, one press of Ctrl-Z. This is the property that makes
+    # undo usable on an import, which writes to five tables.
+    _n = len(_stack._undo)
+    with _u.undo_group("Import CSV"):
+        _u.add_goal(Goal("A", 1, "cash"))
+        _u.add_goal(Goal("B", 2, "cash"))
+        _u.set_setting("plan_policy", "weighted")
+    check("a group of writes is a single step", len(_stack._undo) - _n == 1)
+    check("under the name the group was given",
+          _stack.undo_label == "Import CSV")
+    _stack.undo()
+    check("and undoing it reverses every write inside",
+          len(_u.goals()) == 2 and _u.get_setting("plan_policy") is None)
+
+    _n = len(_stack._undo)
+    _u.update_recurring(1)              # no fields: returns without writing
+    _u.set_category([], "Misc")         # no ids: writes nothing
+    check("an action that changed nothing leaves no step to press",
+          len(_stack._undo) == _n)
+    with _u.undo_suspended():
+        _u.add_goal(Goal("Quiet", 5, "cash"))
+    check("suspended work is not recorded", len(_stack._undo) == _n)
+    check("but it did happen", len(_u.goals()) == 3)
+
+    check("a new action forks the timeline rather than branching it",
+          (_stack.undo(), _u.add_goal(Goal("C", 3, "cash")),
+           _stack.can_redo)[2] is False)
+
+    _stack2 = UndoStack(_u, depth=3)
+    for _i in range(6):
+        with _stack2.group(f"step {_i}"):
+            _u.add_goal(Goal(f"G{_i}", _i + 1, "cash"))
+    check("the stack is bounded, oldest dropped first",
+          len(_stack2._undo) == 3 and _stack2.undo_label == "step 5")
+    _u.close()
+
+    check("every writing store method carries an undo label",
+          not [n for n in ("add_account", "update_account", "delete_account",
+                           "add_transactions", "delete_transactions",
+                           "set_category", "set_categories_bulk", "add_goal",
+                           "update_goal", "delete_goal", "add_snapshot",
+                           "import_snapshots", "merge_recurring",
+                           "update_recurring", "set_setting", "clear_all")
+               if not hasattr(getattr(Store, n), "undo_label")])
+    check("and reading methods do not",
+          not hasattr(Store.transactions, "undo_label"))
 
     print("splash & chart floors")
     from finfore.ui.splash import DOUG_LINES, DOUG_FACTS, doug_fact

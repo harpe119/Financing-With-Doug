@@ -3,17 +3,43 @@
 Single-file database. Schema is created on first open. Recurring-item
 re-detection merges by key and preserves user overrides (active flag, kind,
 loan link) so refreshing detection never discards manual curation.
+
+Every method that writes is marked ``@undoable`` with the name the user will
+see on the Undo menu item. The marker only costs anything once
+:meth:`Store.enable_undo` has been called — the GUI does, the test suite and
+the demo builder do not — and it is what keeps undo coverage from drifting: a
+new mutator either carries a label or is visibly the odd one out.
 """
 from __future__ import annotations
 
+import functools
 import json
 import sqlite3
+from contextlib import nullcontext
 from datetime import date, datetime
 from pathlib import Path
 
 import pandas as pd
 
 from .models import Account, AccountType, Goal, OneOffEvent, RecurringItem
+
+
+def undoable(label: str):
+    """Make one store method a single undo step named ``label``.
+
+    Groups nest, so a method that calls another marked method still produces
+    one entry, and a caller that wraps several in :meth:`Store.undo_group`
+    collapses the lot into one — which is what makes "Undo Import CSV" one
+    press rather than six.
+    """
+    def deco(fn):
+        @functools.wraps(fn)
+        def wrapper(self, *args, **kwargs):
+            with self.undo_group(label):
+                return fn(self, *args, **kwargs)
+        wrapper.undo_label = label
+        return wrapper
+    return deco
 
 
 def _numeric(df: pd.DataFrame, **columns: str) -> pd.DataFrame:
@@ -178,13 +204,54 @@ class Store:
     def __init__(self, path: str | Path):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.con = sqlite3.connect(str(self.path))
-        self.con.row_factory = sqlite3.Row
-        self.con.execute("PRAGMA foreign_keys = ON")
+        self.undo = None                  # set by enable_undo(); see undo.py
+        self._connect()
         self.con.executescript(_SCHEMA)
         self.con.commit()
 
+    def _connect(self) -> None:
+        self.con = sqlite3.connect(str(self.path))
+        self.con.row_factory = sqlite3.Row
+        self.con.execute("PRAGMA foreign_keys = ON")
+
+    # ---------------- undo ----------------
+    def enable_undo(self, **kwargs):
+        """Start recording undo steps, and return the stack.
+
+        Off by default. The GUI turns it on; the demo builder, the test suite
+        and any batch import do not want to be snapshotting a database file
+        before each of several thousand writes.
+        """
+        from .undo import UndoStack
+        if self.undo is None:
+            self.undo = UndoStack(self, **kwargs)
+        return self.undo
+
+    def undo_group(self, label: str):
+        """Context manager: everything inside is one undo step called ``label``.
+
+        A no-op when undo is off, which is what lets the store methods carry
+        their markers unconditionally.
+        """
+        return self.undo.group(label) if self.undo is not None else nullcontext()
+
+    def undo_suspended(self):
+        """Context manager: record nothing that happens inside."""
+        return self.undo.suspended() if self.undo is not None else nullcontext()
+
+    def _reopen_with(self, blob: bytes) -> None:
+        """Replace the database file wholesale and reopen on it.
+
+        The ``Store`` object survives — every page in the window holds a
+        reference to this one — so undo swaps the contents underneath rather
+        than handing anybody a new store to go and find.
+        """
+        self.con.close()
+        self.path.write_bytes(blob)
+        self._connect()
+
     # ---------------- accounts ----------------
+    @undoable("Add account")
     def add_account(self, a: Account) -> int:
         cur = self.con.execute(
             """INSERT INTO accounts (name,type,balance,balance_date,apr,annual_return,
@@ -198,6 +265,7 @@ class Store:
         a.id = cur.lastrowid
         return a.id
 
+    @undoable("Edit account")
     def update_account(self, a: Account) -> None:
         self.con.execute(
             """UPDATE accounts SET name=?,type=?,balance=?,balance_date=?,apr=?,
@@ -209,6 +277,7 @@ class Store:
         )
         self.con.commit()
 
+    @undoable("Delete account")
     def delete_account(self, account_id: int) -> None:
         self.con.execute("DELETE FROM accounts WHERE id=?", (account_id,))
         self.con.commit()
@@ -232,6 +301,7 @@ class Store:
         )
 
     # ---------------- snapshots ----------------
+    @undoable("Add balance snapshot")
     def add_snapshot(self, account_id: int, d: date, balance: float) -> None:
         self.con.execute(
             """INSERT INTO snapshots (account_id, date, balance) VALUES (?,?,?)
@@ -247,6 +317,7 @@ class Store:
         )
         return _numeric(df, id="int64", balance="float64")
 
+    @undoable("Edit balance snapshot")
     def update_snapshot(self, snapshot_id: int, d: date, balance: float) -> None:
         """Change a snapshot's date and/or balance. Raises ValueError if
         another snapshot already exists on the target date for that account."""
@@ -262,10 +333,12 @@ class Store:
                 "Delete or edit the other one first.")
         self.con.commit()
 
+    @undoable("Delete balance snapshot")
     def delete_snapshot(self, snapshot_id: int) -> None:
         self.con.execute("DELETE FROM snapshots WHERE id=?", (snapshot_id,))
         self.con.commit()
 
+    @undoable("Import balance history")
     def import_snapshots(self, account_id: int,
                          records: list[tuple[date, float]]) -> tuple[int, int]:
         """Bulk upsert (date, balance) snapshots for an account. Returns
@@ -303,6 +376,7 @@ class Store:
         return added, updated
 
     # ---------------- import mappings ----------------
+    @undoable("Save import settings")
     def save_import_mapping(self, account_id: int, mapping: dict) -> None:
         """Remember the column mapping used for an account's CSV so a later
         export can be re-imported without redoing setup."""
@@ -312,6 +386,7 @@ class Store:
         return self.get_setting(f"import_map:{account_id}", None)
 
     # ---------------- transactions ----------------
+    @undoable("Import transactions")
     def add_transactions(self, df: pd.DataFrame) -> tuple[int, int]:
         """Insert rows (idempotent on import_hash). Returns (added, skipped).
 
@@ -362,6 +437,7 @@ class Store:
         return {r["import_hash"] for r in
                 self.con.execute("SELECT import_hash FROM suppressed")}
 
+    @undoable("Delete transactions")
     def delete_transactions(self, tx_ids: list[int], note: str = "",
                             suppress: bool = True) -> int:
         """Delete rows, optionally remembering them so re-import won't restore.
@@ -388,6 +464,7 @@ class Store:
         self.con.commit()
         return len(rows)
 
+    @undoable("Restore removed rows")
     def unsuppress_all(self) -> int:
         """Forget every suppression, so a re-import restores those rows."""
         n = self.con.execute("SELECT COUNT(*) c FROM suppressed").fetchone()["c"]
@@ -395,6 +472,7 @@ class Store:
         self.con.commit()
         return int(n)
 
+    @undoable("Recategorise transactions")
     def set_category(self, tx_ids: list[int], category: str) -> None:
         self.con.executemany(
             "UPDATE transactions SET category=? WHERE id=?",
@@ -402,6 +480,7 @@ class Store:
         )
         self.con.commit()
 
+    @undoable("Recategorise transactions")
     def set_categories_bulk(self, ids_to_cat: dict[int, str]) -> None:
         self.con.executemany(
             "UPDATE transactions SET category=? WHERE id=?",
@@ -410,6 +489,7 @@ class Store:
         self.con.commit()
 
     # ---------------- recurring ----------------
+    @undoable("Update recurring patterns")
     def merge_recurring(self, items: list[RecurringItem]) -> None:
         """Upsert detected items by key, preserving user-owned fields."""
         for it in items:
@@ -451,6 +531,7 @@ class Store:
             ))
         return out
 
+    @undoable("Edit recurring pattern")
     def update_recurring(self, item_id: int, **fields) -> None:
         allowed = {"active", "kind", "linked_account_id", "amount", "name"}
         if not fields:                     # nothing to do; SET clause would be empty
@@ -467,6 +548,7 @@ class Store:
         self.con.execute(f"UPDATE recurring SET {', '.join(sets)} WHERE id=?", vals)
         self.con.commit()
 
+    @undoable("Delete recurring pattern")
     def delete_recurring(self, item_id: int) -> None:
         """Permanently remove a pattern. Note: if it's still present in the
         ledger, the next re-detect will simply re-add it — use active=False
@@ -477,6 +559,7 @@ class Store:
         self.con.commit()
 
     # ---------------- category feedback (ML training corpus) ----------------
+    @undoable("Teach Doug a category")
     def add_category_feedback(self, records: list[dict]) -> int:
         """Append manual re-categorisations. Each record needs norm_key,
         description, amount, new_category; old_category/account_type/source are
@@ -512,6 +595,7 @@ class Store:
                             GROUP BY norm_key)""").fetchall()
         return {r["norm_key"]: r["new_category"] for r in rows}
 
+    @undoable("Clear what Doug learned")
     def clear_category_feedback(self) -> None:
         self.con.execute("DELETE FROM category_feedback")
         self.con.commit()
@@ -529,6 +613,7 @@ class Store:
                             id=r["id"])
                 for r in self.con.execute(q).fetchall()]
 
+    @undoable("Add one-off event")
     def add_event(self, e: OneOffEvent) -> int:
         cur = self.con.execute(
             "INSERT INTO events (label, when_date, amount, active) VALUES (?,?,?,?)",
@@ -537,6 +622,7 @@ class Store:
         e.id = cur.lastrowid
         return e.id
 
+    @undoable("Edit one-off event")
     def update_event(self, event_id: int, **fields) -> None:
         allowed = {"label", "amount", "active"}
         sets, vals = [], []
@@ -554,10 +640,12 @@ class Store:
         self.con.execute(f"UPDATE events SET {', '.join(sets)} WHERE id=?", vals)
         self.con.commit()
 
+    @undoable("Delete one-off event")
     def delete_event(self, event_id: int) -> None:
         self.con.execute("DELETE FROM events WHERE id=?", (event_id,))
         self.con.commit()
 
+    @undoable("Add goal")
     def add_goal(self, g: Goal) -> int:
         cur = self.con.execute(
             "INSERT INTO goals (name, amount, kind) VALUES (?,?,?)",
@@ -567,6 +655,7 @@ class Store:
         g.id = cur.lastrowid
         return g.id
 
+    @undoable("Delete goal")
     def delete_goal(self, goal_id: int) -> None:
         self.con.execute("DELETE FROM goals WHERE id=?", (goal_id,))
         self.con.commit()
@@ -576,6 +665,7 @@ class Store:
         return [Goal(id=r["id"], name=r["name"], amount=r["amount"], kind=r["kind"])
                 for r in rows]
 
+    @undoable("Edit goal")
     def update_goal(self, goal_id: int, name: str | None = None,
                     amount: float | None = None, kind: str | None = None) -> None:
         sets, params = [], []
@@ -599,6 +689,7 @@ class Store:
         v = self.get_setting("plan_order", [])
         return [str(k) for k in v] if isinstance(v, list) else []
 
+    @undoable("Reorder the plan")
     def set_plan_order(self, keys: list[str]) -> None:
         self.set_setting("plan_order", list(keys))
 
@@ -606,6 +697,7 @@ class Store:
         v = self.get_setting("plan_policy", "focus")
         return v if v in ("focus", "weighted", "custom") else "focus"
 
+    @undoable("Change plan policy")
     def set_plan_policy(self, policy: str) -> None:
         self.set_setting("plan_policy", policy)
 
@@ -622,6 +714,7 @@ class Store:
                 continue
         return out
 
+    @undoable("Change plan split")
     def set_plan_allocations(self, alloc: dict[str, float]) -> None:
         self.set_setting("plan_allocations",
                          {str(k): float(v) for k, v in alloc.items()})
@@ -632,6 +725,7 @@ class Store:
                 "savings_rate", "income", "spending", "essential", "frivolous",
                 "unknown", "forecast")
 
+    @undoable("Record a checkpoint")
     def add_checkpoint(self, cp) -> int:
         vals = (cp.when.isoformat(), cp.label, int(cp.n_transactions),
                 cp.latest_tx.isoformat() if cp.latest_tx else None,
@@ -669,11 +763,13 @@ class Store:
                 frivolous=r["frivolous"], unknown=r["unknown"], forecast=fc))
         return out
 
+    @undoable("Delete checkpoint")
     def delete_checkpoint(self, checkpoint_id: int) -> None:
         self.con.execute("DELETE FROM checkpoints WHERE id=?", (checkpoint_id,))
         self.con.commit()
 
     # ---------------- misc ----------------
+    @undoable("Change a setting")
     def set_setting(self, key: str, value) -> None:
         self.con.execute(
             "INSERT INTO settings (key, value) VALUES (?,?) "
@@ -686,6 +782,7 @@ class Store:
         r = self.con.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
         return json.loads(r["value"]) if r else default
 
+    @undoable("Reset all data")
     def clear_all(self) -> None:
         for t in ("snapshots", "transactions", "recurring", "goals", "accounts",
                   "settings", "category_feedback", "events", "checkpoints",

@@ -4,7 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from PyQt6.QtCore import QSettings, Qt
-from PyQt6.QtGui import QAction
+from PyQt6.QtGui import QAction, QKeySequence
 from PyQt6.QtWidgets import (QApplication, QHBoxLayout, QLabel, QListWidget,
                              QMainWindow, QMessageBox, QPushButton, QSizePolicy,
                              QStackedWidget, QVBoxLayout, QWidget)
@@ -108,12 +108,27 @@ class MainWindow(QMainWindow):
         self.mode_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.mode_btn.clicked.connect(self._toggle_mode)
 
+        # Undo lives in the header as well as on the menu. A menu item is
+        # enough for someone who already knows the change can be taken back;
+        # the point of a button is that it is *visible the moment there is
+        # something to undo*, which is exactly when a person who has just
+        # mistyped a balance is looking at the screen wondering what they did.
+        # Hidden when the stack is empty, so it never reads as a live control
+        # that does nothing.
+        self.undo_btn = QPushButton("Undo")
+        self.undo_btn.setObjectName("small")
+        self.undo_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.undo_btn.setVisible(False)
+        self.undo_btn.clicked.connect(self.undo)
+
         hl.addWidget(title)
         hl.addSpacing(6)
         hl.addWidget(ver)
         hl.addSpacing(10)
         hl.addWidget(tag)
         hl.addStretch(1)
+        hl.addWidget(self.undo_btn)
+        hl.addSpacing(10)
         hl.addWidget(self.mode_btn)
         hl.addSpacing(10)
         hl.addWidget(self.header_nw)
@@ -164,9 +179,15 @@ class MainWindow(QMainWindow):
         self._settings = QSettings("Doug", "Financing with Doug")
         self.simple_mode = self._settings.value("simple_mode", True, type=bool)
         self._apply_mode(refresh=False)
-        self.nav.setCurrentRow(0)
-
+        # Recording starts here rather than in Store.__init__ so that the demo
+        # builder, the test suite and any scripted import — none of which have
+        # a person to press Ctrl-Z — pay nothing for it. Both this and the menu
+        # have to be in place before the first page refresh, which is what
+        # setCurrentRow triggers: the header syncs the undo controls, and they
+        # have to exist by then.
+        store.enable_undo()
         self._build_menu()
+        self.nav.setCurrentRow(0)
         self.statusBar().showMessage(f"Database: {store.path}")
 
     # ---------------------------------------------------------------
@@ -249,6 +270,28 @@ class MainWindow(QMainWindow):
         m_file.addSeparator()
         m_file.addAction(a_quit)
 
+        m_edit = self.menuBar().addMenu("&Edit")
+        self.a_undo = QAction("Undo", self)
+        self.a_undo.setShortcut(QKeySequence.StandardKey.Undo)          # Ctrl+Z
+        self.a_undo.triggered.connect(self.undo)
+        self.a_redo = QAction("Redo", self)
+        # Both conventions, because both are muscle memory for somebody, and
+        # the platform standard is only ever one of them — on Windows Qt
+        # reports Ctrl+Y, so binding the standard key alone would leave
+        # Ctrl+Shift+Z dead while the status bar cheerfully advertised it.
+        _redo = QKeySequence.keyBindings(QKeySequence.StandardKey.Redo)
+        for extra in (QKeySequence("Ctrl+Y"), QKeySequence("Ctrl+Shift+Z")):
+            if extra not in _redo:
+                _redo.append(extra)
+        self.a_redo.setShortcuts(_redo)
+        self.a_redo.triggered.connect(self.redo)
+        m_edit.addAction(self.a_undo)
+        m_edit.addAction(self.a_redo)
+        # The menu can be opened after a change made from a page that did not
+        # route back through refresh_header, so it re-reads the stack on the
+        # way open rather than trusting it was told.
+        m_edit.aboutToShow.connect(self._sync_undo)
+
         m_help = self.menuBar().addMenu("&Help")
         a_guide = QAction("Getting started", self)
         a_guide.setShortcut("F1")
@@ -281,9 +324,62 @@ class MainWindow(QMainWindow):
         st = headline_stats(self.store)
         self.header_nw.setText(
             f"net worth  {fmt_money(st['networth'])}" if st["networth"] else "")
+        self._sync_undo()
 
     def status(self, msg: str) -> None:
         self.statusBar().showMessage(msg, 6000)
+
+    # ---------------- undo / redo ----------------
+    def _sync_undo(self) -> None:
+        """Make the menu items and the header button say what they will do.
+
+        Naming the step — "Undo Import CSV" rather than "Undo" — is the whole
+        difference between a control someone trusts and one they are afraid to
+        press, because it answers the question they actually have, which is not
+        *can* I undo but *what* will disappear if I do.
+        """
+        u = getattr(self.store, "undo", None)
+        can_undo = bool(u and u.can_undo)
+        can_redo = bool(u and u.can_redo)
+        self.a_undo.setEnabled(can_undo)
+        self.a_redo.setEnabled(can_redo)
+        self.a_undo.setText(f"Undo {u.undo_label}" if can_undo else "Undo")
+        self.a_redo.setText(f"Redo {u.redo_label}" if can_redo else "Redo")
+        self.undo_btn.setVisible(can_undo)
+        if can_undo:
+            self.undo_btn.setText(f"↶  Undo {u.undo_label.lower()}")
+            self.undo_btn.setToolTip(
+                f"Put things back the way they were before “{u.undo_label}” "
+                f"(Ctrl+Z)")
+
+    def undo(self) -> None:
+        self._step("undo", "Undid")
+
+    def redo(self) -> None:
+        self._step("redo", "Redid")
+
+    def _step(self, direction: str, verb: str) -> None:
+        u = getattr(self.store, "undo", None)
+        if u is None:
+            return
+        try:
+            label = getattr(u, direction)()
+        except Exception as e:
+            # Undo rewrites the database file underneath an open connection.
+            # If that fails the data on disk is still whatever it was, but the
+            # user has to be told the change did not happen — silently doing
+            # nothing here would be indistinguishable from having nothing to
+            # undo, which is the one thing they must not conclude.
+            QMessageBox.warning(
+                self, f"Couldn't {direction} that",
+                f"{e}\n\nYour data has not been changed.")
+            return
+        if label is None:
+            self.status(f"Nothing left to {direction}.")
+            return
+        self.refresh_current()
+        self.status(f"{verb} “{label}”. "
+                    f"{'Ctrl+Shift+Z puts it back.' if direction == 'undo' else ''}")
 
     # ---------------------------------------------------------------
     def open_import(self) -> None:
@@ -422,6 +518,11 @@ class MainWindow(QMainWindow):
         self.demo_key = demo_key
         for p in self.pages:
             p.store = store
+        # A fresh stack per database. Undo restores a *file*, so carrying steps
+        # across a switch would let Ctrl-Z on the demo overwrite the real
+        # ledger with a demo snapshot — the one mistake this feature must never
+        # make.
+        store.enable_undo()
         try:
             old.close()
         except Exception:
@@ -503,11 +604,12 @@ class MainWindow(QMainWindow):
         ok = QMessageBox.question(
             self, "Reset all data",
             f"Delete all accounts, transactions, patterns, and goals from "
-            f"{what} database? This cannot be undone.")
+            f"{what} database?\n\nCtrl+Z will bring it all back while this "
+            f"window stays open — but once you close the app, it is gone.")
         if ok == QMessageBox.StandardButton.Yes:
             self.store.clear_all()
             self.refresh_current()
-            self.status("Database cleared.")
+            self.status("Database cleared. Ctrl+Z undoes this.")
 
     def _doug_says(self) -> None:
         from .splash import doug_fact

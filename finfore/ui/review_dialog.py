@@ -199,9 +199,14 @@ class ReviewUncategorizedDialog(QDialog):
                                     "Choose a category for at least one merchant.")
             return
         moved = 0
-        for cluster, cat in picks:
-            moved += label_cluster(self.store, cluster, cat)
-        propagated = recategorize_all(self.store)
+        # The whole batch is one press of Apply, so it is one press of Ctrl-Z —
+        # including the rows that were relabelled by propagation rather than by
+        # hand, which are the ones hardest to put back manually.
+        with self.store.undo_group(
+                f"Label {len(picks)} merchant{'s' if len(picks) != 1 else ''}"):
+            for cluster, cat in picks:
+                moved += label_cluster(self.store, cluster, cat)
+            propagated = recategorize_all(self.store)
         self._reload()
         left = uncategorized_summary(self.store,
                                      months=self.window.currentData())

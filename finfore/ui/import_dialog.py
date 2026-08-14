@@ -193,11 +193,16 @@ class ImportDialog(QDialog):
             col_indicator=self.c_indicator.currentData() or "",
         )
         try:
-            added, skipped = import_with_config(self.store, cfg)
+            # One press of Ctrl-Z has to take back the whole import. Without
+            # the group this is four separate steps — rows, saved mapping,
+            # re-categorisation, patterns and checkpoint — and undoing "an
+            # import" would mean pressing it until the numbers looked right.
+            with self.store.undo_group("Import CSV"):
+                added, skipped = import_with_config(self.store, cfg)
+                n_rec = refresh_derived(self.store)
         except ValueError as e:
             QMessageBox.warning(self, "Import problem", str(e))
             return
-        n_rec = refresh_derived(self.store)
         self.result_counts = (added, skipped)
         QMessageBox.information(
             self, "Import complete",

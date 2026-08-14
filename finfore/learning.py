@@ -467,15 +467,18 @@ def label_cluster(store, cluster: MerchantCluster, category: str) -> int:
     """
     if not cluster.tx_ids or not category:
         return 0
-    store.set_category(cluster.tx_ids, category)
-    store.add_category_feedback([{
-        "norm_key": cluster.norm_key,
-        "description": cluster.display,
-        "amount": -abs(cluster.total / max(cluster.n_tx, 1)),
-        "old_category": "Misc",
-        "new_category": category,
-        "source": "review-queue",
-    }])
+    # Relabelling and remembering the correction are one decision to the user,
+    # so they are one step to undo.
+    with store.undo_group(f"Label {cluster.display} as {category}"):
+        store.set_category(cluster.tx_ids, category)
+        store.add_category_feedback([{
+            "norm_key": cluster.norm_key,
+            "description": cluster.display,
+            "amount": -abs(cluster.total / max(cluster.n_tx, 1)),
+            "old_category": "Misc",
+            "new_category": category,
+            "source": "review-queue",
+        }])
     return len(cluster.tx_ids)
 
 

@@ -6,6 +6,39 @@ intended to hand to someone else. The running version is shown in the app
 header and under **Help → About**, so a downloaded copy always identifies
 itself.
 
+## 1.17.0 — Ctrl+Z
+
+Every change to the database can now be taken back.
+
+- **Undo and redo.** `Ctrl+Z` steps back, `Ctrl+Shift+Z` or `Ctrl+Y` steps
+  forward again, both are on a new **Edit** menu, and an **Undo** button appears
+  in the header the moment there is something to undo. All three name the step:
+  *Undo Import CSV*, *Undo Delete account*, *Undo Reset all data*. Naming it is
+  most of the value — the question someone actually has is not whether they
+  *can* undo but *what disappears* if they do, and a control that answers that
+  is one they will use.
+- **One gesture is one press.** The unit of undo is the whole database file, and
+  steps are recorded at action boundaries rather than at each SQL statement. An
+  import writes transactions, a saved column mapping, re-categorisations,
+  recurring patterns and a checkpoint — five tables — and comes back in a single
+  press. Same for removing duplicate rows, labelling a batch of merchants on the
+  review queue, and adding a goal (which also writes the plan order).
+- **A step that changed nothing is never recorded.** The file is compared before
+  and after, so a dialog opened and cancelled, or an edit that re-saved
+  identical values, does not push an entry. Ctrl+Z that visibly does nothing is
+  worse than no Ctrl+Z at all: the user presses it again, and again, straight
+  past the change they wanted back.
+- **Reset all data is undoable**, and its confirmation now says so — along with
+  the limit, which is that the undo history lives in memory and does not survive
+  closing the app.
+- Every writing `Store` method carries an `@undoable("…")` marker, and a test
+  asserts they all do, so a mutator added later either has a label or is
+  visibly the odd one out. Recording is off unless `enable_undo()` is called, so
+  the demo builder, the test suite and scripted imports pay nothing for it.
+  Switching to a demo dataset starts a fresh stack — undo restores a *file*, and
+  carrying steps across databases would let Ctrl+Z overwrite the real ledger
+  with a demo snapshot.
+
 ## 1.16.0 — an installer, and a program that can update itself
 
 Doug can now be handed to somebody who has never seen a terminal.

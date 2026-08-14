@@ -556,8 +556,9 @@ class GoalsPage(QWidget):
         if dlg.exec() != QDialog.DialogCode.Accepted:
             return
         name, amount, kind = dlg.values()
-        gid = self.store.add_goal(Goal(name, amount, kind))
-        self.store.set_plan_order(self._keys + [f"goal:{gid}"])
+        with self.store.undo_group(f"Add goal “{name}”"):
+            gid = self.store.add_goal(Goal(name, amount, kind))
+            self.store.set_plan_order(self._keys + [f"goal:{gid}"])
         self._rerun()
         self.main.refresh_header()
 
@@ -595,11 +596,13 @@ class GoalsPage(QWidget):
                 self, "Can't size it yet",
                 "Essential spending can't be established from the ledger yet.")
             return
-        gid = self.store.add_goal(
-            Goal(f"Emergency fund ({months.value()} mo)", amt, "cash"))
-        # An emergency fund is the one target mainstream guidance is unanimous
-        # about putting first, so it goes to the top rather than the bottom.
-        self.store.set_plan_order([f"goal:{gid}"] + self._keys)
+        with self.store.undo_group("Add emergency fund goal"):
+            gid = self.store.add_goal(
+                Goal(f"Emergency fund ({months.value()} mo)", amt, "cash"))
+            # An emergency fund is the one target mainstream guidance is
+            # unanimous about putting first, so it goes to the top rather than
+            # the bottom.
+            self.store.set_plan_order([f"goal:{gid}"] + self._keys)
         self._rerun()
         self.main.refresh_header()
 
@@ -640,7 +643,8 @@ class GoalsPage(QWidget):
                                 "Remove this goal from the ladder?") \
                 != QMessageBox.StandardButton.Yes:
             return
-        self.store.delete_goal(gid)
-        self.store.set_plan_order([k for k in self._keys if k != key])
+        with self.store.undo_group("Delete goal"):
+            self.store.delete_goal(gid)
+            self.store.set_plan_order([k for k in self._keys if k != key])
         self._rerun()
         self.main.refresh_header()
