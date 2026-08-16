@@ -372,8 +372,9 @@ in the toolbar says so at more length.
 
 ### Keeping it up to date
 
-**Help → Check for updates…** asks whether a newer version has been released,
-shows what changed, and — if you want it — downloads and installs it for you.
+**Check for updates** — its own button along the top of the window, beside
+*File*, *Edit* and *Help* — asks whether a newer version has been released,
+shows what changed, and, if you want it, downloads and installs it for you.
 The app also checks quietly in the background once a day and stays silent
 unless there is something new.
 
@@ -510,8 +511,8 @@ The habits score is a transparent rule of thumb anchored on published budgeting
 guidance, not a validated financial index.
 
 Everything it does is written down in **Help → Methodology**, and at more length
-in `README.md` in the program folder. Nothing here is a black box — if a number
-looks wrong, it can be traced.
+in `docs/methodology.md` in the program folder. Nothing here is a black box — if
+a number looks wrong, it can be traced.
 
 ---
 

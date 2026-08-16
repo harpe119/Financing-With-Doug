@@ -1,10 +1,10 @@
 """The update button, and the quiet check behind it.
 
-Two entry points. **Help → Check for updates…** is the one people press, and it
-answers even when the answer is "you are up to date" — a button that does
-nothing visible when there is no news reads as broken. The startup check is
-silent unless there is something to say, runs on a background thread so it
-cannot stall the window, and holds itself to once a day.
+Two entry points. **Check for updates**, its own button on the menu bar, is the
+one people press, and it answers even when the answer is "you are up to date" —
+a button that does nothing visible when there is no news reads as broken. The
+startup check is silent unless there is something to say, runs on a background
+thread so it cannot stall the window, and holds itself to once a day.
 
 Nothing downloads without being asked, and nothing is ever run without the
 release notes having been shown first.
@@ -202,7 +202,7 @@ def _download_and_run(release, parent) -> bool:
 
 # ---------------------------------------------------------------------------
 def check_now(parent) -> None:
-    """Help → Check for updates…  Always answers."""
+    """The menu bar's Check for updates button.  Always answers."""
     if not update.configured():
         QMessageBox.information(
             parent, "Update checking isn't set up",

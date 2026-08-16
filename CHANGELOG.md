@@ -6,6 +6,35 @@ intended to hand to someone else. The running version is shown in the app
 header and under **Help → About**, so a downloaded copy always identifies
 itself.
 
+## 1.18.2 — a button you don't have to hunt for, and a front page for the family
+
+Both of these are about the same thing from opposite ends: what happens when
+somebody who did not write this is handed it.
+
+- **Check for updates is its own button on the menu bar.** It was an item
+  inside **Help**, which is fine if you already know menus. It is the one
+  control a non-technical user gets *told* to go and press, and "open Help,
+  then look down the list" is two steps more than "click that". It is now a
+  bare action on the bar beside *File*, *Edit* and *Help*: one click, no menu
+  drops down, and it still always answers — including "you're up to date". The
+  test suite now asserts both halves of that, since a bare menu-bar action is
+  easy to nudge back into a submenu without noticing every instruction that
+  names it has stopped being true.
+- **The README is written for the people being handed the program.** It opened
+  on a paragraph about pyqtgraph and percentile bands and ran to 42 KB of
+  methodology — accurate, and the wrong document to give a relative who has
+  been told this will help with their money. The front page now answers four
+  questions in order: what it is and why it isn't just another spending
+  tracker, how to install it, how to get a CSV out of your bank and into it,
+  and what each of the eight pages is for. Nothing was deleted: the maths moved
+  to [`docs/methodology.md`](docs/methodology.md), and running from source,
+  building a release and the project layout moved to
+  [`docs/development.md`](docs/development.md), both linked from the bottom of
+  the README. The README also now carries commented-out `PICTURE:` placeholders
+  at each spot a screenshot belongs, so adding one is dropping a file into
+  `docs/images/` and deleting two lines — and a comment renders as nothing, so
+  the page reads correctly with none of them filled in yet.
+
 ## 1.18.1 — the last frame stays up
 
 - **The Explain me video holds its final frame.** The explainer ends on a card

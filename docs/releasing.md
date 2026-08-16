@@ -24,8 +24,8 @@ GITHUB_OWNER = "your-github-username"     # currently empty
 GITHUB_REPO  = "FinancingWithDoug"
 ```
 
-Until this is set, **Help → Check for updates…** politely says update checking
-isn't configured rather than failing like a network error.
+Until this is set, the **Check for updates** button politely says update
+checking isn't configured rather than failing like a network error.
 
 ---
 
@@ -108,8 +108,9 @@ overrides interpreter detection.
 - **Updating.** The app checks GitHub once a day in the background and says
   nothing unless there is something newer. When there is, it shows the release
   notes and offers **Download and install**; it verifies the checksum, closes
-  itself, runs the installer, and reopens. **Help → Check for updates…** does
-  the same on demand and always answers, including "you're up to date".
+  itself, runs the installer, and reopens. The **Check for updates** button on
+  the menu bar does the same on demand and always answers, including "you're up
+  to date".
 - **Their data is never touched** — by an update or by an uninstall. It lives in
   `%USERPROFILE%\.ledgerline\ledgerline.db`, outside the install directory. The
   uninstaller says so before it runs.

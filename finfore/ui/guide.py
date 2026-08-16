@@ -85,7 +85,7 @@ class GuideDialog(QDialog):
                 "The guide file did not ship with this copy. It should be at "
                 f"`{DOC}` inside the program folder.\n\n"
                 "Everything it covers is also in **Help → Methodology** and in "
-                "`README.md` beside the program.\n")
+                "`docs/methodology.md` beside the program.\n")
             return
         try:
             text = path.read_text(encoding="utf-8")

@@ -298,18 +298,24 @@ class MainWindow(QMainWindow):
         a_guide.triggered.connect(self.show_guide)
         m_help.addAction(a_guide)
         m_help.addSeparator()
-        a_update = QAction("Check for updates…", self)
-        a_update.setToolTip("Ask GitHub whether a newer version has been "
-                            "released, and install it if so")
-        a_update.triggered.connect(self.check_for_updates)
-        m_help.addAction(a_update)
-        m_help.addSeparator()
         a_meth = QAction("Methodology", self)
         a_meth.triggered.connect(self._methodology)
         m_help.addAction(a_meth)
         a_about = QAction("About Doug", self)
         a_about.triggered.connect(self._about)
         m_help.addAction(a_about)
+
+        # A bare action on the menu bar rather than an entry inside Help: this
+        # is the one menu item a non-technical user is ever told to go and find,
+        # and "it's under Help" is a step too many when the whole instruction is
+        # "click that". Clicking it runs the check directly — there is no menu
+        # to drop down. Kept last so File/Edit/Help stay where muscle memory
+        # expects them.
+        self.a_update = QAction("Check for updates", self)
+        self.a_update.setToolTip("Ask GitHub whether a newer version has been "
+                                 "released, and install it if so")
+        self.a_update.triggered.connect(self.check_for_updates)
+        self.menuBar().addAction(self.a_update)
 
     def _on_nav(self, row: int) -> None:
         self.stack.setCurrentIndex(row)

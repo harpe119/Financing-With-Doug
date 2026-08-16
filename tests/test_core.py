@@ -2507,6 +2507,20 @@ def main() -> None:
           abs(_win.store.accounts()[0].balance - 1234.56) < 1e-9)
     check("the demo banner is gone", _win.banner.isHidden())
 
+    # "It's under Help" is one step too many for the single menu item a
+    # non-technical user is ever told to go and find, so it sits on the bar
+    # itself. Asserted because a top-level bare action is easy to nudge back
+    # into a submenu without noticing the instructions no longer match.
+    print("the update button is where people are told to look")
+    _bar = _win.menuBar().actions()
+    check("Check for updates is its own menu bar button",
+          any(a.text() == "Check for updates" and a.menu() is None
+              for a in _bar))
+    _help_menu = next(a.menu() for a in _bar
+                      if a.text().replace("&", "") == "Help")
+    check("and is not also buried in the Help menu",
+          not any("update" in a.text().lower() for a in _help_menu.actions()))
+
     print("a month that can leave the app")
     from finfore import report as _RP
     _rp_store = Store(Path(tempfile.mkdtemp()) / "rep.db")

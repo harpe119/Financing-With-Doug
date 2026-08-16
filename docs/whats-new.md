@@ -9,6 +9,21 @@ available, so it's worth keeping them readable.
 
 ---
 
+## 1.18.2 — easier to find things
+
+- **"Check for updates" is now a button along the top of the window**, next to
+  *File*, *Edit* and *Help*. It used to be tucked inside the Help menu, which is
+  a silly place for the one button anyone actually gets told to go and press.
+  One click, and it always tells you something — including "you're up to date".
+- **The front page has been rewritten for people, not programmers.** If you were
+  sent a link to download this, the page you landed on now explains what Doug
+  actually does, how to install it, how to get your bank's file into it, and
+  what each of the eight pages is for — in plain sentences, without the
+  mathematics. (The mathematics is still there, just on its own page now, for
+  anyone who wants it.)
+
+Nothing about your accounts, transactions or goals changes in this update.
+
 ## 1.18.1 — a small one
 
 - **The explainer video stops disappearing.** The short video behind ▶ **Explain
@@ -28,7 +43,8 @@ password and it puts a shortcut on your desktop.
 **It keeps itself up to date.** Doug checks once a day whether there's a newer
 version and stays quiet unless there is. When there is, it shows you what
 changed and offers to install it — you click one button and it handles the
-rest. You can also check any time from **Help → Check for updates**.
+rest. You can also check any time from the **Check for updates** button along
+the top of the window.
 
 Your information is never touched by an update. It's kept separately from the
 program itself, so updating — or even uninstalling and reinstalling — picks up
