@@ -199,7 +199,9 @@ class VideoTests(unittest.TestCase):
         self.assertTrue(video.video_path().is_file())
         with patch.object(video.QDesktopServices, "openUrl", return_value=True) as open_url:
             self.assertTrue(video.play())
-            self.assertEqual(open_url.call_args.args[0].toLocalFile(), str(video.video_path()))
+            # Qt normalizes local URLs to forward slashes, including Windows
+            # UNC paths. Compare filesystem paths, not their string spelling.
+            self.assertEqual(Path(open_url.call_args.args[0].toLocalFile()), video.video_path())
         spec = (Path(__file__).resolve().parent.parent / "packaging/doug.spec").read_text()
         self.assertIn('("../assets/monte_carlo.mp4", "assets")', spec)
 
