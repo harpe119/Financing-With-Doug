@@ -8,14 +8,29 @@ Two mechanisms:
 """
 from __future__ import annotations
 
+import re
+import unicodedata
+from functools import lru_cache
+
 import pandas as pd
 
 # (keywords, category) — first match wins. Keywords are matched against the
-# upper-cased raw description.
+# normalized description, with word boundaries and explicit abbreviation stems.
 RULES: list[tuple[tuple[str, ...], str]] = [
     (("PAYROLL", "DIRECT DEP", "SALARY", "PAYCHECK", "EMPLOYER"), "Income"),
     (("INTEREST", "DIVIDEND"), "Interest & dividends"),
-    (("TRANSFER", "XFER"), "Transfer"),
+    # A transfer to another person is spending, not necessarily an internal
+    # move. Only explicit own-account wording gets this fallback label; matched
+    # account-to-account legs are handled by pair_transfers below.
+    (("INTERNAL TRANSFER", "TRANSFER BETWEEN ACCOUNTS", "BROKERAGE TRANSFER",
+      "TRANSFER TO SAVINGS", "TRANSFER FROM SAVINGS", "TRANSFER TO CHECKING",
+      "TRANSFER FROM CHECKING", "TRANSFER TO BROKERAGE", "TRANSFER FROM BROKERAGE",
+      "TRANSFER TO CERTIFICATE", "TRANSFER FROM CERTIFICATE",
+      "XFER TO SAVINGS", "XFER FROM SAVINGS", "XFER TO CHECKING", "XFER FROM CHECKING"), "Transfer"),
+    (("COSTCO GAS", "COSTCO FUEL", "SAM'S CLUB GAS", "SAMS CLUB GAS", "WALMART FUEL"), "Fuel"),
+    (("DISNEY WORLD", "DISNEYLAND", "RENT A CAR", "CAR RENTAL"), "Travel"),
+    (("AMAZON PRIME", "AMZN PRIME"), "Subscriptions"),
+    (("SHELL ENERGY", "SHELL BROADBAND"), "Utilities"),
     (("RENT", "LANDLORD", "PROPERTIES", "APARTMENT", "MORTGAGE"), "Housing"),
     (("ELECTRIC", "POWER CO", "ENERGY", "GAS & ELEC", "WASHINGTON GAS",
       "NATURAL GAS", "WATER", "SEWER", "UTILIT", "WASTE MGMT",
@@ -86,11 +101,36 @@ RULES: list[tuple[tuple[str, ...], str]] = [
 
 INCOME_CATEGORIES = {"Income", "Interest & dividends", "Other income"}
 
+# These are intentional bank abbreviations or word stems, rather than arbitrary
+# substring matches. Everything else must end at a boundary (or a plural S).
+_STEMS = frozenset({
+    "DIRECT DEP", "DIVIDEND", "UTILIT", "REPUBLIC SERV", "CARDMEMBER SERV",
+    "TRADER JOE", "GROCER", "MCDONALD", "WENDY", "CHICK-FIL", "OPTOMETR",
+    "DELTA AIR", "UNITED AIR", "SOUTHWEST AIR", "AMERICAN AIR", "ALASKA AIR",
+    "DISCOVER E-PAY", "CHARIT", "DONAT", "HABITAT FOR HUM", "PLANNED PARENT",
+    "CHARITABLE FOUND", "COMMUNITY FOUND", "MEMORIAL FOUND", "CHURCH DONAT",
+})
+
+
+def _rule_text(text: str) -> str:
+    text = unicodedata.normalize("NFKD", str(text or "").upper())
+    text = "".join(char for char in text if not unicodedata.combining(char))
+    return re.sub(r"[^A-Z0-9]+", " ", text).strip()
+
+
+@lru_cache(maxsize=512)
+def _keyword_pattern(keyword: str) -> re.Pattern:
+    normalized = _rule_text(keyword)
+    ending = "" if keyword in _STEMS else r"(?:S)?(?![A-Z])"
+    return re.compile(r"(?<![A-Z])" + re.escape(normalized) + ending)
+
 
 def categorize(description: str, amount: float) -> str:
-    d = (description or "").upper()
+    d = _rule_text(description)
     for keywords, cat in RULES:
-        if any(k in d for k in keywords):
+        if any(_keyword_pattern(k).search(d) for k in keywords):
+            if cat == "Interest & dividends" and amount < 0:
+                return "Debt payment" if _keyword_pattern("INTEREST").search(d) else "Misc"
             return cat
     return "Other income" if amount > 0 else "Misc"
 
@@ -105,13 +145,31 @@ def apply_categories(df: pd.DataFrame) -> pd.DataFrame:
 def pair_transfers(df: pd.DataFrame, window_days: int = 4) -> pd.Series:
     """Return a boolean Series marking rows that pair up as internal transfers.
 
-    A pair = two rows in *different* accounts, amounts a and -a (to the cent),
-    dated within `window_days`. Greedy one-to-one matching, earliest first.
+    A pair = two rows in *different* accounts, nonzero amounts a and -a (to
+    the cent), dated within `window_days`. When descriptions/categories are
+    available, at least one leg must contain transfer or card-payment evidence,
+    and neither leg may be categorized as a known purchase or earned income.
+    Equal amounts alone do not establish an internal transfer.
     """
     mark = pd.Series(False, index=df.index)
     if df.empty or df["account_id"].nunique() < 2:
         return mark
     work = df[["account_id", "date", "amount"]].copy()
+    if "description" in df or "category" in df:
+        desc = df.get("description", pd.Series("", index=df.index)).map(_rule_text)
+        cats = df.get("category", pd.Series("", index=df.index))
+        card_words = ("CARD PAYMENT", "CARD PMT", "CRD PYMT", "CRD EPAY",
+                      "CARD MIN PMT", "CREDIT CRD", "AMEX EPAYMENT",
+                      "DISCOVER E-PAY", "DISCOVER PAYMENT", "CHASE CARD",
+                      "CAPITAL ONE CRD", "CARDMEMBER SERV", "PAYMENT RECEIVED",
+                      "PAYMENT THANK YOU")
+        work["evidence"] = (cats.eq("Transfer")
+                            | desc.str.contains(r"\b(?:TRANSFER|XFER)\b", regex=True)
+                            | desc.map(lambda text: any(_keyword_pattern(word).search(text)
+                                                         for word in card_words)))
+        work = work[cats.isin({"Transfer", "Debt payment", "Misc", "Other income", ""})]
+    else:
+        work["evidence"] = True  # compatibility for minimal amount-only frames
     work["cents"] = (work["amount"] * 100).round().astype("int64")
     work = work.sort_values("date")
     from collections import defaultdict, deque
@@ -119,13 +177,16 @@ def pair_transfers(df: pd.DataFrame, window_days: int = 4) -> pd.Series:
     open_by_amt: dict[int, deque] = defaultdict(deque)
     for idx, row in work.iterrows():
         a = int(row["cents"])
+        if a == 0 or pd.isna(row["date"]):
+            continue
         q = open_by_amt[abs(a)]
         # drop stale candidates outside the window
         while q and (row["date"] - q[0][1]).days > window_days:
             q.popleft()
         matched = None
-        for i, (j, jd, jc, jacct) in enumerate(q):
-            if jc == -a and jacct != row["account_id"]:
+        for i, (j, jd, jc, jacct, evidence) in enumerate(q):
+            if (jc == -a and jacct != row["account_id"]
+                    and (evidence or row["evidence"])):
                 matched = i
                 break
         if matched is not None:
@@ -134,5 +195,5 @@ def pair_transfers(df: pd.DataFrame, window_days: int = 4) -> pd.Series:
             mark.loc[idx] = True
             mark.loc[j] = True
         else:
-            q.append((idx, row["date"], a, row["account_id"]))
+            q.append((idx, row["date"], a, row["account_id"], bool(row["evidence"])))
     return mark

@@ -11,7 +11,7 @@ from datetime import date
 import numpy as np
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (QComboBox, QHBoxLayout, QHeaderView, QLabel,
-                             QMessageBox, QPushButton, QSizePolicy,
+                             QMessageBox, QPushButton, QScrollArea, QSizePolicy,
                              QTableWidget, QTableWidgetItem, QVBoxLayout,
                              QWidget)
 
@@ -21,7 +21,7 @@ from ..progress import (ALPHA, MIN_WEEKS, N_BOOTSTRAP, N_PERMUTATIONS, capture,
 from ..store import Store
 from ..util import fmt_money
 from . import charts, theme
-from .widgets import (Card, StatCard, hint, hsplit, info_button, nerd_button,
+from .widgets import (Card, FlowLayout, StatCard, hint, hsplit, info_button, nerd_button,
                       vsplit)
 
 _STATUS_COLOR = {
@@ -35,52 +35,24 @@ _STATUS_COLOR = {
 # data. "Reconstruct history" sounds like it edits the ledger. Neither does.
 # The strip under the toolbar says what they are before anybody has to press
 # one to find out, and the full explanation is one click away.
-_WHAT_IS_THIS = f"""
-<h3>What this page is doing</h3>
-<p>Every other page in this app answers a question about <i>now</i>. This one
-answers questions about the gap between two <i>nows</i>: <b>was the old
-forecast any good</b>, and <b>did anything actually change</b>. Both need
-something written down in the past to compare against, which is what a
-checkpoint is.</p>
-
-<h4>A checkpoint</h4>
-<p>A dated snapshot, taken automatically <b>every time you import a CSV</b>. It
-records three things:</p>
-<p>· your <b>balance sheet</b> that day — net worth, cash, investments, debt;<br>
-· your <b>habits score</b> and the pieces it was built from;<br>
-· the <b>forecast Doug was making at that moment</b>, in full.</p>
-<p>The third one is the point of the whole exercise. A projection is only a
-claim if you write it down <i>before</i> the outcome is known. Anyone can refit
-a model afterwards and marvel at how well it fits — that is how models flatter
-themselves, and it is exactly what this page refuses to do.</p>
-<p>The first two cannot be recovered after the fact either: the score weights
-recent months more heavily, so once newer months exist there is no way to
-recompute what it said last March.</p>
-<p><b>Take a checkpoint now</b> records one on demand — useful just before you
-change something deliberately, so you have a clean line to measure from.</p>
-
-<h4>Reconstructing history</h4>
-<p>If you imported two years of statements on your first run, you own every
-scrap of data this page needs and none of the checkpoints — and would otherwise
-wait months for it to say anything at all. <b>Reconstruct history</b> works out
-what the checkpoints <i>would have said</i> on a series of past dates, roughly
-two months apart.</p>
-<p>The care taken here is the whole reason to trust the result. Each
-reconstructed point is built <b>only from data that existed on its own
-date</b>: the recurring patterns are re-detected from the truncated ledger
-rather than reused from today's, the behavioural sample is cut off at that
-date, and the starting balance is read from the reconstructed history rather
-than from today. A retroactive "projection" built with hindsight would make
-this page report Doug as far better than he is, which is the one thing it
-exists to prevent.</p>
-<p>It adds nothing that already exists, so pressing it twice is harmless.</p>
-
-<h4>What none of this touches</h4>
-<p>Checkpoints are a separate list from your money. Taking one, reconstructing
-them, or clearing every last one <b>never</b> alters an account, a transaction,
-a goal or an imported row. <b>Clear checkpoints</b> empties this page and
-nothing else — a new one arrives at your next import, and Reconstruct history
-can rebuild the old ones whenever you like.</p>
+_WHAT_IS_THIS = """
+<h3>Forecast and spending history</h3>
+<p>This tab compares earlier forecasts with recorded balances and checks
+whether spending has changed.</p>
+<h4>Checkpoints</h4>
+<p>A checkpoint is a dated snapshot of balances, spending score, and forecast.
+It is recorded automatically <b>every time you import a CSV</b>.
+<b>Take a checkpoint now</b> saves one before you change a plan.</p>
+<h4>Reconstruct history</h4>
+<p><b>Reconstruct history</b> builds historical checkpoints from your ledger.
+The calculations use only data that existed on each date. Patterns are detected
+again using that date's transactions, and balances are reconstructed for that
+date. These are retrospective tests, not forecasts saved at the time.</p>
+<p>Existing checkpoints are kept. Running reconstruction again does not add duplicates.</p>
+<h4>Clear checkpoints</h4>
+<p>This removes comparison snapshots only. Accounts, transactions, and goals
+are unchanged. An import can save a new checkpoint, and reconstruction can
+rebuild historical comparisons.</p>
 """
 
 
@@ -100,11 +72,20 @@ class ProgressPage(QWidget):
         # explanation that disagrees with the thing it explains is worthless).
         self._sig = self._check = self._move = self._old = self._now = None
 
-        root = QVBoxLayout(self)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        content = QWidget()
+        scroll.setWidget(content)
+        outer.addWidget(scroll)
+        root = QVBoxLayout(content)
         root.setContentsMargins(18, 16, 18, 16)
         root.setSpacing(10)
 
-        bar = QHBoxLayout()
+        controls = QWidget()
+        bar = FlowLayout(controls, spacing=6)
         bar.addWidget(QLabel("Compare against"))
         self.pick = QComboBox()
         self.pick.setMinimumWidth(220)
@@ -115,21 +96,15 @@ class ProgressPage(QWidget):
         snap = QPushButton("Take a checkpoint now")
         snap.setObjectName("small")
         snap.setToolTip(
-            "Record a dated snapshot right now — your balances, your habits "
-            "score, and the forecast Doug is making today, saved so it can be "
-            "checked against reality later. One is taken automatically on "
-            "every import; this is for when you are about to change something "
-            "deliberately and want a clean line to measure from.")
+            "Save today's balances, score, and forecast. Use this before changing "
+            "a plan to establish a clean line to measure from.")
         snap.clicked.connect(self._manual_capture)
         bar.addWidget(snap)
         self.fill_btn = QPushButton("Reconstruct history…")
         self.fill_btn.setObjectName("small")
         self.fill_btn.setToolTip(
-            "Work out what the checkpoints would have said on a handful of "
-            "past dates, using only the data that existed on each of those "
-            "dates. For when you have just imported years of statements and "
-            "would rather not wait months for this page to fill up. It reads "
-            "your ledger; it never changes it.")
+            "Build historical checkpoints using the data available on each date. "
+            "This reads the ledger; it never changes it.")
         self.fill_btn.clicked.connect(self._backfill)
         bar.addWidget(self.fill_btn)
         self.clear_btn = QPushButton("Clear checkpoints…")
@@ -139,28 +114,22 @@ class ProgressPage(QWidget):
             "accounts, transactions, goals and imported rows are untouched.")
         self.clear_btn.clicked.connect(self._clear)
         bar.addWidget(self.clear_btn)
-        bar.addStretch(1)
         bar.addWidget(info_button(
             "What is a checkpoint?",
             lambda: ("Checkpoints, and what this page compares", _WHAT_IS_THIS),
             tooltip="What a checkpoint is, what reconstructing history does, "
                     "and what neither of them touches"))
         bar.addWidget(nerd_button(self._nerd_panel))
-        root.addLayout(bar)
+        root.addWidget(controls)
 
         # Always on, not just when the page is empty. The buttons above it are
         # the two most misread controls in the app, and a caption that
         # disappears the moment the page has data is a caption that is only
         # ever shown to people who cannot yet use it.
         root.addWidget(hint(
-            "A checkpoint is a dated snapshot — your balances, your score, and "
-            "the forecast Doug was making that day — saved automatically every "
-            "time you import a CSV. This page holds the newest one against an "
-            "older one to ask two questions: did that old forecast hold up, and "
-            "has anything really changed?   ·   Reconstruct history fills in "
-            "checkpoints for dates your ledger already covers, so the page "
-            "works today instead of in six months. Nothing here ever alters "
-            "your accounts or transactions."))
+            "A checkpoint is a dated snapshot of your balances, score, and forecast, "
+            "saved on import. Compare checkpoints to review forecast accuracy and "
+            "spending changes. Reconstruct history adds comparisons for older ledger dates."))
 
         self.empty = hint(
             "Nothing to compare yet — this needs two checkpoints and there are "
@@ -181,7 +150,7 @@ class ProgressPage(QWidget):
         root.addLayout(cards)
 
         # --- projection vs reality ---
-        path_card = Card("Then and now — the old projection against what happened")
+        path_card = Card("Earlier forecast and recorded balances")
         self.plot = charts.new_plot(legend=True)
         self.plot.setMinimumHeight(150)
         path_card.body.addWidget(self.plot)
@@ -190,7 +159,7 @@ class ProgressPage(QWidget):
         path_card.body.addWidget(self.path_note)
 
         # --- significance ---
-        sig_card = Card("Is the change real, or is it noise?")
+        sig_card = Card("Spending changes")
         self.sig_head = QLabel("")
         self.sig_head.setWordWrap(True)
         self.sig_head.setStyleSheet("font-size: 15px; font-weight: 600;")
@@ -225,7 +194,7 @@ class ProgressPage(QWidget):
         top = hsplit(path_card, sig_card, sizes=[620, 460])
         bottom = hsplit(hist_card, table_card, sizes=[440, 640])
         for c in (path_card, sig_card, hist_card, table_card):
-            c.setMinimumHeight(110)
+            c.setMinimumHeight(300 if c in (path_card, sig_card) else 220)
             c.setMinimumWidth(200)
             c.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
         root.addWidget(vsplit(top, bottom, sizes=[400, 300]), 1)

@@ -381,10 +381,11 @@ class TransactionsPage(QWidget):
         try:
             rows = self._df[self._df["id"].isin(tx_ids)]
             changed = rows[rows["category"] != category]
-            self.store.set_category(tx_ids, category)
-            n_labels = record_corrections(
-                self.store, changed, category,
-                account_types=self._account_types, source="manual")
+            with self.store.undo_group(f"Set category to {category}"):
+                self.store.set_category(tx_ids, category)
+                n_labels = record_corrections(
+                    self.store, changed, category,
+                    account_types=self._account_types, source="manual")
         except Exception as e:
             QMessageBox.warning(self, "Could not update category", str(e))
             return

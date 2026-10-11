@@ -59,11 +59,12 @@ class ReviewUncategorizedDialog(QDialog):
         self.summary.setStyleSheet("font-size: 15px; font-weight: 600;")
         lay.addWidget(self.summary)
         lay.addWidget(hint(
-            "Each row is one merchant, not one transaction — labelling it fixes "
-            "every past and future charge from that merchant at once. The list "
-            "is ordered by how much each decision is worth, so the top of the "
-            "list clears the most. Suggested categories come from merchants you "
-            "have already labelled; blank means no confident match."))
+            "Each row groups a merchant's purchases or incoming payments. "
+            "Labeling it updates matching uncategorized entries, including older "
+            "ones outside this window, and saves the category for future imports. "
+            "Known categories are left unchanged. The largest recent and recurring "
+            "amounts appear first. Suggestions require a clear same-direction "
+            "match to your earlier corrections; blank means no clear match."))
 
         wrow = QHBoxLayout()
         wrow.addWidget(QLabel("Only merchants seen in the"))
@@ -104,7 +105,7 @@ class ReviewUncategorizedDialog(QDialog):
 
         row = QHBoxLayout()
         accept_all = QPushButton("Accept all suggestions")
-        accept_all.setToolTip("Apply every non-blank suggested category at once")
+        accept_all.setToolTip("Select suggested categories. Apply selections saves them.")
         accept_all.clicked.connect(self._accept_suggested)
         row.addWidget(accept_all)
         row.addStretch(1)
@@ -174,8 +175,8 @@ class ReviewUncategorizedDialog(QDialog):
                 i = box.findText(c.suggestion)
                 if i >= 0:
                     box.setCurrentIndex(i)
-                    box.setToolTip(f"Suggested from a merchant you already "
-                                   f"labelled (similarity {c.confidence:.2f})")
+                    box.setToolTip(f"Based on a same-direction merchant correction. "
+                                   f"Name similarity: {c.confidence:.2f}; this is not a probability.")
             self.table.setCellWidget(r, 5, box)
             self._boxes.append(box)
         self.status.setText("")

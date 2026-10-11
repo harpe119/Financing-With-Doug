@@ -143,7 +143,11 @@ def detect(tx: pd.DataFrame) -> list[RecurringItem]:
             continue
 
         raw_name = g["description"].iloc[-1]
-        cat = categorize(raw_name, med_amt)
+        # The ledger already contains manual/learned categories. Do not undo a
+        # user's decision by reapplying the raw keyword rule to the same bill.
+        cat = g["category"].iloc[-1] if "category" in g else ""
+        if not cat or cat in {"Misc", "Other income"}:
+            cat = categorize(raw_name, med_amt)
         kind = "income" if med_amt > 0 else ("loan_payment" if cat == "Debt payment" else "bill")
         items.append(RecurringItem(
             key=f"{norm}|{sign}",

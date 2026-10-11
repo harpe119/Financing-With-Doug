@@ -151,6 +151,14 @@ QMenu {{ background: {SURFACE}; border: 1px solid {BORDER}; padding: 4px; }}
 QMenu::item {{ padding: 6px 22px; border-radius: 6px; }}
 QMenu::item:selected {{ background: {ACCENT_DIM}; }}
 
+QTabWidget::pane {{ border: none; background: {BG}; }}
+QTabBar::tab {{ background: {BG_DARKER}; color: {MUTED}; padding: 8px 18px; }}
+QTabBar::tab:selected {{ background: {SURFACE}; color: {ACCENT}; }}
+QTabBar::tab:hover {{ color: {TEXT}; }}
+QCalendarWidget QWidget {{ background: {SURFACE}; color: {TEXT}; }}
+QCalendarWidget QToolButton {{ background: {SURFACE2}; color: {TEXT}; border: none; padding: 4px; }}
+QCalendarWidget QAbstractItemView {{ background: {FIELD}; selection-background-color: {ACCENT_DIM}; }}
+
 QScrollBar:vertical {{ background: transparent; width: 10px; margin: 2px; }}
 QScrollBar::handle:vertical {{
     background: {BORDER}; border-radius: 5px; min-height: 28px;

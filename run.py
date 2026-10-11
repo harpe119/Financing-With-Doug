@@ -47,10 +47,6 @@ def main() -> int:
     ap.add_argument("--db",
                     default=str(Path.home() / ".ledgerline" / "ledgerline.db"),
                     help="SQLite database file (created if missing)")
-    ap.add_argument("--no-splash", action="store_true",
-                    help="skip the startup splash (Doug will be hurt)")
-    ap.add_argument("--splash-seconds", type=float, default=2.6,
-                    help="how long to keep the splash up (default 2.6)")
     # A frozen GUI build can be handed arguments by the OS (macOS passes -psn_*),
     # so unknown flags are ignored rather than aborting with a usage error.
     args, _unknown = ap.parse_known_args()
@@ -61,22 +57,8 @@ def main() -> int:
     _install_excepthook()
     theme.apply(app)
 
-    from finfore import __version__
-    from finfore.ui.splash import Splash, close_pyinstaller_splash
-    close_pyinstaller_splash()          # hand off from the bootloader splash
-
-    splash = None
-    if not args.no_splash:
-        splash = Splash(__version__, min_seconds=args.splash_seconds)
-        splash.show()
-        splash.status("Waking Doug up…")
-
     store = Store(args.db)
-    if splash:
-        splash.status()
     win = MainWindow(store, real_db_path=args.db)
-    if splash:
-        splash.hold(win)          # keep it up long enough to actually read
     win.show()
     # Best-effort, off the GUI thread, at most once a day, and silent unless
     # there is genuinely something newer. Only in a packaged build — there is

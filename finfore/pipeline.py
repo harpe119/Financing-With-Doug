@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from .categorize import pair_transfers
 from .forecast import auto_link_loans
-from .learning import apply_chain, full_chain
+from .learning import apply_chain, feedback_key, full_chain
 from .ingest import (ImportConfig, guess_mapping, parse_transactions, read_raw,
                      sniff_delimiter)
 from .recurrence import detect
@@ -83,7 +83,15 @@ def refresh_derived(store: Store, checkpoint: bool = True,
     tx = store.transactions()
     if tx.empty:
         return 0
-    is_transfer = pair_transfers(tx)
+    learned = store.learned_categories()
+    # An explicit correction is stronger evidence than amount/date matching.
+    # Exclude protected rows before pairing so neither leg of a rejected pair
+    # is silently reclassified during the next import.
+    protected = [
+        learned.get(feedback_key(row.description, row.amount)) not in (None, "Transfer")
+        for row in tx.itertuples(index=False)]
+    eligible = tx.loc[[not value for value in protected]]
+    is_transfer = pair_transfers(eligible).reindex(tx.index, fill_value=False)
     updates = {}
     for i, row in tx.iterrows():
         if is_transfer.loc[i] and row["category"] != "Transfer":

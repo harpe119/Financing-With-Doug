@@ -11,6 +11,36 @@ account of what each release changed.
 
 ---
 
+**Data quality.** The forecast's visible check reads the database without
+modifying it. A balance is flagged when its most recent account date or
+snapshot is more than 30 days old, or lies in the future. Checking, savings
+and credit-card accounts are checked individually for transactions through
+today; a latest date older than 30 days is flagged. Those cutoffs are reminders,
+not measures of forecast accuracy. A non-transfer, nonzero cash transaction
+span shorter than 90 days is flagged as a short history.
+
+For each cash ledger, the check looks for empty months among the last 12
+completed calendar months, after the first recorded month. It excludes the
+current unfinished month and counts transfers as activity. A flagged month
+may simply have no activity; the app cannot establish that an export is
+missing. Loan and investment accounts are not expected to have daily ledgers.
+
+Category review totals cover the last 180 days through today, inclusive:
+nonzero cash transactions labeled Misc, Other income or blank. The outflow
+share divides their negative amounts by all recorded non-transfer cash
+outflows in that window. Inflows are shown separately, not netted against
+spending. These are unweighted recorded amounts, not the spending score's
+recency-weighted estimates, and known labels are not independently verified.
+
+The same baseline schedule and account-assignment rules as the calendar
+identify outflows without a payment account in the next 30 days. They remain
+part of the combined projection but do not affect an account-specific calendar
+balance. As on the calendar, listed loan payments are not payoff-truncated.
+Invalid and future transaction dates are reported separately and excluded
+from the historical checks; the check itself does not change the forecast
+engine or any stored record. Passing every check establishes neither ledger
+completeness nor future accuracy.
+
 **History reconstruction.** For a cash account with an anchor balance
 $B_0$ entered as of $t_0$ and daily net ledger flow $f(t)$ with cumulative
 sum $F(t)=\sum_{\tau\le t} f(\tau)$, the balance series is
@@ -236,8 +266,9 @@ its fixed monthly timing would violate the independence the test needs.
 Beside the p-value sits a bootstrap 95% interval on the dollar difference,
 because that is the number that answers the question — a p-value says only
 "distinguishable from noise", the interval says how much and how sure. Neither
-is on the page: the Forecast, Progress and Insights pages each carry a **for
-nerds** button (`widgets.InfoDialog`, built at click time from the results
+is on the page: Forecast's Projection and Progress tabs and Dashboard's Spending
+tab each carry a **How
+this works** button (`widgets.InfoDialog`, built at click time from the results
 currently on screen), and everything quantitative lives behind it. The page
 states the finding in a sentence; the window states the working. This is not
 about hiding the statistics — it is that a card headed *is this real or is it
@@ -361,41 +392,54 @@ essentials surface only as non-directive notes (e.g. a housing-burden note).
 Nothing is hardcoded as "bad"; the largest actual levers surface first and the
 user decides.
 
-**Categorisation that learns.** Categories come from a chain of models, highest
-precedence first: the user's own corrections, then (in future) a trained
-classifier, then the keyword rules, then a sign-based default. Every manual
-re-categorisation on the Transactions page is written to `category_feedback` as
-a labelled example and applied immediately by `LearnedRules`, an exact-match
-memory keyed on the normalised description and the sign of the amount — so
-fixing a merchant once is enough, and the next import of that merchant keeps
-your label. `learning.coverage()` reports when enough labels have accumulated
-to be worth training a real model on (roughly 200 across 5+ categories);
-`learning.training_frame()` returns the corpus in model-ready shape. The
-`CategoryModel` protocol is the insertion point — a model abstains by returning
-`None` and falls through to the layer below.
+**Categorisation that learns.** The default chain is exact saved corrections,
+merchant similarity, keyword rules, and a sign-based fallback. No statistical
+classifier is trained or downloaded. Corrections are stored locally in
+`category_feedback` and keyed by normalized description and amount direction.
+Purchases and refunds therefore have separate correction histories. The most
+recent exact correction takes precedence. A transaction category and its saved
+correction are one undo action.
 
-**Clearing the uncategorized pile.** A trained classifier is deliberately *not*
-the first move: training needs labels, and the pile exists because there are
-none. The queue is scoped by default to the window the habits score actually
-reads — months are weighted `0.5^(age/3)`, so a merchant last seen three years
-ago carries about 1/256 of last month's weight and labelling it changes nothing
-you are looking at. The window is adjustable and reports what it hides; labels
-apply to every matching row however old. Within that window, three cheaper
-mechanisms come first, in descending order of value per click. (1) **Merchant
-clustering** — transactions collapse to far fewer merchants than rows, so
-**Transactions → Review uncategorized** ranks unlabelled merchants by how much
-labelling each is worth (total dollars, weighted toward recent and recurring
-spend); one decision fixes every past and future charge from that merchant.
-(2) **Recurrence** is folded into that ranking, since a merchant already
-detected as recurring pays off every month. (3) **Merchant similarity** —
-character 3-gram Jaccard with a leading-token gate and payment-processor prefix
-stripping — generalises those labels to unseen variants ("SQ \*BLUE BOTTLE 0042"
-to "BLUE BOTTLE COFFEE") while keeping "BLUE BOTTLE" apart from "BLUE CROSS".
-Jaccard specifically: measured against realistic pairs it was the only one of
-Jaccard, overlap-coefficient and a token/char blend that separated true variants
-from lookalikes. Only after those does a fitted model earn its place, and by
-then it has a corpus. See `ml_notes` in `learning.py` for the intended approach
-and the evaluation trap to avoid.
+Keyword matching normalizes punctuation, spacing, and accents, then uses word
+boundaries or explicitly listed abbreviation stems. This prevents `RENT` from
+matching `PARENT`, for example. Specific descriptions are checked before broad
+merchant rules: Costco gas is Fuel rather than Groceries, while Disney World is
+Travel rather than Subscriptions. Negative interest is treated as a debt cost,
+not investment income. These are defaults; the user can correct them.
+
+Merchant similarity uses character 3-gram Jaccard overlap after stripping known
+processor prefixes. The leading merchant token and amount direction must agree.
+The best category must clear a 0.25 overlap floor and lead the next different
+category by at least 0.10. These scores are heuristics, not probabilities.
+Conflicting matches abstain and fall through to keyword rules. Transfer labels
+are never propagated by similarity; explicit corrections remain available.
+These checks improve specific regression cases but do not establish an accuracy
+rate on unseen bank exports.
+
+Transfer pairing requires equal opposite nonzero amounts in different accounts
+within four days. For the full ledger, a transfer or card-payment description
+must support the match, and neither leg can be a known purchase or earned income.
+Explicit non-transfer corrections are excluded before pairing. A bare external
+transfer description is not classified as an internal transfer by the keyword
+fallback. Pairing remains a heuristic: equal amounts and related dates do not
+prove that two rows represent the same payment. Review the resulting labels.
+
+**Reviewing uncategorized entries.** The queue groups normalized merchants and
+directions, then ranks them by total dollars plus twice recent dollars, with a
+1.5 multiplier for recurring patterns. The default window matches the spending
+score's lookback and can be changed. Labeling a group updates matching unknown
+rows across history, including older rows outside the displayed window. Known
+categories are unchanged. Imports use the saved correction for future matching
+entries. Recurring detection uses the latest known ledger category rather than
+discarding it and guessing again from the description.
+
+`learning.training_frame()` exposes corrections for a future evaluated model.
+`learning.coverage()` uses roughly 200 labels across five or more categories as
+a starting point for testing, not proof that training will improve predictions.
+A candidate should be evaluated on held-out merchant groups against the current
+chain; a random transaction split can put the same merchant in both training
+and testing. Any trained model must support abstention and demonstrate a useful
+improvement before becoming a default. See `ml_notes` in `learning.py`.
 
 **Dedup, and the one case a row hash cannot catch.** Each row is hashed on
 (account, date, description, amount, occurrence index), so legitimate same-day

@@ -11,21 +11,39 @@ Everything here is for you, not for the people you hand the app to. They get a
 
 ```powershell
 # into the same environment you run the app with — not whatever `python` is on PATH
-C:\Users\caleb\VSCODE\VENV\Scripts\python.exe -m pip install pyinstaller
+python -m pip install -r requirements.txt pyinstaller
 ```
 
 and [Inno Setup 6](https://jrsoftware.org/isdl.php) — the standard, free Windows
 installer builder. Accept its defaults.
 
-**2. Tell the app where its releases live.** In [`finfore/update.py`](../finfore/update.py):
+**2. Check where the app looks for releases.** This repository is already
+configured in [`finfore/update.py`](../finfore/update.py):
 
 ```python
-GITHUB_OWNER = "your-github-username"     # currently empty
-GITHUB_REPO  = "FinancingWithDoug"
+GITHUB_OWNER = "harpe119"
+GITHUB_REPO  = "Financing-With-Doug"
 ```
 
-Until this is set, the **Check for updates** button politely says update
-checking isn't configured rather than failing like a network error.
+If you move releases to another repository, update both values. They must match
+the owner and repository slug in the GitHub URL.
+
+## Saving code is not publishing an update
+
+`git commit` saves a local revision. `git push` uploads that revision to GitHub.
+Neither creates a Windows installer or publishes a release by itself.
+
+The installed app checks for a newer published GitHub release on startup, at
+most once per day. It shows the release notes and waits for **Download and
+install**, then asks again before closing the app and running the installer.
+It does not silently install changes. A source checkout has no automatic
+startup update check; update its code with Git after preserving local edits.
+
+After reviewing and merging code changes, choose a new version, update
+`finfore/__init__.py`, run the tests, and build on Windows. Publish the installer
+and checksum on a GitHub release with a matching version tag. Existing installed
+copies can then offer the update. The older version numbers below are examples,
+not instructions to lower the current version.
 
 ---
 

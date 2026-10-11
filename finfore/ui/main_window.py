@@ -7,7 +7,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QAction, QKeySequence
 from PyQt6.QtWidgets import (QApplication, QHBoxLayout, QLabel, QListWidget,
                              QMainWindow, QMessageBox, QPushButton, QSizePolicy,
-                             QStackedWidget, QVBoxLayout, QWidget)
+                             QStackedWidget, QTabWidget, QVBoxLayout, QWidget)
 
 from ..history import headline_stats
 from ..store import Store
@@ -22,6 +22,7 @@ from .import_dialog import ImportDialog
 from .progress_page import ProgressPage
 from .recurring import RecurringPage
 from .transactions import TransactionsPage
+from .calendar_page import CalendarPage
 
 _METHODOLOGY = """
 <h3>How Doug models your money</h3>
@@ -82,11 +83,6 @@ class MainWindow(QMainWindow):
         from .. import __version__
         ver = QLabel(f"v{__version__}")
         ver.setObjectName("appTag")
-        # Easter egg: Doug has opinions, and clicking the version number is a
-        # harmless place to keep them.
-        ver.setCursor(Qt.CursorShape.PointingHandCursor)
-        ver.setToolTip("Ask Doug something")
-        ver.mousePressEvent = lambda _e: self._doug_says()
         tag = QLabel("local finance · history → forecast")
         tag.setObjectName("appTag")
         self.header_nw = QLabel("")
@@ -146,8 +142,9 @@ class MainWindow(QMainWindow):
         self.nav = QListWidget()
         self.nav.setObjectName("nav")
         self.nav.setFixedWidth(184)
-        for name in ("Dashboard", "Accounts", "Transactions", "Recurring",
-                     "Insights", "Goals", "Forecast", "Progress"):
+        names = ("Dashboard", "Accounts", "Transactions", "Bills & payday",
+                 "Goals", "Forecast")
+        for name in names:
             self.nav.addItem(name)
         self.stack = QStackedWidget()
         # Ignored: take whatever room is going, and do not report a size hint
@@ -164,11 +161,33 @@ class MainWindow(QMainWindow):
             GoalsPage(store, self),
             ForecastPage(store, self),
             ProgressPage(store, self),
+            CalendarPage(store, self),
         ]
+        dashboard, accounts, transactions, recurring, insights, goals, forecast, progress, calendar = self.pages
+        self.dashboard_tabs = QTabWidget()
+        self.dashboard_tabs.addTab(dashboard, "Overview")
+        self.dashboard_tabs.addTab(insights, "Spending")
+        self.bills_tabs = QTabWidget()
+        self.bills_tabs.addTab(calendar, "Calendar")
+        self.bills_tabs.addTab(recurring, "Recurring patterns")
+        self.forecast_tabs = QTabWidget()
+        self.forecast_tabs.addTab(forecast, "Projection")
+        self.forecast_tabs.addTab(progress, "Progress")
+        self.sections = [self.dashboard_tabs, accounts, transactions,
+                         self.bills_tabs, goals, self.forecast_tabs]
+        self._destinations = {
+            name: (i, None) for i, name in enumerate(names)
+        }
+        self._destinations.update({
+            "Insights": (0, insights), "Spending": (0, insights),
+            "Recurring": (3, recurring), "Calendar": (3, calendar),
+            "Progress": (5, progress), "Projection": (5, forecast),
+        })
         for p in self.pages:
             p.setSizePolicy(QSizePolicy.Policy.Ignored,
                             QSizePolicy.Policy.Ignored)
-            self.stack.addWidget(p)
+        for section in self.sections:
+            self.stack.addWidget(section)
         body.addWidget(self.nav)
         body.addWidget(self.stack, 1)
         outer.addLayout(body, 1)
@@ -187,6 +206,10 @@ class MainWindow(QMainWindow):
         # have to exist by then.
         store.enable_undo()
         self._build_menu()
+        for tabs in (self.dashboard_tabs, self.bills_tabs, self.forecast_tabs):
+            tabs.currentChanged.connect(
+                lambda _index, host=tabs: self.refresh_current()
+                if self.stack.currentWidget() is host else None)
         self.nav.setCurrentRow(0)
         self.statusBar().showMessage(f"Database: {store.path}")
 
@@ -195,10 +218,9 @@ class MainWindow(QMainWindow):
         self.simple_mode = not self.simple_mode
         self._settings.setValue("simple_mode", self.simple_mode)
         self._apply_mode()
-        self.status("Simple view — the advanced panels are hidden, and every "
-                    "number they produce is still under For nerds."
+        self.status("Simple view. Use How this works for the calculations."
                     if self.simple_mode else
-                    "Everything shown.")
+                    "Advanced controls shown.")
 
     def _apply_mode(self, refresh: bool = True) -> None:
         """Tell every page which face to wear.
@@ -231,10 +253,7 @@ class MainWindow(QMainWindow):
         m_file = self.menuBar().addMenu("&File")
         a_imp = QAction("Import CSV…", self)
         a_imp.triggered.connect(self.open_import)
-        a_bal = QAction("Import balance history (loan / investment)…", self)
-        a_bal.triggered.connect(self.import_balance_history)
-        for a in (a_imp, a_bal):
-            m_file.addAction(a)
+        m_file.addAction(a_imp)
         m_file.addSeparator()
 
         # Demos live in their own database files. Loading one used to mean
@@ -260,6 +279,10 @@ class MainWindow(QMainWindow):
                             "plain language, that can leave this app")
         a_report.triggered.connect(self.save_month_report)
         m_file.addAction(a_report)
+        a_backup = QAction("Back up data…", self)
+        a_backup.setToolTip("Save a complete copy of the current database")
+        a_backup.triggered.connect(self.backup_data)
+        m_file.addAction(a_backup)
         m_file.addSeparator()
 
         a_reset = QAction("Reset all data…", self)
@@ -318,12 +341,19 @@ class MainWindow(QMainWindow):
         self.menuBar().addAction(self.a_update)
 
     def _on_nav(self, row: int) -> None:
+        if not 0 <= row < len(self.sections):
+            return
         self.stack.setCurrentIndex(row)
-        self.pages[row].refresh()
-        self.refresh_header()
+        self.refresh_current()
+
+    def current_page(self):
+        section = self.stack.currentWidget()
+        return section.currentWidget() if isinstance(section, QTabWidget) else section
 
     def refresh_current(self) -> None:
-        self.pages[self.stack.currentIndex()].refresh()
+        page = self.current_page()
+        if page is not None:
+            page.refresh()
         self.refresh_header()
 
     def refresh_header(self) -> None:
@@ -334,6 +364,17 @@ class MainWindow(QMainWindow):
 
     def status(self, msg: str) -> None:
         self.statusBar().showMessage(msg, 6000)
+
+    def show_page(self, name: str) -> None:
+        """Navigate by name so page links do not depend on sidebar ordering."""
+        destination = self._destinations.get(name)
+        if destination is None:
+            return
+        row, page = destination
+        self.nav.setCurrentRow(row)
+        section = self.sections[row]
+        if page is not None:
+            section.setCurrentWidget(page)
 
     # ---------------- undo / redo ----------------
     def _sync_undo(self) -> None:
@@ -425,20 +466,6 @@ class MainWindow(QMainWindow):
         if dlg.exec():
             self.refresh_current()
 
-    def import_balance_history(self) -> None:
-        """File → Import balance history: loans and investments."""
-        targets = [a for a in self.store.accounts() if not a.type.is_cashlike]
-        if not targets:
-            QMessageBox.information(
-                self, "No loan or investment accounts",
-                "Add a loan or investment account on the Accounts page first. "
-                "History for those accounts comes from dated balances — either "
-                "listed directly, or worked out from an activity export.")
-            return
-        target = targets[0] if len(targets) == 1 else self._pick_import_account(targets)
-        if target is not None:
-            self._import_balance_history(target)
-
     def _import_balance_history(self, account) -> None:
         from .accounts import SnapshotImportDialog
         dlg = SnapshotImportDialog(self.store, account, self)
@@ -524,6 +551,9 @@ class MainWindow(QMainWindow):
         self.demo_key = demo_key
         for p in self.pages:
             p.store = store
+            reset = getattr(p, "reset_for_store", None)
+            if reset is not None:
+                reset()
         # A fresh stack per database. Undo restores a *file*, so carrying steps
         # across a switch would let Ctrl-Z on the demo overwrite the real
         # ledger with a demo snapshot — the one mistake this feature must never
@@ -555,6 +585,28 @@ class MainWindow(QMainWindow):
         self.banner.setVisible(True)
 
     # ---------------- month in review ----------------
+    def backup_data(self) -> None:
+        from datetime import date
+        from PyQt6.QtWidgets import QFileDialog
+
+        default = Path.home() / f"{self.store.path.stem}-backup-{date.today():%Y-%m-%d}.db"
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Back up current data", str(default), "SQLite database (*.db)")
+        if not path:
+            return
+        try:
+            self.store.backup_to(path)
+        except Exception as e:
+            QMessageBox.warning(self, "Couldn't save the backup", str(e))
+            return
+        QMessageBox.information(
+            self, "Backup saved",
+            f"A complete copy of {'this demo' if self.demo_key else 'your data'} "
+            f"was saved to:\n{path}\n\n"
+            "Keep it somewhere safe. It includes accounts, transactions, "
+            "goals, learned categories, and database settings.")
+        self.status(f"Backup saved to {path}")
+
     def save_month_report(self) -> None:
         """Write one finished month to a page that can be printed or sent.
 
@@ -617,14 +669,6 @@ class MainWindow(QMainWindow):
             self.refresh_current()
             self.status("Database cleared. Ctrl+Z undoes this.")
 
-    def _doug_says(self) -> None:
-        from .splash import doug_fact
-        box = QMessageBox(self)
-        box.setWindowTitle("Doug says")
-        box.setTextFormat(Qt.TextFormat.RichText)
-        box.setText(f"<p style='min-width:320px'>{doug_fact()}</p>")
-        box.exec()
-
     def show_guide(self) -> None:
         from .guide import show_guide
         show_guide(self)
@@ -640,26 +684,19 @@ class MainWindow(QMainWindow):
         check_quietly(self)
 
     def _about(self) -> None:
-        from .. import __version__
+        from .. import __author__, __version__
         box = QMessageBox(self)
         box.setWindowTitle("About Doug")
         box.setTextFormat(Qt.TextFormat.RichText)
-        from .splash import AUTHOR
         box.setText(
             f"<h3>Financing with Doug v{__version__}</h3>"
-            f"<p style='color:#8B98A9'>Created by <b>{AUTHOR}</b></p>"
+            f"<p style='color:#8B98A9'>Created by <b>{__author__}</b></p>"
             f"<p>A local, private personal-finance modeling tool. All data "
             f"stays in a SQLite file on this machine.</p>"
-            f"<p>Doug was originally a machine-learning model that was, by "
-            f"every available metric, bad at its job. Doug has since been "
-            f"rewritten more times than anyone involved would like to admit, "
-            f"and now handles Monte Carlo simulation, recurrence detection and "
-            f"adaptive categorisation. Doug startd life on Caleb's computer "
-            f"as a simple AI that couldn't even count correctly. Since then, "
-            f"Doug has learned how to perform rocket calculations and even spent "
-            f"a semester as glorified toaster and fitness coach.</p>"
-            f"<p style='color:#8B98A9'>See CHANGELOG.md in the app folder for "
-            f"what changed between versions.</p>")
+            f"<p>Import bank CSVs, review recurring bills, track goals, and "
+            f"explore forecasts based on your own history.</p>"
+            f"<p style='color:#8B98A9'>Help → Getting started explains the "
+            f"workflow; Help → Methodology explains the model.</p>")
         box.exec()
 
     def _methodology(self) -> None:

@@ -1407,11 +1407,7 @@ def main() -> None:
           next(t for t in ts3 if t.key == f"goal:{pc_id}").complete)
     gstore.close()
 
-    # Amount entry types the way the number is said: "1234.56" is $1,234.56.
-    # The previous right-to-left teller mode, where "1234" meant $12.34, was
-    # removed — it is the convention at a bank terminal but nowhere a person
-    # types a number themselves, and it made every field feel broken until you
-    # had guessed the rule.
+    # Money fields use fixed cents entry. Percentages use normal decimal entry.
     print("amount entry")
     from finfore.ui.widgets import MoneySpinBox as _MSB
     from PyQt6.QtTest import QTest as _QTest
@@ -1429,23 +1425,23 @@ def main() -> None:
     _sb.setDecimals(2)
     _sb.setGroupSeparatorShown(True)
     _sb.setPrefix("$ ")
-    check("1234 is one thousand two hundred and thirty-four",
-          abs(_type(_sb, "1234") - 1234.0) < 1e-9)
+    check("1234 enters twelve dollars and thirty-four cents",
+          abs(_type(_sb, "1234") - 12.34) < 1e-9)
     check("1234.56 is read as written", abs(_type(_sb, "1234.56") - 1234.56) < 1e-9)
     check("a leading dollar sign is forgiven",
           abs(_type(_sb, "$1234.56") - 1234.56) < 1e-9)
     check("so are thousands separators pasted in from a statement",
           abs(_type(_sb, "1,234.56") - 1234.56) < 1e-9)
-    check("a bare .5 is fifty cents", abs(_type(_sb, ".5") - 0.5) < 1e-9)
+    check("decimal keys do not move the fixed cents position", abs(_type(_sb, ".5") - 0.05) < 1e-9)
     check("a negative amount survives the sign",
           abs(_type(_sb, "-250.75") + 250.75) < 1e-9)
-    check("a single digit is a single dollar", abs(_type(_sb, "7") - 7.0) < 1e-9)
+    check("a single digit is a single cent", abs(_type(_sb, "7") - 0.07) < 1e-9)
 
     # The mis-entry that started all of this: a field already holding a value
     # must be *replaced* by what is typed next, never appended to.
     _sb.setValue(71_520.00)
     check("typing into a populated field replaces it",
-          abs(_type(_sb, "500") - 500.0) < 1e-9)
+          abs(_type(_sb, "500") - 5.0) < 1e-9)
     _sb.setValue(1234.56)
     check("and retyping the same value is a no-op, not a doubling",
           abs(_type(_sb, "1234.56") - 1234.56) < 1e-9)
@@ -2004,8 +2000,8 @@ def main() -> None:
                  "What's causing this?", "Simple view"):
         check(f"guide and app agree on {_lbl!r}",
               _lbl in _gt and _lbl in _ui_src)
-    for _pg in ("Dashboard", "Accounts", "Transactions", "Recurring",
-                "Insights", "Goals", "Forecast", "Progress"):
+    for _pg in ("Dashboard", "Accounts", "Transactions", "Bills & payday",
+                "Spending", "Goals", "Forecast", "Progress", "Recurring patterns"):
         check(f"the guide explains the {_pg} page", _pg in _gt)
     for _pr in _demo.PROFILES:
         check(f"the guide lists the {_pr.key} demo",
@@ -2037,102 +2033,6 @@ def main() -> None:
           len(_grendered) > 4000 and "##" not in _grendered)
     _gd.close()
 
-    print("explainer video")
-    from finfore.ui import video as _video
-    _vp = _video.video_path("monte_carlo")
-    check("the Monte Carlo explainer ships with the project",
-          _vp is not None and _vp.exists())
-    check("has_video agrees with video_path", _video.has_video("monte_carlo"))
-    check("an unknown key resolves to nothing",
-          _video.video_path("nope") is None
-          and not _video.has_video("nope"))
-    _saved2 = getattr(sys, "_MEIPASS", None)
-    try:
-        _fake2 = Path(tempfile.mkdtemp())
-        (_fake2 / "assets").mkdir()
-        (_fake2 / "assets" / "monte_carlo.mp4").write_bytes(b"x")
-        sys._MEIPASS = str(_fake2)
-        check("the video resolves inside a frozen bundle",
-              _video.video_path("monte_carlo")
-              == _fake2 / "assets" / "monte_carlo.mp4")
-    finally:
-        if _saved2 is None:
-            delattr(sys, "_MEIPASS")
-        else:
-            sys._MEIPASS = _saved2
-    check("and returns to the source tree when not frozen",
-          _video.video_path("monte_carlo") == _vp)
-    _spec_txt = (Path(__file__).resolve().parent.parent
-                 / "packaging" / "doug.spec").read_text(encoding="utf-8")
-    check("the spec bundles assets/ so the video survives a build",
-          "assets" in _spec_txt)
-
-    # The explainer ends on a card of text, and a player that goes blank the
-    # instant the stream ends gives you no time to read it. The dialog keeps
-    # its own copy of the tail frames rather than trusting the backend to
-    # leave the last one on screen, so the copying and the hold are worth
-    # testing without decoding anything.
-    if _video._multimedia() is None:
-        print("  skip  Qt Multimedia is absent; hold-the-last-frame untested")
-    else:
-        from PyQt6.QtGui import QImage as _QImage
-
-        class _Frame:                      # duck-types the bits of QVideoFrame
-            def __init__(self, start_us, img):
-                self._start, self._img = start_us, img
-
-            def isValid(self):             # noqa: N802
-                return True
-
-            def startTime(self):           # noqa: N802
-                return self._start
-
-            def toImage(self):             # noqa: N802
-                return self._img
-
-        _early = _QImage(4, 4, _QImage.Format.Format_RGB32)
-        _early.fill(0x111111)
-        _late = _QImage(4, 4, _QImage.Format.Format_RGB32)
-        _late.fill(0xEEEEEE)
-        # A backend failure inside the dialog hands the file to the OS, which
-        # during a test run means a media player appearing on someone's
-        # screen. Neuter that for the duration of the block.
-        _open_saved = _video.open_externally
-        _video.open_externally = lambda _p: False
-        _dlg = _video.VideoDialog(_vp, "test")
-        try:
-            _dlg.player.stop()             # constructed playing; nothing to hear
-            _dlg.audio.setMuted(True)
-            _dlg._last_frame = None        # discard anything the tail decoded
-            _dlg._duration = 10_000
-            _dlg._on_frame(_Frame(1_000_000, _early))
-            check("frames well before the end are not copied",
-                  _dlg._last_frame is None)
-            _dlg._on_frame(_Frame(9_600_000, _late))
-            check("frames in the tail window are",
-                  _dlg._last_frame is not None
-                  and _dlg._last_frame.pixelColor(0, 0).blue() == 0xEE)
-            _dlg._hold_last_frame()
-            check("the end of the video holds that frame on screen",
-                  _dlg._holding
-                  and _dlg.stack.currentWidget() is _dlg.still
-                  and not _dlg.still.pixmap().isNull())
-            check("and offers a replay rather than a pause",
-                  _dlg.play_btn.text() == "Replay")
-            _dlg._resume(0)
-            _dlg.player.stop()
-            check("replaying puts the video back in front",
-                  not _dlg._holding
-                  and _dlg.stack.currentWidget() is _dlg.view
-                  and _dlg.note.text() == "")
-            _dlg._last_frame = None
-            _dlg._hold_last_frame()
-            check("with no frame captured it holds nothing",
-                  not _dlg._holding
-                  and _dlg.stack.currentWidget() is _dlg.view)
-        finally:
-            _dlg.close()
-            _video.open_externally = _open_saved
 
     print("progress: checkpoints, path adherence, significance")
     from finfore import progress as _P
@@ -2714,10 +2614,10 @@ def main() -> None:
     _pp_src = (Path(__file__).resolve().parent.parent / "finfore" / "ui"
                / "progress_page.py").read_text(encoding="utf-8")
     for _phrase in ("dated snapshot", "every time you import a CSV",
-                    "only from data that existed", "Reconstruct history"):
+                    "only data that existed", "Reconstruct history"):
         check(f"the long explanation covers {_phrase!r}", _phrase in _WIT)
     check("it promises the ledger is not touched",
-          "never" in _WIT and "transaction" in _WIT)
+          "unchanged" in _WIT and "transaction" in _WIT)
     check("and is reachable without pressing anything destructive",
           "What is a checkpoint?" in _pp_src)
     # The short version has to be on the page unprompted: a caption that only
@@ -3035,11 +2935,7 @@ def main() -> None:
     check("and reading methods do not",
           not hasattr(Store.transactions, "undo_label"))
 
-    print("splash & chart floors")
-    from finfore.ui.splash import DOUG_LINES, DOUG_FACTS, doug_fact
-    check("Doug has things to say",
-          len(DOUG_LINES) >= 8 and len(DOUG_FACTS) >= 5
-          and doug_fact() in DOUG_FACTS)
+    print("chart floors")
     from finfore.ui.charts import _FLOOR_POS, _floor_label_opts
     check("floor labels sit clear of the y-axis",
           all(v >= 0.35 for v in _FLOOR_POS.values()))
@@ -3047,6 +2943,21 @@ def main() -> None:
           len(set(_FLOOR_POS.values())) == len(_FLOOR_POS))
     check("label options anchor the text above the line",
           _floor_label_opts("#fff", "zero")["anchors"] == [(0.5, 1.0), (0.5, 1.0)])
+
+    print("backup and workflow regressions")
+    from test_usability import run_tests
+    if not run_tests().wasSuccessful():
+        raise AssertionError("backup and workflow regressions failed")
+
+    print("categorization safety regressions")
+    from test_categories import run_tests as run_category_tests
+    if not run_category_tests().wasSuccessful():
+        raise AssertionError("categorization regressions failed")
+
+    print("data-quality evidence checks")
+    from test_data_quality import run_tests as run_quality_tests
+    if not run_quality_tests().wasSuccessful():
+        raise AssertionError("data-quality regressions failed")
 
     print("\nall tests passed")
 

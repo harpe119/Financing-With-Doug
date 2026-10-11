@@ -1,10 +1,13 @@
 """Small reusable widgets."""
 from __future__ import annotations
 
-from PyQt6.QtCore import QPoint, QRect, QRectF, QSize, Qt, QTimer
-from PyQt6.QtGui import QColor, QFont, QPainter, QPen, QValidator
+from decimal import Decimal, InvalidOperation
+from math import isfinite
+
+from PyQt6.QtCore import QEvent, QPoint, QRect, QRectF, QSize, Qt, QTimer
+from PyQt6.QtGui import QAction, QColor, QFont, QPainter, QPen, QValidator
 from PyQt6.QtWidgets import (QCheckBox, QDialog, QDoubleSpinBox, QFrame,
-                             QHBoxLayout, QLabel, QLayout, QPushButton,
+                             QHBoxLayout, QLabel, QLayout, QMenu, QPushButton,
                              QSizePolicy, QSpinBox, QSplitter, QTextBrowser,
                              QVBoxLayout, QWidget)
 
@@ -117,26 +120,11 @@ class _SelectOnClickMixin:
 
 
 class MoneySpinBox(_SelectOnClickMixin, QDoubleSpinBox):
-    """Amount field that accepts whatever a person would reasonably type.
+    """Currency uses fixed cents entry; percentage fields use normal decimals.
 
-    Plain left-to-right typing, because that is what everyone expects and
-    anything cleverer has to be learned. An earlier version filled digits in
-    from the right like a card terminal — `1234` becoming `$12.34` — which is
-    genuinely how tills work but is disorienting when you cannot see that it is
-    happening, and makes correcting one digit of an existing figure impossible
-    without retyping the lot.
-
-    What makes it forgiving instead of clever:
-
-    * `$`, commas and spaces are accepted and ignored, so pasting `$1,234.56`
-      from a statement works.
-    * The text is only re-parsed when editing finishes, so the field does not
-      rewrite itself under the cursor mid-number — typing `1`, `.`, `5` no
-      longer has an intermediate state that snaps to something else.
-    * Focusing selects the value, so typing replaces rather than appends.
-    * A half-typed number (`-`, `1.`) is *intermediate*, not rejected: Qt would
-      otherwise refuse the keystroke and it would look like the keyboard was
-      broken.
+    Currency keystrokes shift the digits: 1 → $0.01, 12 → $0.12, 123 → $1.23.
+    Values are committed on Enter or focus loss. Programmatic setValue calls
+    still take dollars, and pasted formatted amounts retain their dollar value.
     """
 
     def __init__(self, *args, **kwargs):
@@ -144,6 +132,76 @@ class MoneySpinBox(_SelectOnClickMixin, QDoubleSpinBox):
         # Don't re-read the text on every keystroke; wait for Enter or focus
         # loss. This is what stops the field fighting the cursor.
         self.setKeyboardTracking(False)
+        self.lineEdit().installEventFilter(self)
+        self.lineEdit().textEdited.connect(self._format_paste)
+
+    def _currency_mode(self) -> bool:
+        return "$" in self.prefix() and self.decimals() == 2
+
+    def _write_cents(self, cents: int, negative: bool = False) -> None:
+        amount = (-cents if negative else cents) / 100
+        amount = min(self.maximum(), max(self.minimum(), amount))
+        text = self.textFromValue(amount)
+        # Keep a typed minus sign at zero until the next digit arrives.
+        if negative and amount == 0 and self.minimum() < 0 and not text.startswith("-"):
+            text = "-" + text
+        self.lineEdit().setText(self.prefix() + text + self.suffix())
+        self.lineEdit().setCursorPosition(len(self.lineEdit().text()) - len(self.suffix()))
+
+    def _money_key(self, event) -> bool:
+        if not self._currency_mode() or event.modifiers() & (
+                Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.MetaModifier
+                | Qt.KeyboardModifier.AltModifier):
+            return False
+        key, char = event.key(), event.text()
+        if char not in "0123456789-+.,$ " and key not in (Qt.Key.Key_Backspace, Qt.Key.Key_Delete):
+            return False
+        # Empty event text (e.g. Enter) is not a currency character.
+        if not char and key not in (Qt.Key.Key_Backspace, Qt.Key.Key_Delete):
+            return False
+        self._pending_select = False
+        if char in (".", ",", "$", " "):
+            return True
+        editor = self.lineEdit()
+        core = self._core(editor.text())
+        try:
+            value = Decimal(core or "0")
+            cents = int(abs(value) * 100)
+        except (InvalidOperation, ValueError, OverflowError):
+            cents = 0
+        negative = core.startswith("-")
+        selected = editor.hasSelectedText()
+        if char.isdigit() and char.isascii():
+            cents = (0 if selected else cents) * 10 + int(char)
+            negative = negative and not selected
+        elif key == Qt.Key.Key_Backspace:
+            cents = 0 if selected else cents // 10
+        elif key == Qt.Key.Key_Delete:
+            cents = 0
+        elif char in ("-", "+"):
+            if selected:
+                cents = 0
+            negative = char == "-" and self.minimum() < 0
+        # Decimal and grouping keys leave the fixed decimal position intact.
+        self._write_cents(cents, negative)
+        return True
+
+    def keyPressEvent(self, event) -> None:
+        if self._money_key(event):
+            event.accept()
+        else:
+            super().keyPressEvent(event)
+
+    def eventFilter(self, watched, event):
+        if watched is self.lineEdit() and event.type() == QEvent.Type.KeyPress:
+            if self._money_key(event):
+                return True
+        return super().eventFilter(watched, event)
+
+    def _format_paste(self, text: str) -> None:
+        if self._currency_mode() and self.validate(text, len(text))[0] == QValidator.State.Acceptable:
+            value = self.valueFromText(text)
+            self._write_cents(round(abs(value) * 100), value < 0)
 
     def _core(self, text: str) -> str:
         """The number part: prefix, suffix, currency and separators removed."""
@@ -158,15 +216,22 @@ class MoneySpinBox(_SelectOnClickMixin, QDoubleSpinBox):
         if core in ("", "-", "+", ".", "-.", "+."):
             return (QValidator.State.Intermediate, text, pos)
         try:
-            float(core)
-        except ValueError:
+            value = Decimal(core)
+            if not value.is_finite() or not isfinite(float(value)):
+                raise ValueError("non-finite amount")
+        except (ValueError, InvalidOperation):
             return (QValidator.State.Invalid, text, pos)
         return (QValidator.State.Acceptable, text, pos)
 
     def valueFromText(self, text) -> float:      # noqa: N802
         core = self._core(text)
         try:
-            return float(core)
+            value = float(core)
+            if not isfinite(value):
+                return float(self.value())
+            if self._currency_mode() and "." not in core and "," not in text:
+                value /= 100
+            return value
         except ValueError:
             return float(self.value())
 
@@ -261,6 +326,7 @@ class Card(QFrame):
         self.body.setSpacing(10)
         if title:
             t = QLabel(title.upper())
+            self.title = t
             t.setObjectName("cardTitle")
             self.body.addWidget(t)
 
@@ -474,51 +540,55 @@ class SeriesRegistry:
 
 
 class LegendToggles(QWidget):
-    """Clickable chart legend.
-
-    Doubles as the key and the visibility control: the swatch says what the
-    shading means, the checkbox turns it off. Explaining the bands matters
-    because an unlabelled gradient invites reading the median as a prediction
-    rather than as the middle of a distribution; being able to hide them
-    matters because five overlapping series on one axis is unreadable.
-    """
+    """A compact chart key, with visibility controls in a Layers menu."""
 
     def __init__(self, entries: list[tuple], on_toggle=None, parent=None):
         """entries: (key, label, color, kind) with kind in
         {'band_outer', 'band_inner', 'line', 'dash'}."""
         super().__init__(parent)
         self._on_toggle = on_toggle
-        self.boxes: dict[str, QCheckBox] = {}
-        # One wrapping row of self-contained entries. Each entry is its own
-        # widget so the layout can only ever break *between* entries, never
-        # between a swatch and the label that explains it.
-        lay = FlowLayout(self, margin=2, spacing=10)
+        self.actions: dict[str, QAction] = {}
+        outer = QHBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        keys = QWidget()
+        lay = FlowLayout(keys, margin=2, spacing=10)
+        # The floors and goals already label themselves on the chart. Keep
+        # only the key to the main series here; every layer remains switchable.
+        main_keys = {"band80", "band50", "median", "networth", "cash", "invest", "debt"}
+        self.layers_btn = QPushButton("Layers")
+        self.layers_btn.setObjectName("small")
+        self.layers_btn.setToolTip("Show or hide individual chart layers")
+        menu = QMenu(self.layers_btn)
+        self.layers_btn.setMenu(menu)
         for key, label, color, kind in entries:
+            action = menu.addAction(label)
+            action.setCheckable(True)
+            action.setChecked(True)
+            action.toggled.connect(lambda on, k=key: self._emit(k, on))
+            self.actions[key] = action
+            if key not in main_keys:
+                continue
             alpha = {"band_outer": 34, "band_inner": 62}.get(kind, 255)
             is_line = kind in ("line", "dash")
             entry = QWidget()
             row = QHBoxLayout(entry)
             row.setContentsMargins(0, 0, 0, 0)
             row.setSpacing(4)
-            box = QCheckBox()
-            box.setChecked(True)
-            box.setToolTip(f"Show or hide: {label}")
-            box.stateChanged.connect(
-                lambda st, k=key: self._emit(k, bool(st)))
-            row.addWidget(box)
             row.addWidget(Swatch(color, alpha, line=is_line,
                                  dashed=(kind == "dash")))
             lbl = QLabel(label)
             lbl.setObjectName("hint")
             row.addWidget(lbl)
             lay.addWidget(entry)
-            self.boxes[key] = box
         # heightForWidth has to be advertised on the policy as well as the
         # layout, or the parent allocates only sizeHint()'s height and clips
         # every row after the first.
         pol = QSizePolicy(QSizePolicy.Policy.Preferred,
                           QSizePolicy.Policy.Minimum)
         pol.setHeightForWidth(True)
+        keys.setSizePolicy(pol)
+        outer.addWidget(keys, 1)
+        outer.addWidget(self.layers_btn, 0, Qt.AlignmentFlag.AlignTop)
         self.setSizePolicy(pol)
 
     def _emit(self, key: str, on: bool) -> None:
@@ -526,7 +596,7 @@ class LegendToggles(QWidget):
             self._on_toggle(key, on)
 
     def states(self) -> dict[str, bool]:
-        return {k: b.isChecked() for k, b in self.boxes.items()}
+        return {k: a.isChecked() for k, a in self.actions.items()}
 
 
 def fan_entries(color: str, extras: list[tuple] | None = None) -> list[tuple]:
@@ -630,7 +700,7 @@ def info_button(label: str, provider, tooltip: str = "",
     return btn
 
 
-NERD_LABEL = "🤓  For nerds"
+NERD_LABEL = "How this works"
 NERD_TIP = ("The statistics behind this page — how each number was computed, "
             "what was tested, and how much to trust it")
 

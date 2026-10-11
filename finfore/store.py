@@ -14,8 +14,10 @@ from __future__ import annotations
 
 import functools
 import json
+import os
 import sqlite3
-from contextlib import nullcontext
+import tempfile
+from contextlib import closing, nullcontext
 from datetime import date, datetime
 from pathlib import Path
 
@@ -213,6 +215,37 @@ class Store:
         self.con = sqlite3.connect(str(self.path))
         self.con.row_factory = sqlite3.Row
         self.con.execute("PRAGMA foreign_keys = ON")
+
+    def backup_to(self, path: str | Path) -> Path:
+        """Save a consistent SQLite snapshot, atomically replacing the target.
+
+        SQLite's backup API includes committed WAL contents. Copying the open
+        database file alone could silently omit those transactions.
+        """
+        target = Path(path).expanduser().resolve()
+        if target == self.path.resolve() or (
+                target.exists() and os.path.samefile(target, self.path)):
+            raise ValueError("Choose a different file from the open database.")
+        # Replacing a WAL database while sidecars exist could corrupt it when
+        # another connection next opens or checkpoints it.
+        if any(Path(str(target) + suffix).exists()
+               for suffix in ("-wal", "-shm", "-journal")):
+            raise ValueError("This destination may be open. Choose a new backup file.")
+        temp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                    dir=target.parent, prefix=".doug-backup-", suffix=".db",
+                    delete=False) as temp:
+                temp_path = Path(temp.name)
+            with closing(sqlite3.connect(temp_path)) as backup:
+                self.con.backup(backup)
+                if backup.execute("PRAGMA quick_check").fetchone()[0] != "ok":
+                    raise ValueError("The backup failed its integrity check.")
+            os.replace(temp_path, target)
+        finally:
+            if temp_path is not None:
+                temp_path.unlink(missing_ok=True)
+        return target
 
     # ---------------- undo ----------------
     def enable_undo(self, **kwargs):

@@ -27,8 +27,8 @@ def _money_spin(lo=-1e9, hi=1e9) -> QDoubleSpinBox:
     s.setDecimals(2)
     s.setGroupSeparatorShown(True)
     s.setPrefix("$ ")
-    s.setToolTip("Type the amount as you would say it — 1234.56, or 1234. "
-                 "Dollar signs and commas are fine.")
+    s.setToolTip("Enter digits as cents: 1234 becomes $12.34. Backspace removes "
+                 "the last digit. You can also paste a formatted amount such as $1,234.56.")
     return s
 
 

@@ -1,519 +1,263 @@
 # Getting started with Financing with Doug
 
-Welcome. This walks you through going from a fresh install to a working picture
-of your money, in about twenty minutes of setup and five minutes a month after
-that.
+Doug uses account balances and bank exports to show your history and estimate
+what comes next. Set up the accounts first, import the transactions, and check
+the categories and recurring patterns before relying on the forecast.
 
-You can reopen this any time from **Help → Getting started**.
+This guide is available under **Help → Getting started**.
 
----
+## Install and keep a backup
 
-## Before anything else: your data stays here
+The Windows download is an installer named
+`FinancingWithDoug-<version>-Setup.exe`. Run it and follow the prompts.
+Windows may show a SmartScreen warning because the installer is unsigned.
+Only continue if you trust the source of the download. A warning does not
+establish whether a program is safe.
 
-Everything lives in a single file on this computer — by default at
-`C:\Users\<you>\.ledgerline\ledgerline.db` on Windows, or
-`~/.ledgerline/ledgerline.db` on Mac.
+Financial data is stored in one local database. On Windows the default is
+`C:\Users\<you>\.ledgerline\ledgerline.db`; on Linux and macOS it is
+`~/.ledgerline/ledgerline.db`. The status bar shows the file currently open.
+Doug does not connect to your bank. Its updater contacts GitHub to check and
+download releases, without sending your financial data.
 
-There is no account to create, no cloud, no sync, and nothing is ever uploaded.
-The program does not connect to the internet at all. If you delete that file,
-the data is gone; if you copy it to another computer, it goes with you.
+Use **File → Back up data…** before making major changes and keep regular
+backups somewhere safe. This saves the database currently open, including
+accounts, transactions, goals, checkpoints, and database settings. A backup
+made while viewing a demo contains the demo. View preferences and the
+in-memory undo history are not included.
 
-That also means **nobody can recover it for you**. If the numbers start to
-matter to you, copy that file somewhere safe now and then.
+To restore a backup, close Doug first. Keep a copy of the current database,
+then replace it with your backup at the path shown in the status bar.
+When running from source, you can open another database directly with
+`python run.py --db "path/to/backup.db"`.
 
----
+## Try a demo
 
-## "Windows protected your PC" / "unidentified developer"
+**File → Load demo dataset** opens fictional data in a separate database.
+The banner tells you when a demo is open. Your own database is not changed by
+edits made in the demo. **File → Return to my own data** returns to it.
 
-The first time you run it, Windows may show a blue **SmartScreen** box, or a Mac
-may refuse to open it. This is not a virus warning. It appears for any program
-that has not been code-signed, which costs money per year and is not worth it
-for something handed between family.
-
-- **Windows** — click *More info*, then *Run anyway*.
-- **Mac** — right-click the app, choose *Open*, then confirm.
-
-You only have to do this once.
-
-Also: keep the whole folder together. The `.exe` will not run on its own — it
-needs the files sitting beside it. To get a desktop icon, right-click the
-`.exe` → **Send to → Desktop (create shortcut)**. Move the *shortcut* wherever
-you like; leave the folder alone.
-
----
-
-## Try it without your own data first
-
-**File → Load demo dataset** opens one of five fictional households. Nothing
-you do in a demo touches your own data — each one lives in its own separate
-file, an amber banner across the top reminds you where you are, and
-**File → Return to my own data** puts you straight back.
-
-| Demo | What it shows |
+| Demo | What to look for |
 |---|---|
-| **Balanced** | An ordinary situation — a modest surplus, a car loan part-paid |
-| **Struggling** | Spending past the edge, with the card carrying the difference |
-| **Thriving** | A big savings rate and investments compounding |
-| **Turnaround** | Someone who cut their spending hard five months ago |
-| **Spiralling** | The worst case: three debts, an F grade, cash running out |
+| Balanced | A modest surplus, a loan, and savings goals |
+| Struggling | Spending that exceeds income |
+| Thriving | Higher savings and investment growth |
+| Turnaround | A reduction in spending partway through the history |
+| Spiralling | Several debts and a sustained shortfall |
 
-This is the fastest way to see what every page is *for* before your own numbers
-are in. **Spiralling** and **Thriving** are worth a look side by side.
+Demos show how the controls work. They do not establish that the forecast
+will predict your own finances accurately.
 
----
+## Where to find things
 
-## The eight pages, in one line each
+There are six sections in the sidebar:
 
-The list down the left side is the whole program:
-
-| Page | What it answers |
+| Section | What it contains |
 |---|---|
-| **Dashboard** | Where do I stand right now? Net worth, cash, debt, and how it got there |
-| **Accounts** | What do I own and owe? Set up and edit everything here |
-| **Transactions** | The ledger itself — search it, and correct any category |
-| **Recurring** | What repeats every month, and how sure is it? |
-| **Insights** | Where does the money go, and is that sensible? |
-| **Goals** | What am I saving for, and in what order? |
-| **Forecast** | Where is this heading, and how confident should I be? |
-| **Progress** | Was the old forecast right, and am I actually improving? |
+| Dashboard | Overview of balances and history; Spending analysis |
+| Accounts | Account balances, dates, loan terms, and investment assumptions |
+| Transactions | Imported transactions, search, and category corrections |
+| Bills & payday | Calendar of scheduled items; Recurring patterns |
+| Goals | Savings targets and their order |
+| Forecast | Projection controls; Progress comparisons |
 
-**Dashboard** is the home screen. It has no settings — it just shows the
-headline numbers and three charts: your net worth over time, income against
-spending each month, and where the last 90 days went. Every panel divider on
-this and other pages can be **dragged** to give one chart more room.
+The tabs across the top keep related functions together.
+Drag chart dividers to change how much space each panel gets.
+**Simple view** hides advanced controls; it does not delete settings or data.
 
----
+## 1. Add your accounts
 
-## Step 1 — Add your accounts
+Open **Accounts → Add account** for each account you want to track.
 
-Go to **Accounts** and click **Add account** for each one you want tracked.
+- Checking and savings: enter the balance and the date it was recorded.
+- Credit cards: enter the amount owed as a positive number. A negative amount
+  means the card is in credit.
+- Loans: enter the amount owed, APR, regular payment, and payment day.
+- Investments: enter the current value, expected annual return, volatility,
+  and planned monthly contribution.
 
-**Type amounts the way you would say them.** `1234.56` is one thousand two
-hundred and thirty-four dollars and fifty-six cents; `1234` is one thousand two
-hundred and thirty-four dollars. Dollar signs and commas pasted from a statement
-are ignored, so `$1,234.56` works too. Clicking into a field selects what is
-already there, so typing straight away replaces it rather than adding to it.
+Use the balance date from the statement, not necessarily today's date.
+Doug reconstructs balances from that dated amount and your transactions.
+An incorrect balance or date shifts the reconstructed history.
 
-What to enter for each type:
+Return and volatility are modeling assumptions. Change them if they do not
+fit the investment. Future returns are not guaranteed.
 
-- **Checking / Savings** — the balance right now, and today's date.
-- **Credit card** — the amount you owe, as a **positive** number. (A negative
-  figure means the card is in credit — you are owed money.)
-- **Loan** — the amount owed as a **positive** number too, plus the APR, the
-  monthly payment, and which day of the month it comes out. APR takes four
-  decimal places, so `6.4875%` off your statement goes in exactly as written.
-- **Investment** — the current value, an expected annual return (7% is a common
-  long-run assumption for a broad stock fund), a volatility (15% is typical),
-  and anything you add each month.
+### Enter amounts with a fixed decimal
 
-Do not agonise over the investment numbers. They are assumptions, not facts, and
-you can change them later and re-run.
+Currency fields work like bank payment fields. Digits enter cents from the
+right; you do not need to type the decimal point.
 
-> **The "as of" date matters.** The program rebuilds your history by working
-> backwards from the balance you enter on the date you say it was true. If you
-> type last month's balance with today's date, everything before it shifts.
-
----
-
-## Step 2 — Get a CSV from your bank
-
-Every bank calls this something slightly different. Log in and look for:
-
-> *Download* · *Export* · *Download transactions* · *Statements & activity*
-
-Choose **CSV** (sometimes called "spreadsheet" or "Excel" format — CSV is the
-one you want, not PDF). Ask for as long a period as it will give you. **Twelve
-to eighteen months is ideal**; anything under three months is too short for the
-program to find your recurring bills or say much about your habits.
-
-Save it somewhere you can find it again. The Downloads folder is fine.
-
----
-
-## Step 3 — Import it
-
-**File → Import CSV…**, pick the account, and choose the file.
-
-The import screen tries to work the file out on its own and shows you the raw
-rows underneath so you can check. It handles the four conventions banks
-actually use — a single signed amount column, a flipped one (common on credit
-cards), separate debit and credit columns, or an unsigned amount with a
-`Credit`/`Debit` indicator column.
-
-**What to check before pressing Import:**
-
-- Does the **Date** column point at the real date?
-- Does the **Description** column show merchant names?
-- Do **spending rows show as negative** in the preview? If they are the wrong
-  way round, change **Amounts** to the flipped option.
-- If dates are day-first (`31/12/2025`), tick **Day-first dates**.
-
-Then press **Import**. Nothing is destroyed if you get it wrong — importing the
-same file twice adds nothing, because every row is fingerprinted. If the mapping
-was wrong, fix it and import again.
-
-### Loans and investments take a CSV too
-
-Those accounts accept either shape of export:
-
-- a **balance** file — a date and a balance on each row; or
-- an **activity** file — dated payments and charges, which is what most lenders
-  actually send.
-
-Pick the account in **File → Import CSV…** and you get the right importer
-automatically. For an activity file the program works the balance history out of
-the payments and pins it to the balance you entered. It shows you a preview
-first — if the line comes out upside down, untick *"Payments in this file reduce
-the balance"*.
-
-### Later on: updating
-
-Next month, download a fresh export and use **Accounts → Update from CSV…**.
-It remembers how the file was laid out, so there is no setup the second time,
-and only genuinely new rows are added.
-
----
-
-## Step 4 — Fix the categories
-
-Categories drive the score, the charts and the forecast, so this is the step
-that pays for itself.
-
-Go to **Transactions → Review uncategorized…**. This lists **merchants**, not
-transactions, biggest first — labelling "SAFEWAY" once fixes every Safeway
-charge you have ever made and every one you make in future. Twenty minutes here
-does more than an hour of editing rows one at a time.
-
-By default it only shows merchants from the period that actually affects your
-score. The score looks back 24 months but weights recent months far more
-heavily — **the last 3 months are about half of it**, the last 6 about three
-quarters, and anything over a year about 6%. So labelling a merchant you last
-saw in 2022 is real work that changes almost nothing. If the list is longer
-than one screen, the header says so.
-
-Two things worth knowing:
-
-- **It learns.** Every correction is remembered, so next month's import already
-  knows that merchant.
-- **It generalises.** Label `BLUE BOTTLE COFFEE` and it will also catch
-  `SQ *BLUE BOTTLE 0042` — while keeping `BLUE CROSS` well clear.
-
-You can also change any single category directly on the **Transactions** page,
-or right-click a selection.
-
----
-
-## Step 5 — Check the recurring items
-
-The **Recurring** page shows every repeating payment it found — rent, salary,
-subscriptions, loan payments — with how often it happens and how confident it is.
-
-Have a quick look and:
-
-- Untick **On** for anything that has stopped, or that still happens but should
-  not count towards the forecast (a cancelled subscription, a one-off that
-  looked regular).
-- **Right-click** a row to say what it really is — income, a bill, not real at
-  all, or a payment on one of your loans. Linking a loan payment matters:
-  otherwise it gets counted twice, and there is a warning when one is unlinked.
-- **Delete** only removes patterns that no longer occur at all. If matching
-  transactions are still in your ledger, re-detecting simply finds it again.
-
----
-
-## Step 6 — Set your goals
-
-Go to **Goals**. This page is one **priority ladder** covering your debts *and*
-your savings goals together, because they compete for the same spare money.
-
-1. **Add emergency fund…** sizes one from your own essential spending. Most
-   guidance puts this first, so it goes to the top.
-2. **Add goal…** for anything else — a car, a holiday, a deposit.
-3. Use **▲ Higher** / **▼ Lower** to put them in the order you actually care
-   about.
-
-Then choose how spare money is split:
-
-- **Focus** — everything spare goes at the top target. Clears the ladder
-  fastest.
-- **Weighted** — split by priority, so lower goals still visibly move. Slower,
-  but a goal that has not moved in two years is a goal people give up on.
-- **Custom** — you type the amounts.
-
-**The snowball is the point.** When a loan is paid off, its whole monthly
-payment rolls into whatever is next — the panel dates each hand-off, like
-*"Mar 2028 — Car loan paid off → $412/mo rolls into Emergency fund."* That is
-how the last debt becomes the first savings goal instead of quietly disappearing
-into everyday spending.
-
-**"Getting there sooner"** answers a different question: pick a date you want
-something by, and it tells you what you would have to give up to hit it — by
-name, in dollars. If the wants on the table do not add up, it says the date is
-out of reach rather than suggesting you cut into rent.
-
----
-
-## Step 7 — Read the forecast
-
-The **Forecast** page projects forward. It runs hundreds of simulated futures
-rather than drawing one line, because one line would be a prediction and this
-is not one.
-
-The shading is the honest part:
-
-- the **dark band** is the middle 50% of outcomes;
-- the **light band** is the middle 80%;
-- the **solid line** is the median — half of futures land above it, half below.
-
-**The band is the answer, not the line.** Press **▶ Explain me** for a short
-video on it.
-
-Three reference lines sit on the cash chart: **$0** in red, the **$1,000 starter
-buffer**, and an **emergency fund** sized from your own essential spending.
-
-Under the chart, one sentence says whether the money actually runs out. It is
-not a probability, because a probability cannot tell the difference between
-being $5 short on a Thursday and sliding quietly into insolvency — and *"how
-often does the line touch zero"* answers **100%** to both. What it weighs
-instead is how far below zero you go, for how long, and whether it comes back:
-
-| It says | It means |
+| Digits entered | Amount |
 |---|---|
-| **Cash holds up** | Nothing goes under. |
-| **Cash gets thin** | Never negative, but the buffer keeps being eaten. |
-| **A short dip, not a shortfall** | It crosses zero by trivial amounts and recovers. Move a payment. |
-| **A tight patch, then it clears** | A real squeeze — deep enough to bounce a payment — on a date, followed by recovery. |
-| **Worth watching** | Some futures go genuinely short, most come back. |
-| **High risk of running out of cash** | Deep *and* not self-correcting. This is the one that means what it says. |
+| 1 | $0.01 |
+| 1234 | $12.34 |
+| 123400 | $1,234.00 |
 
-The exact percentages behind all of that are under **🤓 For nerds**.
+Clicking into a field selects the existing amount, so the next digit replaces
+it. Backspace removes the last digit. Delete clears the amount. Use the minus
+key for a negative amount where the field allows one.
 
-When the dip is a bounded one, a **What's causing this?** button appears beside
-it. That lists what is actually scheduled to leave in the run-up — rent, a car
-payment, a subscription — says when the next money lands, and offers to move one
-of them past that date. Moving a payment does not make it go away; it is the
-right fix when two things land in the wrong order, and the wrong one when there
-simply is not enough coming in.
+Pasting `1234` enters $12.34. Pasting a formatted amount such as
+`$1,234.56` keeps its dollar value. Check the displayed amount before saving.
+Changes are committed when you press Enter or leave the field.
 
-Then have a play. Drag the category sliders, add extra loan payments, add a
-**what-if event** for a dated one-off like a new car or a bonus, and watch the
-fan move.
+Percentages do not use this behavior. Enter `6.4875` for a 6.4875% APR.
+Controls changed by the app still use dollars internally; this change affects
+manual currency entry, not stored values or imported transactions.
 
-Two analyses sit underneath:
+## 2. Import bank history
 
-- **Sensitivity** ranks which lever actually moves your outcome. It is often not
-  the one that feels biggest day to day.
-- **Backtest** refits the model at a past date using *only* what was known then
-  and scores it against what really happened. This is the one that tells you
-  whether to believe the fan at all. Coverage near 80% means well calibrated.
+Download a CSV export from your bank. Look for Download, Export, or
+Transaction history on its website. A PDF statement is not a CSV.
+Use as much history as you can; several complete months are more useful than
+a few weeks for detecting patterns and estimating spending.
 
----
+Choose **File → Import CSV…**, select the account, and choose the file.
+For checking, savings, and credit cards, check the transaction preview before
+importing:
 
-## Step 8 — The habits score
+- Dates should match the bank's export.
+- Descriptions should identify the transactions.
+- Expenses should be negative and income positive.
+- Confirm the amount-sign setting, particularly for credit-card exports.
 
-The **Insights** page gives a 0–10 score and a letter grade, benchmarked against
-the **50/30/20 rule** — 50% of income on needs, 30% on wants, 20% saved.
+For loan and investment accounts, the same command opens the balance-history
+importer rather than a transaction importer.
 
-It scores two things separately, on purpose:
+An import records a checkpoint for later comparison. Duplicate detection
+reduces repeated entries, but you should still review the ledger after an
+import. If you change the CSV mapping or amount signs, check the result rather
+than assuming it was interpreted correctly.
 
-- **Habits** — how you spend, measured as wants against needs. This is the part
-  you control.
-- **Means** — whether you are living within your income.
+## 3. Review transactions and patterns
 
-Which is why a low earner spending carefully still grades well, while the same
-shortfall caused by discretionary spending does not. The page tells you which
-case you are in, in plain words.
+In **Transactions**, search for entries and correct mistaken categories.
+Use **Review uncategorized…** to work through rows that need attention.
+The review queue separates purchases from incoming payments. A selection updates
+matching uncategorized entries, including older ones outside the displayed
+window, without changing already categorized entries. Saved corrections take
+precedence on future imports. Similarity suggestions require the same direction
+and a clear lead over conflicting labels; their scores are not probabilities.
+Check internal transfers: moving money between your own accounts is not
+income or spending.
+An external transfer is not necessarily an internal move. Equal amounts in two
+accounts are not sufficient evidence by themselves. Review transfers and card
+payments, especially when you have imported only one side of a payment.
 
-Anything the program could not categorise is **left out** of the ratio rather
-than assumed frivolous — punishing you for what it failed to label would be
-unfair. If a lot is uncategorised the grade is marked *provisional*, which is a
-hint to go back to Step 4.
+Open **Bills & payday → Recurring patterns** to review detected bills and
+paychecks. Confirm each amount, cadence, and date. Deactivate a pattern that
+no longer applies. Use Ignore for repeated transactions that should not enter
+the projection.
 
----
+Link a loan-payment pattern to the correct loan. An unlinked loan pattern is
+excluded to avoid counting the same payment twice; the loan's configured
+payment is used when no active linked pattern covers it.
 
-## Step 9 — Come back next month
+Patterns are estimates from past transactions. They may miss a bill, detect
+a pattern that is not real, or continue a payment that has stopped.
+Review them when your circumstances change.
 
-This is where it gets useful, and it only takes a few minutes.
+## 4. Use the bills and payday calendar
 
-1. Download a fresh CSV from your bank.
-2. **Accounts → Update from CSV…** (no setup needed the second time).
-3. Update any balances that have drifted.
+**Bills & payday → Calendar** shows upcoming scheduled items through the next
+year. The schedule begins tomorrow. Select a day to see its items, or press
+**Show whole month** to return to the monthly list.
 
-Each import quietly records a **checkpoint** — your score, your balances, and
-the forecast being made that day. The **Progress** page then compares them:
+Green dates have income, red dates have payments, and blue dates have both.
+The list includes recurring patterns, configured loan payments, investment
+contributions, and saved one-off events.
 
-- **Did the old forecast hold?** It draws what was predicted against what
-  actually happened. Cash outside the band entirely is flagged either way,
-  because a projection your behaviour broke is more interesting than one it
-  matched.
-- **Did anything actually improve?** It tests whether your spending really
-  changed or whether it is just noise, and reports how sure it is. A
-  non-significant result is never reported as "no change" — it tells you how big
-  a shift this much data could have detected at all.
+Use the account selector to see items associated with a particular account.
+Doug assigns an account only when matching imported transactions identify
+one account. A merchant used on several accounts remains unassigned.
+**Unassigned items** also includes commitments with no confirmed funding
+account, such as a manually configured contribution.
 
-That second one is there for a specific feeling: *"it does not feel like I am
-getting anywhere."* Sometimes the numbers disagree with the feeling, and it is
-worth knowing which is right.
+For a selected account, the scheduled balance starts from its recorded or
+reconstructed balance and applies assigned scheduled items through month end.
+For later months, it includes earlier scheduled items as well.
+Negative credit-card positions represent money owed.
 
-Checkpoints are taken automatically, so there is normally nothing to do. If you
-want to mark a particular moment — just before a big change, say — there is
-**Take a checkpoint now** on the Progress page.
+This is not a safe-to-spend balance. Everyday spending, future transfers, and
+unassigned items are excluded. Amounts and dates can change, and loan payments
+are listed as recurring commitments rather than stopped by a payoff calculation.
+Use Forecast for modeled spending and loan-payoff estimates.
+A timing change in a forecast scenario does not change this baseline calendar
+or move an actual bank payment.
 
-> **Already have a year of history?** **Progress → Reconstruct history…** builds
-> the missing checkpoints from data you already have, so the page works today
-> instead of in six months. Each reconstructed one is worked out using *only*
-> the data that existed on its own date, never with hindsight, which is what
-> keeps the page honest about how accurate Doug has actually been.
+## 5. Check spending and goals
 
-Nothing on the Progress page touches your money. Taking a checkpoint,
-reconstructing them, or clearing every last one never alters an account, a
-transaction, a goal or an imported row — the **What is a checkpoint?** button
-in the toolbar says so at more length.
+**Dashboard → Spending** shows category totals and a spending score.
+The score uses the 50/30/20 guideline as a benchmark, not a budget tailored
+to you. It compares discretionary spending with needs and savings with income.
+A high score does not guarantee that you have enough cash to pay a bill.
+Use the explanations alongside the actual amounts.
 
-### Keeping it up to date
+Open **Goals → Add goal…** to enter a target.
+**Add emergency fund…** creates a target based on essential spending.
+Review the amount and priority order yourself. These targets are not separate
+bank balances or automatic transfers.
 
-**Check for updates** — its own button along the top of the window, beside
-*File*, *Edit* and *Help* — asks whether a newer version has been released,
-shows what changed, and, if you want it, downloads and installs it for you.
-The app also checks quietly in the background once a day and stays silent
-unless there is something new.
+For loans and investments, use **Update from CSV…** on Accounts when you have
+new balance history. Keep account terms current as well as transactions.
 
-Updating never touches your accounts, transactions, goals or settings. They are
-stored separately from the program itself, so an update (or even uninstalling
-and reinstalling) picks up exactly where you left off.
+## 6. Read the forecast
 
-### If you get something wrong: Ctrl+Z
+**Forecast → Projection** shows cash and net worth over the selected horizon.
+The center line is the median modeled outcome. Shaded bands show ranges
+across simulated paths, not guarantees about future balances.
 
-Every change can be taken back. Press **Ctrl+Z** — or click the **Undo** button
-that appears at the top of the window the moment there is something to undo —
-and the last thing you did is reversed. **Ctrl+Shift+Z** (or **Ctrl+Y**) puts it
-back again, and both live on the **Edit** menu.
+Check **Data quality** beside the chart before interpreting the projection.
+**Review data** shows the recorded dates, gaps and amounts behind each flag,
+with buttons to open Accounts, Transactions or the calendar. This stays visible
+in Simple view. It checks for balances and transactions older than 30 days,
+histories shorter than 90 days, months with no recorded activity, categories
+to review, unassigned scheduled outflows and unusual transaction dates.
 
-It tells you what it is about to undo, so you never have to guess: the button
-reads *Undo import CSV*, or *Undo delete account*, or *Undo reset all data*. And
-one press takes back one *thing you did*, not one internal step — undoing an
-import removes the transactions, the recurring patterns it found and the
-checkpoint it recorded, all together.
+A quiet month is not necessarily missing history, and an old balance can still
+be moved forward by newer transactions. These flags tell you what to verify
+against your statements; they do not establish that a forecast is accurate.
+The checks read your records without changing them or blocking a forecast.
 
-Two things worth knowing. It remembers roughly the last couple of dozen changes,
-not everything since the beginning of time. And the history is kept in memory
-while the program is open, so **closing the app clears it** — if you have just
-deleted something you want back, undo it before you quit.
+**Watch explanation** opens the original video in your computer's video
+player. **How this works** gives the written explanation and assumptions.
+If the video cannot open, check that the computer has a player for MP4 files.
 
-### "This history doesn't add up"
+Change income or category spending to test a scenario. Advanced controls
+include extra debt payments, investing, and one-off expenses or income.
+The chart updates after you finish an adjustment.
+**Reset scenario** restores temporary controls; saved events remain in the
+database. Manage goal targets on Goals, not in a second forecast editor.
 
-If an account's imported rows and the balance you entered cannot both be true,
-the dashboard says so rather than drawing a confident wrong line. Usually the
-export is missing withdrawals, doesn't reach back far enough, or contains the
-same transaction twice.
+**What's causing this?** explains a modeled cash dip using nearby scheduled
+items. Moving a date in that analysis changes the scenario only. Contact the
+payee before changing any actual payment date.
 
-Once you have read it, press **Got it** and it goes away. It comes back if the
-figures change — importing another partial export, for instance — because
-dismissing it says "I know about this discrepancy", not "stop checking this
-account". **Accounts → Check my balances** always shows every account whether
-or not you dismissed the banner, and has a **Show dashboard warning again**
-button if you want the reminder back.
+Changing a forecast is not changing your finances. Use the results to compare
+assumptions and plans. This app is not financial advice.
 
-### Simple view
+## 7. Compare forecasts with history
 
-The header carries a **Simple view / Everything** switch, and it starts on
-Simple. That puts away the machinery — Monte Carlo path counts, the sensitivity
-and backtest panels, the checkpoint table, the Clear button — and leaves the
-pages to what most people actually want. It hides no findings: the charts, the
-verdicts and every **For nerds** panel stay exactly where they are. Click it
-once for everything, and it is remembered.
+Open **Forecast → Progress** to compare checkpoints.
+**Take a checkpoint now** saves the current balances, score, and forecast.
+Imports also save checkpoints automatically.
 
-### Save a month in review
+**Reconstruct history…** creates retrospective comparisons using data available
+at each selected past date. These are reconstructed tests, not predictions
+that were actually saved then. They can help reveal model errors, but do not
+prove that the next forecast will be accurate.
 
-**File → Save a month in review…** writes one finished month to a single
-printable page: where you stand, what came in and went out, where it went, your
-grade in plain words, anything that changed, and the year ahead. It is a plain
-web page with nothing attached — it opens in any browser, offline, and
-**Ctrl-P** turns it into a PDF you can send to someone who does not have this
-program.
+**Clear checkpoints…** deletes only the comparison snapshots. It leaves
+accounts, transactions, and goals unchanged.
+**What changed?** on Dashboard summarizes changes since the previous import.
 
-### When a bill goes up on its own
+## Keep the data current
 
-Nobody notices a subscription creeping from $15.49 to $19.49. Doug does: each
-recurring charge is compared against **its own** history, and a blue strip
-appears on the Dashboard when one moves, with **What changed?** for the detail.
+Import new transactions, confirm balances and dates, and review changed bills
+and income. Missing accounts or transactions can distort both history and the
+forecast. Save a backup before a large correction.
 
-The trick is not spotting a change, it is not spotting hundreds. A bill that
-varies by nature — electricity in August, a phone bill with roaming on it — is
-different every month, so a charge has to move by more than three times its own
-usual swing before it is mentioned at all. A subscription that has been the same
-eleven months running has no usual swing, so a two-dollar rise is enormous and
-gets flagged; the power bill mostly stays quiet. Price *cuts* and pay rises are
-reported the same way, as good news.
-
-Switching a pattern off on the **Recurring** page stops it being checked.
-
-### For nerds
-
-The Progress, Forecast and Insights pages each carry a **🤓 For nerds** button.
-The page itself sticks to plain sentences — *yes, you really are spending
-less* — and the button opens the working behind it: p-values, confidence
-intervals, how the permutation test is built, how well-calibrated the forecast
-bands have been, and how the habits grade is put together. Nothing is hidden;
-it is just not in the way.
-
----
-
-## A five-minute monthly routine
-
-1. Download the CSV → **Update from CSV…**
-2. **Review uncategorized…** — clear the top few merchants
-3. Glance at **Progress** — did anything move?
-4. Glance at **Goals** — are the dates still what you expected?
-
-That is it.
-
----
-
-## Things that trip people up
-
-**"My net worth looks wrong."** Check the *as-of* dates on the Accounts page.
-History is rebuilt backwards from the balance you entered, so a stale balance
-tilts everything before it. **Accounts → Snapshots…** lets you record a balance
-on a specific date to correct drift.
-
-**"My spending looks too high."** Money moved between your own accounts is
-supposed to be ignored, and it is auto-detected when both sides are imported.
-Import *all* your cash accounts, not just one, and re-check anything labelled
-`Transfer`.
-
-**"It says I have no recurring items."** It needs at least three occurrences to
-call something a pattern. Import more history.
-
-**"The forecast looks nothing like my situation."** Look at the **Backtest**
-first. If coverage is far off 80%, the model is not describing you well — most
-often because a large chunk of spending is still uncategorised, or the ledger is
-too short.
-
-**"I changed my spending months ago but the forecast has not noticed."** It
-will, once the change has held for about four months against a similar stretch
-of before. It deliberately waits: a quiet couple of months is not a new habit,
-and reacting to every dip would make the projection jumpy and useless.
-
----
-
-## What this is not
-
-Doug produces statistical estimates from your own transaction history. It is a
-modelling tool, not financial advice, and it is not a substitute for a financial
-adviser on anything that matters — tax, retirement, insurance, or debt you
-cannot service.
-
-The forecast assumes the future roughly resembles the past. It does not know
-about your job, your health, or next year's rent rise. It cannot model credit
-card interest, and it treats a recurring bill as fixed forever with no inflation.
-The habits score is a transparent rule of thumb anchored on published budgeting
-guidance, not a validated financial index.
-
-Everything it does is written down in **Help → Methodology**, and at more length
-in `docs/methodology.md` in the program folder. Nothing here is a black box — if
-a number looks wrong, it can be traced.
-
----
-
-*Doug would like you to know that Doug is still not a financial advisor.*
+**File → Save a month in review…** exports an HTML summary for a chosen month.
+The exported report contains financial information; treat it as private.
+Check the open-database path and demo banner before exporting or backing up.

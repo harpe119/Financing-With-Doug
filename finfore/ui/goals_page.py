@@ -12,7 +12,7 @@ from datetime import date
 
 import numpy as np
 from PyQt6.QtCore import QDate, Qt
-from PyQt6.QtWidgets import (QComboBox, QDateEdit, QDialog, QDialogButtonBox,
+from PyQt6.QtWidgets import (QComboBox, QDateEdit, QDialog, QDialogButtonBox, QFrame,
                              QFormLayout, QHBoxLayout, QHeaderView, QLabel,
                              QLineEdit, QMessageBox, QPushButton, QScrollArea,
                              QSizePolicy, QTableWidget, QTableWidgetItem,
@@ -25,7 +25,7 @@ from ..store import Store
 from ..util import fmt_money
 from . import charts, theme
 from .account_dialog import _money_spin
-from .widgets import Card, IntSpinBox, hsplit, hint, vsplit
+from .widgets import Card, FlowLayout, IntSpinBox, hsplit, hint, vsplit
 
 _SERIES_COLORS = [theme.ACCENT, theme.BLUE, theme.AMBER, theme.PURPLE,
                   theme.RED, "#7FD4C1", "#C7D0DB", "#E08CB4"]
@@ -89,27 +89,26 @@ class GoalsPage(QWidget):
 
         # ---------------- ladder ----------------
         ladder = Card("Priority ladder")
-        bar = QHBoxLayout()
-        bar.addWidget(QLabel("Spare income"))
+        form = QFormLayout()
+        income_row = QHBoxLayout()
         self.surplus = _money_spin(0, 1e6)
         self.surplus.setToolTip(
             "What is left over each month after everything you already spend, "
             "including loan minimums. Detected from your ledger — override it "
             "if you know better.")
         self.surplus.valueChanged.connect(self._rerun)
-        bar.addWidget(self.surplus)
+        income_row.addWidget(self.surplus, 1)
         detect = QPushButton("Use detected")
         detect.setObjectName("small")
         detect.clicked.connect(self._use_detected)
-        bar.addWidget(detect)
-        bar.addSpacing(12)
-        bar.addWidget(QLabel("Split"))
+        income_row.addWidget(detect)
+        form.addRow("Spare /mo", income_row)
         self.policy = QComboBox()
         for key, label in POLICIES.items():
             self.policy.addItem(label, key)
         self.policy.currentIndexChanged.connect(self._policy_changed)
-        bar.addWidget(self.policy, 1)
-        ladder.body.addLayout(bar)
+        form.addRow("Split", self.policy)
+        ladder.body.addLayout(form)
 
         self.table = QTableWidget(0, len(self.COLS))
         self.table.setHorizontalHeaderLabels(self.COLS)
@@ -126,7 +125,8 @@ class GoalsPage(QWidget):
         self.table.doubleClicked.connect(lambda _: self._edit())
         ladder.body.addWidget(self.table, 1)
 
-        acts = QHBoxLayout()
+        actions_host = QWidget()
+        acts = FlowLayout(actions_host, spacing=6)
         self.up = QPushButton("▲ Higher")
         self.up.setObjectName("small")
         self.up.setToolTip("Move this target up the priority ladder")
@@ -147,8 +147,10 @@ class GoalsPage(QWidget):
         rm.clicked.connect(self._delete)
         for b in (self.up, self.down, add, self.ef_btn, edit, rm):
             acts.addWidget(b)
-        acts.addStretch(1)
-        ladder.body.addLayout(acts)
+        action_policy = QSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
+        action_policy.setHeightForWidth(True)
+        actions_host.setSizePolicy(action_policy)
+        ladder.body.addWidget(actions_host)
 
         self.custom_note = hint("")
         ladder.body.addWidget(self.custom_note)
@@ -163,17 +165,19 @@ class GoalsPage(QWidget):
         self.plan_note.setWordWrap(True)
         chart_card.body.addWidget(self.plan_note)
 
-        cascade_card = Card("Snowball — what frees up, and where it goes")
+        cascade_card = Card("Payment rollover")
         self.cascade = QLabel("")
         self.cascade.setWordWrap(True)
         self.cascade.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse)
         self.cascade.setAlignment(Qt.AlignmentFlag.AlignTop)
-        cascade_card.body.addWidget(self.cascade, 1)
+        cascade_scroll = QScrollArea()
+        cascade_scroll.setWidgetResizable(True)
+        cascade_scroll.setWidget(self.cascade)
+        cascade_card.body.addWidget(cascade_scroll, 1)
 
         faster_card = Card("Getting there sooner")
-        drow = QHBoxLayout()
-        drow.addWidget(QLabel("I want"))
+        drow = QFormLayout()
         # Any rung, not just the top one. "What would it take to have the
         # computer by July, while still clearing the card first?" is the
         # question people actually have, and it is about a goal partway down
@@ -186,8 +190,7 @@ class GoalsPage(QWidget):
             "committed to.")
         self.target_pick.currentIndexChanged.connect(
             lambda _i: self._render_faster())
-        drow.addWidget(self.target_pick, 1)
-        drow.addWidget(QLabel("by"))
+        drow.addRow("Target", self.target_pick)
         self.by_date = QDateEdit()
         self.by_date.setCalendarPopup(True)
         self.by_date.setDisplayFormat("MMM yyyy")
@@ -195,7 +198,7 @@ class GoalsPage(QWidget):
         self.by_date.setToolTip(
             "Pick a date and Doug works out what would have to give — by name.")
         self.by_date.dateChanged.connect(lambda _d: self._render_faster())
-        drow.addWidget(self.by_date)
+        drow.addRow("By", self.by_date)
         faster_card.body.addLayout(drow)
         self.faster = QLabel("")
         self.faster.setWordWrap(True)
@@ -207,15 +210,27 @@ class GoalsPage(QWidget):
         fscroll.setWidget(self.faster)
         faster_card.body.addWidget(fscroll, 1)
 
-        lower = hsplit(cascade_card, faster_card, sizes=[520, 400])
-        right = vsplit(chart_card, lower, sizes=[420, 260])
-        outer = hsplit(ladder, right, sizes=[620, 660])
+        top = hsplit(ladder, chart_card, sizes=[500, 500])
+        lower = hsplit(cascade_card, faster_card, sizes=[500, 500])
+        outer = vsplit(top, lower, sizes=[400, 200])
         for w in (ladder, chart_card, cascade_card, faster_card):
             w.setMinimumWidth(220)
             w.setMinimumHeight(110)
             w.setSizePolicy(QSizePolicy.Policy.Ignored,
                             QSizePolicy.Policy.Ignored)
-        root.addWidget(outer)
+        # Preserve usable controls at the minimum window height. Shrinking a
+        # four-panel page indefinitely was reducing buttons to a single letter
+        # and date fields to a few pixels; scroll the page once it cannot fit.
+        outer.setMinimumHeight(660)
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.addWidget(outer)
+        self.scroll = QScrollArea()
+        self.scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setWidget(content)
+        root.addWidget(self.scroll)
 
     # ---------------------------------------------------------------
     def refresh(self) -> None:

@@ -19,8 +19,16 @@ ledger.
 
 Run the test suite with `python tests/test_core.py`. It exercises ingestion and
 dedup, transfer pairing, recurrence detection, history reconstruction, forecast
-invariants and a fair amount of the UI, and `build.ps1` refuses to build if any
-of it fails.
+invariants and the UI, including `tests/test_usability.py`'s backup and workflow
+regressions. Run those focused checks separately with
+`python tests/test_usability.py`. `build.ps1` refuses to build if any check fails.
+Categorization-specific regressions are in `tests/test_categories.py` and also
+run as part of the core suite. Run them with `python tests/test_categories.py`.
+The hand-labeled synthetic cases are defect checks, not a measured accuracy
+rate for real bank exports.
+Data-quality regressions are in `tests/test_data_quality.py`, also included
+in the core suite. They cover freshness boundaries, snapshots, per-account
+history gaps, category amounts, schedule assignment and read-only behavior.
 
 ## The demo datasets
 
@@ -110,9 +118,10 @@ finfore/
   undo.py                 snapshot undo/redo stack (Ctrl+Z), bounded in memory
   update.py               "is there something newer?" — stdlib only, no Qt
   demo.py                 one-click demo loader
-  ui/                     PyQt6 theme, charts, dialogs, eight pages
+  calendar.py             scheduled items and ledger-based account attribution
+  data_quality.py         read-only evidence checks behind the forecast
+  ui/                     PyQt6 theme, charts, dialogs, six navigation sections
   ui/prefs.py             the one door to QSettings (and the test suite's seam)
-  ui/video.py             bundled explainer videos, with a system-player fallback
   ui/guide.py             renders docs/getting-started.md in-app
 docs/getting-started.md   the user-facing walkthrough (Help -> Getting started)
 docs/methodology.md       every formula, and why it is that one
@@ -123,10 +132,13 @@ docs/images/              screenshots used by README.md
 packaging/build.ps1       test → PyInstaller → Inno Setup → checksums
 packaging/doug.spec       the PyInstaller bundle
 packaging/installer.iss   the per-user Windows installer
-assets/                   explainer videos (bundled into the build)
+assets/                   bundled explainer video (opened in the system player)
 scripts/generate_sample_data.py   seeded synthetic bank exports
 sample_data/              bundled demo CSVs + meta.json
 tests/test_core.py        core-logic test suite
+tests/test_usability.py   SQLite backup and desktop workflow regressions
+tests/test_categories.py  categorization safety regressions
+tests/test_data_quality.py  forecast evidence-check regressions
 ```
 
 ## Adding screenshots to the README

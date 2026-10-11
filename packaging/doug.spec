@@ -12,19 +12,12 @@
 #   faster, because onefile unpacks the whole bundle to a temp directory on
 #   every launch. For handing to family, zip the folder — or flip ONEFILE to
 #   True below if a single icon matters more than startup speed.
-# * Data files are the sample CSVs, the explainer videos in assets/, and the
+# * Data files are the sample CSVs, forecast video, and
 #   Getting started guide in docs/ — all resolved through
 #   finfore.util.resource_path, which follows sys._MEIPASS, so they work in
 #   onedir and onefile alike. docs/ has to ship: Help → Getting started reads
 #   the Markdown at runtime rather than embedding a copy, so a build without it
 #   opens a window that apologises.
-# * Qt Multimedia is NOT force-collected here. PyInstaller picks up the backend
-#   plugins when it can, but they are the classic thing to go missing from a
-#   bundle, and the failure is silent — a black rectangle, no traceback.
-#   finfore.ui.video therefore falls back to the system video player whenever
-#   in-app playback is unavailable or errors, so a bundle without the codecs
-#   still shows the video. If you would rather guarantee in-app playback, add
-#   `collect_all("PyQt6.QtMultimedia")` and test the built app, not the source.
 # * excludes matter more than usual here: pandas drags in matplotlib and
 #   friends if they happen to be installed, which can double the bundle.
 # * Icon: drop your icon file directly in this packaging/ folder, named
@@ -57,8 +50,8 @@ a = Analysis(
     ["../run.py"],
     pathex=[".."],
     binaries=[],
-    datas=[("../sample_data", "sample_data"), ("../assets", "assets"),
-           ("../docs", "docs")],
+    datas=[("../sample_data", "sample_data"), ("../docs", "docs"),
+           ("../assets/monte_carlo.mp4", "assets")],
     hiddenimports=hiddenimports,
     hookspath=[],
     runtime_hooks=[],
@@ -66,35 +59,26 @@ a = Analysis(
         "matplotlib", "scipy", "IPython", "jupyter", "notebook",
         "PyQt5", "PySide2", "PySide6", "tkinter", "test", "unittest",
         "sqlite3.test", "pandas.tests", "numpy.tests",
+        "PyQt6.QtMultimedia", "PyQt6.QtMultimediaWidgets",
     ],
     noarchive=False,
 )
 pyz = PYZ(a.pure)
 
-# Bootloader splash: covers the unpack delay, before Python exists.
-# finfore.ui.splash.close_pyinstaller_splash() dismisses it once the real
-# window is ready. Drop a PNG at packaging/splash.png to enable it.
-splash = None
-# splash = Splash("splash.png", binaries=a.binaries, datas=a.datas,
-#                 text_pos=(10, 50), text_size=10, text_color="white")
-
 if ONEFILE:
     exe = EXE(
         pyz, a.scripts, a.binaries, a.datas,
-        *( [splash, splash.binaries] if splash else [] ),
         name=APP_NAME, console=False, upx=False,
         icon=str(ICON) if ICON else None,
     )
 else:
     exe = EXE(
         pyz, a.scripts,
-        *( [splash] if splash else [] ),
         exclude_binaries=True, name=APP_NAME, console=False, upx=False,
         icon=str(ICON) if ICON else None,
     )
     coll = COLLECT(
         exe, a.binaries, a.datas,
-        *( [splash.binaries] if splash else [] ),
         strip=False, upx=False, name=APP_NAME,
     )
 

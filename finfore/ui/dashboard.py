@@ -44,16 +44,32 @@ class DashboardPage(QWidget):
         # The empty dashboard is the first thing a new user sees, and "add
         # accounts and import a CSV" assumes they know what either means. The
         # guide is one click away from exactly the moment it is needed.
-        empty_row = QHBoxLayout()
+        self.setup = QWidget()
+        setup_layout = QVBoxLayout(self.setup)
+        setup_layout.setContentsMargins(0, 0, 0, 0)
         self.empty = hint("No data yet — add accounts and import a bank CSV, "
                           "or load a demo dataset from the File menu.")
-        empty_row.addWidget(self.empty, 1)
-        self.guide_btn = QPushButton("Show me how")
+        setup_layout.addWidget(self.empty)
+        empty_row = QHBoxLayout()
+        self.accounts_btn = QPushButton("Set up accounts")
+        self.accounts_btn.setObjectName("primary")
+        self.accounts_btn.clicked.connect(lambda: self.main.show_page("Accounts"))
+        empty_row.addWidget(self.accounts_btn)
+        self.import_btn = QPushButton("Import CSV…")
+        self.import_btn.setObjectName("primary")
+        self.import_btn.clicked.connect(lambda: self.main.open_import())
+        empty_row.addWidget(self.import_btn)
+        self.demo_btn = QPushButton("Try demo")
+        self.demo_btn.clicked.connect(lambda: self.main._load_demo("balanced", confirm=False))
+        empty_row.addWidget(self.demo_btn)
+        self.guide_btn = QPushButton("Getting started")
         self.guide_btn.setObjectName("primary")
         self.guide_btn.setToolTip("Open the Getting started guide (F1)")
         self.guide_btn.clicked.connect(lambda: self.main.show_guide())
         empty_row.addWidget(self.guide_btn)
-        lay.addLayout(empty_row)
+        empty_row.addStretch(1)
+        setup_layout.addLayout(empty_row)
+        lay.addWidget(self.setup)
 
         # Bills that moved on their own. This is the one thing on the dashboard
         # that is *news* rather than a measurement, which is why it gets a strip
@@ -107,7 +123,7 @@ class DashboardPage(QWidget):
         lay.addWidget(self.warn_row)
 
         hist_card = Card("Net worth history")
-        self.plot_hist = charts.new_plot(legend=True)
+        self.plot_hist = charts.new_plot()
         self.hist_series = SeriesRegistry()
         self.hist_legend = LegendToggles(
             [("networth", "net worth", theme.ACCENT, "line"),
@@ -281,9 +297,17 @@ class DashboardPage(QWidget):
             self.card_save.set_text("—")
 
         tx = store.transactions()
-        has_data = bool(store.accounts()) or not tx.empty
-        self.empty.setVisible(not has_data)
-        self.guide_btn.setVisible(not has_data)
+        has_accounts = bool(store.accounts())
+        has_data = has_accounts or not tx.empty
+        self.setup.setVisible(tx.empty)
+        self.accounts_btn.setVisible(not has_accounts)
+        self.import_btn.setVisible(has_accounts)
+        self.empty.setText(
+            "Your accounts are ready. Import a bank CSV to see spending, "
+            "recurring bills, and forecasts based on your history."
+            if has_accounts else
+            "Start by adding your accounts, then import a bank CSV. "
+            "You can also explore a demo with fictional money.")
         self._render_alerts()
         self._render_warnings()
 

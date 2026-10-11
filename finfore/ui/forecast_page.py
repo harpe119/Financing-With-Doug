@@ -9,9 +9,9 @@ from __future__ import annotations
 from datetime import date, timedelta
 
 import numpy as np
-from PyQt6.QtCore import QDate, Qt
+from PyQt6.QtCore import QDate, Qt, QTimer
 from PyQt6.QtWidgets import (QCheckBox, QComboBox, QDateEdit, QDialog,
-                             QDoubleSpinBox, QFormLayout,
+                             QFormLayout,
                              QHBoxLayout, QLabel, QLineEdit, QPushButton,
                              QScrollArea, QSizePolicy, QSlider, QSplitter,
                              QVBoxLayout, QWidget)
@@ -21,13 +21,14 @@ from ..forecast import (MATERIAL_MIN, STARTER_BUFFER, SUSTAINED_DAYS, T_DOF,
                         run_forecast, sensitivity)
 from ..insights import emergency_fund_target, essential_monthly
 from ..history import category_spending, networth_history
-from ..models import Goal, OneOffEvent, Scenario
+from ..models import OneOffEvent, Scenario
 from ..store import Store
 from ..util import fmt_money
 from . import charts, theme, video
-from .widgets import (Card, CollapsibleCard, IntSpinBox, LegendToggles,
+from .widgets import (Card, CollapsibleCard, FlowLayout, IntSpinBox, LegendToggles,
                       SeriesRegistry, fan_entries, hint, nerd_button, vsplit)
 from .account_dialog import _money_spin
+from .data_quality import DataQualityCard
 
 _HORIZONS = [("6 months", 183), ("1 year", 365), ("2 years", 730),
              ("3 years", 1095), ("5 years", 1825), ("10 years", 3650)]
@@ -177,15 +178,11 @@ class CrunchDialog(QDialog):
         lay.addWidget(scroll, 1)
 
         lay.addWidget(hint(
-            "Moving a payment does not make it go away — it is the same money, "
-            "paid later. It is the right fix when the problem is that two "
-            "things land in the wrong order, and the wrong one when there is "
-            "simply not enough coming in."
+            "Changing a payment date changes the forecast only. The amount is unchanged. "
+            "Contact the payee before changing an actual payment date."
             if self.timing else
-            "The things worth changing here are the recurring commitments "
-            "themselves, or what comes in. The income and category sliders on "
-            "the left re-run the projection instantly, and the Sensitivity "
-            "panel ranks which of them actually moves the outcome."))
+            "Use the income and spending controls to compare changes. The Sensitivity "
+            "panel estimates how much each control changes the projected result."))
 
         bar = QHBoxLayout()
         bar.addStretch(1)
@@ -251,6 +248,7 @@ def _clear_layout(lay) -> None:
         item = lay.takeAt(0)
         w = item.widget()
         if w is not None:
+            w.hide()
             w.deleteLater()
         elif item.layout() is not None:
             _clear_layout(item.layout())
@@ -274,6 +272,11 @@ class ForecastPage(QWidget):
         self._sens: list = []
         self._ef_target = 0.0
         self._ef_months = 3
+        self._changing_controls = False
+        self._update_timer = QTimer(self)
+        self._update_timer.setSingleShot(True)
+        self._update_timer.setInterval(300)
+        self._update_timer.timeout.connect(self.run)
 
         root = QHBoxLayout(self)
         root.setContentsMargins(18, 16, 18, 16)
@@ -331,12 +334,15 @@ class ForecastPage(QWidget):
         self.run_btn = QPushButton("Run forecast")
         self.run_btn.setObjectName("primary")
         self.run_btn.clicked.connect(self.run)
-        self.ef_months.valueChanged.connect(
-            lambda _v: self.run() if self.run_btn.isEnabled() else None)
+        self.reset_btn = QPushButton("Reset scenario")
+        self.reset_btn.setObjectName("small")
+        self.reset_btn.setToolTip("Restore income, spending, debt and investing controls")
+        self.reset_btn.clicked.connect(self._reset_scenario)
+        proj.body.addWidget(self.reset_btn)
         proj.body.addWidget(self.run_btn)
         cv.addWidget(proj)
 
-        spend = CollapsibleCard("Scenario · income && spending", expanded=True)
+        spend = CollapsibleCard("Income and spending", expanded=True)
         self.income_slider = SliderRow("Income", 50, 150, 100)
         spend.body.addWidget(self.income_slider)
         self.cat_box = QVBoxLayout()
@@ -346,7 +352,7 @@ class ForecastPage(QWidget):
                                   "variable spending in that category."))
         cv.addWidget(spend)
 
-        debt = CollapsibleCard("Scenario · debt && investing", expanded=False)
+        debt = CollapsibleCard("Debt and investing", expanded=False)
         dform = QFormLayout()
         dform.setSpacing(8)
         self.extra_loan = _money_spin(0, 1e6)
@@ -357,10 +363,6 @@ class ForecastPage(QWidget):
         self.snowball = QCheckBox("Roll freed payments into the next loan")
         self.snowball.setChecked(True)
         debt.body.addWidget(self.snowball)
-        reset = QPushButton("Reset scenario")
-        reset.setObjectName("small")
-        reset.clicked.connect(self._reset_scenario)
-        debt.body.addWidget(reset)
         cv.addWidget(debt)
         self.debt_card = debt
 
@@ -375,7 +377,8 @@ class ForecastPage(QWidget):
         self.e_when = QDateEdit()
         self.e_when.setCalendarPopup(True)
         self.e_when.setDate(QDate.currentDate().addMonths(6))
-        self.e_when.setDisplayFormat("MMM yyyy")
+        self.e_when.setDisplayFormat("d MMM yyyy")
+        self.e_when.setMinimumDate(QDate.currentDate().addDays(1))
         add_ev = QPushButton("Add")
         add_ev.setObjectName("small")
         add_ev.clicked.connect(self._add_event)
@@ -385,8 +388,8 @@ class ForecastPage(QWidget):
         erow.addWidget(add_ev)
         ev.body.addLayout(erow)
         ev.body.addWidget(hint(
-            "Negative for a cost, positive for a windfall. Smooth trends can't "
-            "answer \"can I absorb this?\" — a dated impulse can."))
+            "Use a negative amount for a cost and a positive amount for income. "
+            "The event changes the forecast on its selected date."))
         cv.addWidget(ev)
 
         goals = CollapsibleCard("Goals", expanded=False)
@@ -394,20 +397,11 @@ class ForecastPage(QWidget):
         self.goal_box.setSpacing(8)
         goals.body.addLayout(self.goal_box)
         add_row = QHBoxLayout()
-        self.g_name = QLineEdit()
-        self.g_name.setPlaceholderText("Goal name")
-        self.g_name.setMinimumWidth(92)
-        self.g_amount = _money_spin(0, 1e9)
-        self.g_kind = QComboBox()
-        self.g_kind.addItem("Net cash", "cash")
-        self.g_kind.addItem("Net worth", "networth")
-        g_add = QPushButton("Add")
-        g_add.setObjectName("small")
-        g_add.clicked.connect(self._add_goal)
-        add_row.addWidget(self.g_name, 2)
-        add_row.addWidget(self.g_amount, 1)
-        add_row.addWidget(self.g_kind)
-        add_row.addWidget(g_add)
+        self.manage_goals_btn = QPushButton("Manage goals…")
+        self.manage_goals_btn.setObjectName("small")
+        self.manage_goals_btn.clicked.connect(lambda: self.main.show_page("Goals"))
+        add_row.addWidget(self.manage_goals_btn)
+        add_row.addStretch(1)
         goals.body.addLayout(add_row)
         cv.addWidget(goals)
         cv.addStretch(1)
@@ -431,7 +425,8 @@ class ForecastPage(QWidget):
         right.setContentsMargins(12, 0, 0, 0)
         right.setSpacing(12)
 
-        picker = QHBoxLayout()
+        picker_host = QWidget()
+        picker = FlowLayout(picker_host, spacing=8)
         self.view_row = QWidget()
         vrl = QHBoxLayout(self.view_row)
         vrl.setContentsMargins(0, 0, 0, 0)
@@ -452,28 +447,23 @@ class ForecastPage(QWidget):
         self.show_analysis.setChecked(False)
         self.show_analysis.stateChanged.connect(lambda _s: self._apply_view())
         picker.addWidget(self.show_analysis)
-        picker.addStretch(1)
-        # The fan is the least self-explanatory thing in the app: a band of
-        # shaded outcomes is easy to misread as a prediction that got fuzzy.
-        # The button sits on the page it explains rather than under Help,
-        # because that is where the confusion happens.
-        self.explain_btn = QPushButton("▶  Explain me")
-        self.explain_btn.setObjectName("small")
-        self.explain_btn.setToolTip(
-            "Watch a short video on what the shaded bands mean and how the "
-            "Monte Carlo projection is built")
-        self.explain_btn.clicked.connect(self._explain)
-        self.explain_btn.setVisible(video.has_video("monte_carlo"))
-        picker.addWidget(self.explain_btn)
+        self.video_btn = QPushButton("Watch explanation")
+        self.video_btn.setObjectName("small")
+        self.video_btn.setToolTip("Open the forecast video in your video player")
+        self.video_btn.clicked.connect(lambda: video.play(self))
+        self.video_btn.setEnabled(video.video_path() is not None)
+        picker.addWidget(self.video_btn)
         # The page says what it thinks; this says how it knows. Everything
         # quantitative that used to crowd the risk caption lives behind it.
         picker.addWidget(nerd_button(self._nerd_panel))
-        right.addLayout(picker)
+        right.addWidget(picker_host)
+        self.data_quality = DataQualityCard(self.main)
+        right.addWidget(self.data_quality)
         # Cash leads. It is the account that actually runs out, and the floors
         # below (zero, starter buffer, emergency fund) are cash concepts — net
         # worth can look healthy while the chequing account is empty.
         cash_card = Card("Net cash position — projection")
-        self.plot_cash = charts.new_plot(legend=True)
+        self.plot_cash = charts.new_plot()
         self.plot_cash.setMinimumHeight(180)
         cash_card.body.addWidget(self.plot_cash)
         self.cash_series = SeriesRegistry()
@@ -527,7 +517,7 @@ class ForecastPage(QWidget):
         self.nw_card = nw_card
 
         # ----- analysis: tornado + backtest -----
-        an = Card("Which lever matters · and can the model be trusted?")
+        an = Card("Sensitivity and backtesting")
         tabs = QHBoxLayout()
         self.btn_tornado = QPushButton("Sensitivity")
         self.btn_tornado.setObjectName("small")
@@ -561,17 +551,33 @@ class ForecastPage(QWidget):
         # the column at the cost of the others without hiding them outright.
         self.chart_split = vsplit(cash_card, nw_card, an,
                                   sizes=[420, 280, 260])
+        self.chart_split.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         for c in (cash_card, nw_card, an):
-            c.setMinimumHeight(120)
-            c.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
+            c.setMinimumHeight(380 if c is cash_card else 260)
+            c.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         right.addWidget(self.chart_split, 1)
 
         self.summary = hint("")
         right.addWidget(self.summary)
-        split.addWidget(chart_col)
+        chart_scroll = QScrollArea()
+        chart_scroll.setWidgetResizable(True)
+        chart_scroll.setMinimumWidth(320)
+        chart_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        chart_scroll.setWidget(chart_col)
+        split.addWidget(chart_scroll)
         split.setStretchFactor(0, 0)
         split.setStretchFactor(1, 1)
         split.setSizes([356, 900])
+
+        # Coalesce keyboard/spinner edits. Mouse drags update on release so a
+        # slow, long-horizon simulation cannot interrupt the drag itself.
+        self._connect_slider(self.income_slider)
+        for control in (self.paths, self.ef_months, self.extra_loan,
+                        self.extra_invest):
+            control.valueChanged.connect(self._schedule_run)
+        self.horizon.currentIndexChanged.connect(self._schedule_run)
+        self.overlay.toggled.connect(self._schedule_run)
+        self.snowball.toggled.connect(self._schedule_run)
 
     # ---------------------------------------------------------------
     def set_simple(self, on: bool) -> None:
@@ -600,6 +606,7 @@ class ForecastPage(QWidget):
         self._apply_view()
 
     def refresh(self) -> None:
+        self._update_timer.stop()
         # rebuild category sliders, preserving positions by name
         prev = {s.name: s.slider.value() for s in self._cat_sliders}
         _clear_layout(self.cat_box)
@@ -613,6 +620,7 @@ class ForecastPage(QWidget):
                 row.slider.setValue(prev[cat])
             self.cat_box.addWidget(row)
             self._cat_sliders.append(row)
+            self._connect_slider(row)
 
         self._rebuild_goals()
         self._rebuild_events()
@@ -623,6 +631,8 @@ class ForecastPage(QWidget):
         if has_accounts:
             self.run()
         else:
+            self.data_quality.refresh(self.store)
+            self._clear_results()
             self.summary.setText("Add accounts (and import a CSV) to project "
                                  "your net worth — or load the demo dataset "
                                  "from the File menu.")
@@ -643,42 +653,62 @@ class ForecastPage(QWidget):
             eta.setObjectName("hint")
             col.addWidget(title)
             col.addWidget(eta)
-            rm = QPushButton("✕")
-            rm.setObjectName("small")
-            rm.setFixedWidth(28)
-            rm.clicked.connect(lambda _c, gid=g.id: self._remove_goal(gid))
             rl.addLayout(col, 1)
-            rl.addWidget(rm)
             self.goal_box.addWidget(roww)
             self._goal_labels[g.id] = eta
         if not self._goal_labels:
-            self.goal_box.addWidget(hint("No goals yet — add one below."))
-
-    def _add_goal(self) -> None:
-        name = self.g_name.text().strip()
-        if not name or self.g_amount.value() <= 0:
-            return
-        self.store.add_goal(Goal(name, self.g_amount.value(),
-                                 self.g_kind.currentData()))
-        self.g_name.clear()
-        self.g_amount.setValue(0)
-        self._rebuild_goals()
-        if self.run_btn.isEnabled():
-            self.run()
-
-    def _remove_goal(self, goal_id: int) -> None:
-        self.store.delete_goal(goal_id)
-        self._rebuild_goals()
-        if self.run_btn.isEnabled():
-            self.run()
+            self.goal_box.addWidget(hint("No goals yet — create one on the Goals page."))
 
     def _reset_scenario(self) -> None:
-        self.income_slider.reset()
-        for s in self._cat_sliders:
-            s.reset()
-        self.extra_loan.setValue(0)
-        self.extra_invest.setValue(0)
-        self.snowball.setChecked(True)
+        self._changing_controls = True
+        try:
+            self.income_slider.reset()
+            for s in self._cat_sliders:
+                s.reset()
+            self.extra_loan.setValue(0)
+            self.extra_invest.setValue(0)
+            self.snowball.setChecked(True)
+        finally:
+            self._changing_controls = False
+        self._schedule_run()
+
+    def _connect_slider(self, row: SliderRow) -> None:
+        row.slider.valueChanged.connect(
+            lambda _v: self._schedule_run() if not row.slider.isSliderDown() else None)
+        row.slider.sliderPressed.connect(self._update_timer.stop)
+        row.slider.sliderReleased.connect(self._schedule_run)
+
+    def _schedule_run(self, *_args) -> None:
+        if (not self._changing_controls and self.isVisible()
+                and self.run_btn.isEnabled()):
+            self._update_timer.start()
+
+    def hideEvent(self, event) -> None:
+        self._update_timer.stop()
+        super().hideEvent(event)
+
+    def _clear_results(self) -> None:
+        self._res = self._bt = None
+        self._sens = []
+        for plot in (self.plot_cash, self.plot_nw, self.plot_analysis):
+            plot.clear()
+        self.cash_series.reset()
+        self.nw_series.reset()
+        self.risk.clear()
+        self.analysis_note.clear()
+        self.summary.clear()
+        self.cause_btn.hide()
+
+    def reset_for_store(self) -> None:
+        """A demo's what-if controls and plotted results must not follow it home."""
+        self._reset_scenario()
+        self._update_timer.stop()
+        self._clear_results()
+        self.data_quality.clear()
+        self.e_name.clear()
+        self.e_amount.setValue(0)
+        self._rebuild_goals()
+        self._rebuild_events()
 
     def _scenario(self) -> Scenario:
         return Scenario(
@@ -705,7 +735,7 @@ class ForecastPage(QWidget):
                 lambda st, eid=e.id: self._toggle_event(eid, bool(st)))
             col = theme.RED if e.is_expense else theme.ACCENT
             lbl = QLabel(f"{e.label} · {fmt_money(e.amount, signed=True)} · "
-                         f"{e.when.strftime('%b %Y')}")
+                         f"{e.when.strftime('%d %b %Y')}")
             lbl.setStyleSheet(f"color: {col if e.active else theme.MUTED};")
             lbl.setWordWrap(True)
             rm = QPushButton("✕")
@@ -758,11 +788,15 @@ class ForecastPage(QWidget):
         self.cash_card.setVisible(show_cash)
         self.nw_card.setVisible(show_nw)
         self.analysis_card.setVisible(show_analysis)
-        # Splitter sizes, not layout stretch or minimum heights. A hidden pane
-        # takes no space in a QSplitter, so the remaining ones expand on their
-        # own; these weights only decide how the survivors share it. (Minimum
-        # heights would change the window's minimum size and resize the whole
-        # window on every view change, which is the bug 1.2.0 fixed.)
+        visible_cards = [card for card, visible in zip(
+            (self.cash_card, self.nw_card, self.analysis_card),
+            (show_cash, show_nw, show_analysis)) if visible]
+        self.chart_split.setMinimumHeight(
+            sum(card.minimumHeight() for card in visible_cards)
+            + self.chart_split.handleWidth() * max(0, len(visible_cards) - 1))
+        # Hidden panes take no space. The weights divide the visible charts;
+        # minimum card heights keep plots and notes readable. The scroll area
+        # absorbs overflow instead of changing the main window's minimum size.
         weights = [3 if show_nw else 5, 2 if show_cash else 5,
                    5 if key == "analysis" else 2]
         total = max(1, self.chart_split.height())
@@ -770,9 +804,6 @@ class ForecastPage(QWidget):
                 zip(weights, (show_cash, show_nw, show_analysis))]
         s = sum(live) or 1
         self.chart_split.setSizes([int(total * w / s) for w in live])
-
-    def _explain(self) -> None:
-        video.play("monte_carlo", self)
 
     # ---------------- analysis panel ----------------
     def _set_analysis(self, which: str) -> None:
@@ -849,12 +880,11 @@ class ForecastPage(QWidget):
         # error and the bias term are measurements of that answer and live in
         # the For nerds window instead.
         self.analysis_note.setText(
-            f"Doug re-ran this forecast as if it were "
-            f"{bt.as_of.strftime('%B %Y')}, knowing only what it knew then, "
-            f"and compared it with what actually happened. Reality stayed "
-            f"inside the shaded band {bt.coverage_80 * 100:.0f}% of the time — "
-            f"a forecast this honest about its own uncertainty should land near "
-            f"80%. It was typically off by {fmt_money(bt.median_abs_error)}. "
+            f"Forecast refitted at {bt.as_of.strftime('%B %Y')} using earlier "
+            f"cash transactions and compared with recorded balances. Actual cash "
+            f"was inside the 80% band on {bt.coverage_80 * 100:.0f}% of days. "
+            f"Median absolute error: {fmt_money(bt.median_abs_error)}. "
+            f"Loan and investment settings remain current; this is a retrospective check. "
             f"{bt.note}")
         self.analysis_note.setStyleSheet(f"color: {col};")
 
@@ -941,24 +971,24 @@ class ForecastPage(QWidget):
         rows = [
             f"<h3>How the fan is built</h3>",
             f"<p>{n:,} Monte Carlo paths over {H:,} days ({H / 365:.1f} years), "
-            f"on a daily grid. Each path is one internally consistent future, "
-            f"not a scenario anybody chose. The shaded bands are percentiles "
+            f"on a daily grid. Each path is one simulated outcome under the "
+            f"selected assumptions. The shaded bands are percentiles "
             f"taken <i>across</i> paths at each day, so the P90 line is not any "
             f"single path — it is the level 10% of them exceed on that day.</p>",
             f"<p class='m'>Four layers stack into every path: detected "
             f"recurring flows replayed at their median amount; loans amortised "
             f"monthly at APR/12 on their own payment day; investments as "
             f"geometric Brownian motion with Student-<i>t</i> shocks "
-            f"(ν = {T_DOF:.0f}, so crashes are more frequent than a normal "
-            f"distribution admits); and everything left over bootstrapped as "
+            f"(ν = {T_DOF:.0f}, with heavier tails than a normal "
+            f"distribution); and remaining spending bootstrapped as "
             f"whole historical weeks, which preserves the correlation between "
             f"categories inside a week.</p>",
             f"<p class='m'>One drift offset is drawn per path and held for its "
-            f"whole length. Without it the week-to-week noise averages out like "
-            f"√t and the band collapses to a few percent by the one-year mark — "
-            f"which quietly asserts that your average weekly net flow is known "
-            f"exactly. It is estimated, with standard error s/√n, and that "
-            f"error grows linearly in t. Under recency weighting the divisor is "
+            f"whole length to represent uncertainty in mean weekly net flow. "
+            f"Its standard error is estimated as s/√n; the resulting "
+            f"cumulative uncertainty grows linearly in time. Independent "
+            f"week-to-week noise grows approximately as √t instead. "
+            f"Under recency weighting, n is "
             f"Kish's effective sample size 1/Σw², not the raw week count.</p>",
         ]
         if sf is not None:
@@ -984,12 +1014,10 @@ class ForecastPage(QWidget):
                 f"<p class='m'>The materiality threshold is "
                 f"{fmt_money(sf.material)}: the greater of "
                 f"{fmt_money(MATERIAL_MIN)} and a tenth of a month of your own "
-                f"essential spending, i.e. about three days of living. A dip "
-                f"shallower than that is a payment-timing artefact, and "
-                f"reporting it as running out of money is how a warning stops "
-                f"being read. Depth, duration and recovery are measured "
-                f"separately because a $5 dip and a $5,000 dip are the same "
-                f"event to a probability and different events to a person.</p>",
+                f"essential spending. This is a reporting threshold, not "
+                f"a bank overdraft limit. Even a smaller dip may matter. "
+                f"Depth, duration, and recovery are measured separately "
+                f"to distinguish brief low balances from sustained shortfalls.</p>",
             ]
         if b:
             floors = [("$0", "zero"), (fmt_money(STARTER_BUFFER), "starter"),
@@ -1013,7 +1041,7 @@ class ForecastPage(QWidget):
         bt = getattr(self, "_bt", None)
         if bt is not None:
             rows += [
-                "<h3>Backtest — has this model earned belief?</h3>",
+                "<h3>Backtest results</h3>",
                 f"<p>Refit as of {bt.as_of:%b %Y} using only data that existed "
                 f"then ({bt.train_days // 7} weeks of it), then scored against "
                 f"what happened over {bt.n_days} days.</p><table>"
@@ -1059,6 +1087,11 @@ class ForecastPage(QWidget):
 
     # ---------------------------------------------------------------
     def run(self) -> None:
+        self._update_timer.stop()
+        self.data_quality.refresh(self.store)
+        if not self.store.accounts():
+            self._clear_results()
+            return
         store = self.store
         scenario = self._scenario()
         H = self.horizon.currentData()

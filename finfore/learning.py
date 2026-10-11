@@ -26,6 +26,7 @@ A future model slots in as another ``CategoryModel`` in that chain. See
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Protocol, runtime_checkable
 
 import pandas as pd
@@ -162,7 +163,7 @@ def training_frame(store) -> pd.DataFrame:
 
     Columns: description (raw text feature), norm_key (normalised text),
     amount, abs_amount, is_inflow, account_type, label. Deduplicated to the
-    most recent label per (norm_key, label) so repeated corrections of the same
+    most recent label per norm_key so repeated corrections of the same
     merchant don't dominate the sample.
     """
     df = store.category_feedback()
@@ -172,7 +173,11 @@ def training_frame(store) -> pd.DataFrame:
                                      "label"])
     df = df.drop_duplicates(subset=["norm_key"], keep="last").copy()
     df["abs_amount"] = df["amount"].abs()
-    df["is_inflow"] = (df["amount"] > 0).astype(int)
+    # Older review-queue feedback wrote every representative amount negative,
+    # even when its identity ended in |+. Keep the stored audit history intact
+    # and use that explicit direction when preparing training features.
+    df["is_inflow"] = df["norm_key"].str.endswith("|+").astype(int)
+    df["amount"] = df["abs_amount"] * (2 * df["is_inflow"] - 1)
     df = df.rename(columns={"new_category": "label"})
     return df[["description", "norm_key", "amount", "abs_amount", "is_inflow",
                "account_type", "label"]].reset_index(drop=True)
@@ -195,8 +200,9 @@ def coverage(store) -> dict:
         "ready": bool(ready),
         "note": ("Enough labelled data to try a statistical model."
                  if ready else
-                 "Keep correcting; a model needs roughly 200 labels across "
-                 "5+ categories before it beats the keyword rules."),
+                 "A trained model has not been evaluated on these corrections. "
+                 "About 200 labels across 5+ categories is a starting point "
+                 "for testing, not a guarantee of better predictions."),
     }
 
 
@@ -269,7 +275,8 @@ consistently.
 # real corpus to train on. It slots into the same chain (see ml_notes).
 
 _NGRAM = 3
-_SIM_FLOOR = 0.25          # calibrated below; see the note on separability
+_SIM_FLOOR = 0.25          # string-overlap floor, not a calibrated confidence
+_SIM_MARGIN = 0.10         # minimum lead over a different category; not a probability
 
 # Payment processors that prefix the real merchant name. Stripping them is what
 # lets "SQ *BLUE BOTTLE 0042" match "BLUE BOTTLE COFFEE".
@@ -292,6 +299,7 @@ def _grams(text: str, n: int = _NGRAM) -> set[str]:
     return {s[i:i + n] for i in range(max(0, len(s) - n + 1))}
 
 
+@lru_cache(maxsize=8192)
 def similarity(a: str, b: str) -> float:
     """Merchant-string similarity in [0, 1].
 
@@ -334,32 +342,54 @@ class NearestMerchant:
 
     labelled: list[tuple[str, str]]        # (example description, category)
     floor: float = _SIM_FLOOR
+    margin: float = _SIM_MARGIN
+    signs: list[str] | None = None        # parallel directions, from saved norm_keys
 
     @classmethod
     def from_store(cls, store, floor: float = _SIM_FLOOR) -> "NearestMerchant":
         fb = store.category_feedback()
         pairs: list[tuple[str, str]] = []
+        signs = []
         if not fb.empty:
             fb = fb.drop_duplicates(subset=["norm_key"], keep="last")
             pairs = list(zip(fb["description"], fb["new_category"]))
-        return cls(labelled=pairs, floor=floor)
+            signs = [str(key).rsplit("|", 1)[-1] for key in fb["norm_key"]]
+        return cls(labelled=pairs, floor=floor, signs=signs)
 
     def predict(self, description: str, amount: float) -> str | None:
-        best, best_sim = None, 0.0
-        for desc, cat in self.labelled:
-            sim = similarity(description, desc)
-            if sim > best_sim:
-                best, best_sim = cat, sim
-        return best if best_sim >= self.floor else None
+        return self.explain(description, amount)[0]
 
-    def explain(self, description: str) -> tuple[str | None, float, str | None]:
-        """(category, similarity, matched example) — for showing the user why."""
-        best, best_sim, src = None, 0.0, None
-        for desc, cat in self.labelled:
+    def explain(self, description: str, amount: float | None = None
+                ) -> tuple[str | None, float, str | None]:
+        """Return category, similarity score, and source example.
+
+        Scores are string overlap, not calibrated confidence probabilities.
+        Match only the same direction and brand. Conflicting nearby categories
+        and Transfer labels are not propagated automatically. Exact saved
+        corrections still take precedence, including explicit Transfer labels.
+        """
+        tokens = _merchant_tokens(description)
+        if not tokens:
+            return None, 0.0, None
+        direction = "+" if amount is not None and amount > 0 else "-"
+        scores: dict[str, tuple[float, str]] = {}
+        for i, (desc, cat) in enumerate(self.labelled):
+            if cat == "Transfer":
+                continue
+            if amount is not None and self.signs is not None and self.signs[i] != direction:
+                continue
+            other = _merchant_tokens(desc)
+            if not other or tokens[0] != other[0]:
+                continue
             sim = similarity(description, desc)
-            if sim > best_sim:
-                best, best_sim, src = cat, sim, desc
-        if best_sim < self.floor:
+            if sim > scores.get(cat, (0.0, ""))[0]:
+                scores[cat] = (sim, desc)
+        if not scores:
+            return None, 0.0, None
+        ranked = sorted(scores.items(), key=lambda item: (-item[1][0], item[0]))
+        best, (best_sim, src) = ranked[0]
+        runner_up = ranked[1][1][0] if len(ranked) > 1 else 0.0
+        if best_sim < self.floor or best_sim - runner_up < self.margin:
             return None, best_sim, src
         return best, best_sim, src
 
@@ -447,7 +477,7 @@ def uncategorized_clusters(store, unknown_labels: set[str] | None = None,
             span_days = max((grp["date"].max() - grp["date"].min()).days, 1)
         monthly = total / max(span_days / 30.44, 1.0)
         display = str(grp["description"].iloc[-1])
-        cat, sim, _src = near.explain(display)
+        cat, sim, _src = near.explain(display, float(grp["amount"].iloc[-1]))
         out.append(MerchantCluster(
             norm_key=key, display=display, n_tx=len(grp), total=total,
             recent_total=recent, monthly=monthly,
@@ -459,7 +489,7 @@ def uncategorized_clusters(store, unknown_labels: set[str] | None = None,
 
 
 def label_cluster(store, cluster: MerchantCluster, category: str) -> int:
-    """Apply a category to every transaction of one merchant and remember it.
+    """Label matching uncategorized entries across history and remember it.
 
     Returns the number of transactions relabelled. The correction is recorded
     once (not once per row) so a single merchant does not swamp the training
@@ -467,19 +497,26 @@ def label_cluster(store, cluster: MerchantCluster, category: str) -> int:
     """
     if not cluster.tx_ids or not category:
         return 0
+    tx = store.transactions()
+    matching = [int(row.id) for row in tx.itertuples(index=False)
+                if row.category in {"Misc", "Other income", ""}
+                and feedback_key(row.description, row.amount) == cluster.norm_key]
+    if not matching:
+        return 0
+    is_inflow = cluster.norm_key.endswith("|+")
     # Relabelling and remembering the correction are one decision to the user,
     # so they are one step to undo.
     with store.undo_group(f"Label {cluster.display} as {category}"):
-        store.set_category(cluster.tx_ids, category)
+        store.set_category(matching, category)
         store.add_category_feedback([{
             "norm_key": cluster.norm_key,
             "description": cluster.display,
-            "amount": -abs(cluster.total / max(cluster.n_tx, 1)),
-            "old_category": "Misc",
+            "amount": (1 if is_inflow else -1) * abs(cluster.total / max(cluster.n_tx, 1)),
+            "old_category": "Other income" if is_inflow else "Misc",
             "new_category": category,
             "source": "review-queue",
         }])
-    return len(cluster.tx_ids)
+    return len(matching)
 
 
 def recategorize_all(store, extra: list[CategoryModel] | None = None,
@@ -497,7 +534,7 @@ def recategorize_all(store, extra: list[CategoryModel] | None = None,
         tx = tx[tx["category"].isin({"Misc", "Other income", ""})]
         if tx.empty:
             return 0
-    chain = build_chain(store, extra=extra or [NearestMerchant.from_store(store)])
+    chain = full_chain(store, extra=extra)
     updates: dict[int, str] = {}
     for _, r in tx.iterrows():
         got = predict_one(chain, str(r["description"]), float(r["amount"]))

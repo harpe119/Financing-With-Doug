@@ -39,11 +39,8 @@ class RecurringPage(QWidget):
 
         bar = QHBoxLayout()
         bar.addWidget(hint(
-            "Patterns found in your ledger. Active items are replayed "
-            "forward by the forecast — uncheck “On” or right-click → "
-            "Ignore to exclude one that still occurs but shouldn't count. "
-            "To remove a pattern that no longer happens at all (e.g. a "
-            "former job's income), select its row and click Delete."), 1)
+            "These patterns supply the calendar and forecast. Uncheck On to exclude an item. "
+            "Delete patterns that have ended. Right-click to change the type or link a loan payment."), 1)
         redo = QPushButton("Re-detect from ledger")
         redo.clicked.connect(self._redetect)
         bar.addWidget(redo)

@@ -6,6 +6,51 @@ intended to hand to someone else. The running version is shown in the app
 header and under **Help → About**, so a downloaded copy always identifies
 itself.
 
+## 1.19.0 — simpler workflows and visible data-quality checks
+
+- Show a data-quality check beside the forecast, including in Simple view.
+  Review dated balances, recent cash transactions, short histories, quiet
+  months, unclassified amounts, unassigned calendar outflows and unusual dates.
+  Link each check to the relevant page. Do not treat these reminders as an
+  accuracy score or infer missing statements from an inactive month.
+- Match category keywords at word boundaries, retaining explicit bank
+  abbreviations and normalizing punctuation and accents. Distinguish fuel at
+  wholesale stores, theme parks, subscription charges, and interest paid.
+- Keep purchase and refund corrections separate in merchant similarity. Require
+  a clear lead over conflicting categories and do not propagate Transfer labels.
+- Require transfer/payment evidence before pairing equal opposite amounts;
+  exclude known purchases and earned income, and preserve manual corrections.
+- Use corrected ledger categories when identifying recurring loan payments.
+- Label older matching uncategorized entries from the review queue without
+  changing known categories. Record incoming corrections with a positive amount.
+- Undo a transaction category and its learned correction as one action.
+- Add hand-labeled synthetic categorization regressions. No pretrained classifier,
+  cloud API, or additional runtime dependency is introduced.
+- Ignore SQLite WAL and shared-memory sidecars so they are not staged as source.
+- Start directly in the main window; remove the delayed splash and version-number trivia.
+- Use one account-aware CSV import command and one goal editor on the Goals page.
+  Forecast goal estimates remain available, with a link to manage goals.
+- Open the forecast video from **Watch explanation** using the computer's
+  default player. Bundle the video without Qt Multimedia. Keep **How this works**
+  available for the written explanation.
+- Reduce the sidebar to six sections. Put Spending under Dashboard, recurring
+  patterns under Bills & payday, and Progress under Forecast.
+- Add a bills and payday calendar, with account filters and scheduled balances.
+  Keep items without a confirmed payment account separate from account balances.
+- Use fixed-decimal currency entry: typing `1234` enters `$12.34`. Percentages
+  keep normal decimal entry. Pasted formatted amounts keep their dollar value.
+- Shorten explanations and rewrite the setup guide in direct language.
+- Keep chart keys compact and move visibility switches into **Layers**.
+  Remove duplicate legends inside charts that already have a separate key.
+- Wrap goal action buttons and give the goal detail panels the page width,
+  so controls remain readable on smaller windows.
+- Re-run forecasts after slider releases and paused control edits. Make
+  **Reset scenario** available in Simple view, and show exact event dates.
+- Clear forecast scenarios and cached results when switching databases.
+- Add **File → Back up data…**, using SQLite snapshots and an atomic save.
+- Keep setup actions available after adding accounts until transactions are imported.
+- Add backup and workflow regression checks to the release test suite.
+
 ## 1.18.2 — a button you don't have to hunt for, and a front page for the family
 
 Both of these are about the same thing from opposite ends: what happens when

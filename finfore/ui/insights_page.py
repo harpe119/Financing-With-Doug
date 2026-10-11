@@ -7,7 +7,7 @@ goes, subscriptions carved out), and dollar-ranked reduction suggestions.
 from __future__ import annotations
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import (QGridLayout, QHBoxLayout, QLabel, QScrollArea,
+from PyQt6.QtWidgets import (QHBoxLayout, QLabel, QScrollArea,
                              QSizePolicy, QVBoxLayout, QWidget)
 
 from ..insights import (breakdown, monthly_aggregates, spending_score,
@@ -38,13 +38,20 @@ class InsightsPage(QWidget):
         self.store = store
         self.main = main
 
-        root = QVBoxLayout(self)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        content = QWidget()
+        scroll.setWidget(content)
+        outer.addWidget(scroll)
+        root = QVBoxLayout(content)
         root.setContentsMargins(18, 16, 18, 16)
         root.setSpacing(12)
 
-        self.empty = hint("Import a few weeks of transactions (or load the demo "
-                          "dataset) to see your spending breakdown, a habits "
-                          "score, and tailored suggestions.")
+        self.empty = hint("Import transactions to calculate monthly spending and the spending score. "
+                          "Only complete months are included.")
         root.addWidget(self.empty)
 
         # ---- score panel ----
@@ -84,20 +91,16 @@ class InsightsPage(QWidget):
         self.verdict = QLabel("")
         self.verdict.setWordWrap(True)
         self.provisional = hint(
-            "Grade is provisional — a large share of spending is still "
-            "uncategorized and is excluded from the ratio. Use "
-            "Transactions → Review uncategorized to fix the biggest ones fast.")
+            "This score is provisional because much of the spending is uncategorized. "
+            "Review those transactions before relying on the score.")
         self.provisional.setVisible(False)
         self.components = QLabel("")
         self.components.setObjectName("statSub")
         self.components.setWordWrap(True)
         self.explain = hint(
-            "Two separate things are graded: how you spend — wants measured "
-            "against necessities — and how you're doing — what's left over at "
-            "the end of the month. A tight month with careful spending still "
-            "grades well; the same shortfall caused by wants does not. Both "
-            "are measured against the widely-taught 50/30/20 budget: half your "
-            "income on needs, a third on wants, a fifth saved.")
+            "The score compares discretionary spending with necessities and savings "
+            "with income. It uses the 50/30/20 guideline: 50% of income for needs, "
+            "30% for wants, and 20% saved. This is a benchmark, not a personal budget.")
         # Say how far back this looks, in the terms people actually ask about.
         # "24 months" on its own invites the reading that two years are treated
         # evenly; the half-life is what makes the recent quarter half the answer.
@@ -114,7 +117,7 @@ class InsightsPage(QWidget):
         self.score_card.body.addLayout(srow)
 
         # ---- composition + suggestions ----
-        comp_card = Card("Where your money goes · monthly average, recent months weighted heavier")
+        comp_card = Card("Average monthly spending")
         crow = QHBoxLayout()
         self.donut = DonutChart()
         self.donut.setMinimumSize(210, 210)
@@ -128,7 +131,7 @@ class InsightsPage(QWidget):
         crow.addWidget(legend_host)
         comp_card.body.addLayout(crow)
 
-        sug_card = Card("Ways to free up cash")
+        sug_card = Card("Possible spending changes")
         self.sug_scroll = QScrollArea()
         self.sug_scroll.setWidgetResizable(True)
         self.sug_host = QWidget()
@@ -143,7 +146,7 @@ class InsightsPage(QWidget):
         # divider lets it be folded down to a strip without losing it.
         bottom = hsplit(comp_card, sug_card, sizes=[500, 500])
         for c in (self.score_card, comp_card, sug_card):
-            c.setMinimumHeight(90)
+            c.setMinimumHeight(330 if c is self.score_card else 300)
             c.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
         root.addWidget(vsplit(self.score_card, bottom, sizes=[330, 380]), 1)
 
@@ -342,5 +345,7 @@ class InsightsPage(QWidget):
             body.setWordWrap(True)
             body.setObjectName("muted")
             cl.addWidget(body)
+            card.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
+            card.setMinimumHeight(100)
             self.sug_box.addWidget(card)
         self.sug_box.addStretch(1)
