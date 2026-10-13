@@ -83,14 +83,13 @@ def _dom_clusters(days_of_month: np.ndarray, tol: int = 1) -> list[int]:
 
 def detect(tx: pd.DataFrame) -> list[RecurringItem]:
     """tx: frame with columns date, description, amount, category (optional).
-    Rows categorized 'Transfer' are excluded (internal moves are net-worth
-    neutral and handled implicitly)."""
+    Transfers and reimbursable business rows are excluded. Paycheck amounts
+    exclude any separately marked business reimbursement."""
     if tx.empty:
         return []
-    df = tx.copy()
+    from .categorize import personal_transactions
+    df = personal_transactions(tx)
     df["date"] = pd.to_datetime(df["date"])
-    if "category" in df.columns:
-        df = df[df["category"] != "Transfer"]
     df["norm"] = df["description"].map(normalize_desc)
     df["sign"] = np.where(df["amount"] > 0, "+", "-")
 
@@ -163,6 +162,41 @@ def detect(tx: pd.DataFrame) -> list[RecurringItem]:
         ))
     items.sort(key=lambda it: -abs(it.monthly_equivalent))
     return items
+
+
+def personal_recurring(tx: pd.DataFrame, items: list[RecurringItem],
+                       as_of: date | None = None) -> list[RecurringItem]:
+    """Correct existing schedules affected by a business label or paycheck split.
+
+    Detection can predate a user's correction. Refit affected keys using only
+    personal transactions; retain user-owned switches, names and loan links.
+    An absent personal pattern stays as an inactive key so it cannot fall back
+    into random weekly sampling. Saved schedules are not edited.
+    """
+    from dataclasses import replace
+    from .categorize import BUSINESS_CATEGORY
+    if tx.empty:
+        return items
+    past = tx[tx["date"] <= pd.Timestamp(as_of or date.today())]
+    business = past["category"].eq(BUSINESS_CATEGORY)
+    if "business_reimbursement" in past:
+        business = business | past["business_reimbursement"].gt(0)
+    affected = {f"{normalize_desc(d)}|{'+' if a > 0 else '-'}"
+                for d, a in zip(past.loc[business, "description"], past.loc[business, "amount"])}
+    if not affected:
+        return items
+    fitted = {it.key: it for it in detect(past)}
+    out = []
+    for it in items:
+        if it.key not in affected:
+            out.append(it)
+        elif it.key in fitted:
+            out.append(replace(fitted[it.key], id=it.id, name=it.name,
+                               active=it.active, kind=it.kind,
+                               linked_account_id=it.linked_account_id))
+        else:
+            out.append(replace(it, active=False))
+    return out
 
 
 def occurrences(item: RecurringItem, start: date, end: date) -> list[date]:

@@ -4,7 +4,8 @@ reduction suggestions.
 Three ideas hold this module together.
 
 **One taxonomy.** Every category sorts into essential / frivolous / unknown.
-Income and internal transfers are not spending at all. The mapping is kept as a
+Income, internal transfers and reimbursable business are not personal spending.
+The mapping is kept as a
 plain editable dict at the top of the file because it encodes a value judgement
 (what is a "need") that different households draw differently.
 
@@ -29,7 +30,8 @@ from datetime import date
 import numpy as np
 import pandas as pd
 
-from .categorize import INCOME_CATEGORIES, categorize
+from .categorize import (INCOME_CATEGORIES, PERSONAL_EXCLUSIONS, categorize,
+                         personal_transactions)
 from .models import RecurringItem
 from .util import fmt_money
 
@@ -50,7 +52,7 @@ GIVING = {"Charitable donation"}
 # Must stay in lockstep with categorize.INCOME_CATEGORIES. categorize() assigns
 # "Other income" to every inflow that matches no keyword rule.
 INCOME = set(INCOME_CATEGORIES)
-EXCLUDE = {"Transfer"}               # internal movement, not spending
+EXCLUDE = set(PERSONAL_EXCLUSIONS)
 SUBSCRIPTION_CAT = "Subscriptions"
 
 # --- benchmarks -------------------------------------------------------------
@@ -172,19 +174,15 @@ class Aggregates:
         return self.essential / self.income if self.income > 0 else None
 
 
-def monthly_aggregates(tx: pd.DataFrame, window: int | None = None,
-                       half_life: float = HALF_LIFE_MONTHS) -> Aggregates | None:
-    """Recency-weighted monthly income and spending.
-
-    Every *complete* calendar month in the lookback contributes, weighted by
-    ``0.5 ** (months_ago / half_life)``. The current partial month is excluded
-    so a mid-month reading isn't mistaken for a low-spending month. ``window``
-    is accepted for backwards compatibility: passing an int caps the number of
-    months considered.
-    """
+def _monthly_inputs(tx: pd.DataFrame, window: int | None,
+                    half_life: float):
+    """Select exactly the ledger rows and month weights used by the score."""
     if tx is None or tx.empty:
         return None
-    df = tx.copy()
+    ledger = tx.copy()
+    ledger["ledger_amount"] = ledger["amount"]
+    df = personal_transactions(ledger)
+    df["reimbursement_excluded"] = df["ledger_amount"] - df["amount"]
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
     df = df.dropna(subset=["date"])
     if df.empty:
@@ -202,7 +200,68 @@ def monthly_aggregates(tx: pd.DataFrame, window: int | None = None,
     wsum = sum(w.values())
     if wsum <= 0:
         return None
+    return sel.copy(), list(months), w, wsum, partial, half_life
 
+
+
+@dataclass
+class MonthlyBreakdown:
+    aggregates: Aggregates
+    groups: dict[str, pd.DataFrame]
+    month_shares: dict[pd.Period, float]
+
+
+def monthly_breakdown(tx: pd.DataFrame, window: int | None = None,
+                      half_life: float = HALF_LIFE_MONTHS) -> MonthlyBreakdown | None:
+    """Trace each monthly figure back to signed, weighted transactions.
+
+    Contributions are unrounded dollars/month. Category refunds remain negative;
+    the existing score floors only the *group* total at zero.
+    """
+    inputs = _monthly_inputs(tx, window, half_life)
+    if inputs is None:
+        return None
+    sel, months, weights, total_weight, partial, _half_life = inputs
+    groups = _monthly_groups(sel)
+    shares = {month: weight / total_weight for month, weight in weights.items()}
+    evidence = {}
+    for name, rows in groups.items():
+        rows = rows.copy()
+        direction = 1 if name == "income" else -1
+        rows["month_share"] = rows["ym"].map(shares).astype(float)
+        rows["contribution"] = direction * rows["amount"] * rows["month_share"]
+        evidence[name] = rows
+    return MonthlyBreakdown(_aggregate_months(inputs), evidence, shares)
+
+
+def _monthly_groups(sel: pd.DataFrame) -> dict[str, pd.DataFrame]:
+    known = ESSENTIAL | FRIVOLOUS | GIVING | INCOME | EXCLUDE
+    return {
+        "income": sel[sel["category"].isin(INCOME) & (sel["amount"] > 0)],
+        "essential": sel[sel["category"].isin(ESSENTIAL)],
+        "frivolous": sel[sel["category"].isin(FRIVOLOUS)],
+        "giving": sel[sel["category"].isin(GIVING)],
+        "unknown": sel[~sel["category"].isin(known) & (sel["amount"] < 0)],
+    }
+
+
+def monthly_aggregates(tx: pd.DataFrame, window: int | None = None,
+                       half_life: float = HALF_LIFE_MONTHS) -> Aggregates | None:
+    """Recency-weighted monthly income and spending.
+
+    Every *complete* calendar month in the lookback contributes, weighted by
+    ``0.5 ** (months_ago / half_life)``. The current partial month is excluded
+    so a mid-month reading isn't mistaken for a low-spending month. ``window``
+    is accepted for backwards compatibility: passing an int caps the number of
+    months considered.
+    """
+    inputs = _monthly_inputs(tx, window, half_life)
+    return _aggregate_months(inputs) if inputs is not None else None
+
+
+def _aggregate_months(inputs) -> Aggregates:
+    sel, months, w, wsum, partial, half_life_value = inputs
+    half_life = half_life_value
     def weighted_monthly(rows: pd.DataFrame, outflow: bool = True) -> float:
         """Weighted average of per-month totals, in $/month."""
         if rows.empty:
@@ -213,15 +272,13 @@ def monthly_aggregates(tx: pd.DataFrame, window: int | None = None,
             total += w.get(m, 0.0) * (-float(v) if outflow else float(v))
         return max(0.0, total / wsum)
 
-    income = weighted_monthly(sel[sel["category"].isin(INCOME) & (sel["amount"] > 0)],
-                              outflow=False)
-    essential = weighted_monthly(sel[sel["category"].isin(ESSENTIAL)])
-    frivolous = weighted_monthly(sel[sel["category"].isin(FRIVOLOUS)])
+    groups = _monthly_groups(sel)
+    income = weighted_monthly(groups["income"], outflow=False)
+    essential = weighted_monthly(groups["essential"])
+    frivolous = weighted_monthly(groups["frivolous"])
     subs = weighted_monthly(sel[sel["category"] == SUBSCRIPTION_CAT])
-    giving = weighted_monthly(sel[sel["category"].isin(GIVING)])
-    known = ESSENTIAL | FRIVOLOUS | GIVING | INCOME | EXCLUDE
-    unknown_rows = sel[~sel["category"].isin(known)]
-    unknown = weighted_monthly(unknown_rows[unknown_rows["amount"] < 0])
+    giving = weighted_monthly(groups["giving"])
+    unknown = weighted_monthly(groups["unknown"])
     spending = essential + frivolous + giving + unknown
 
     return Aggregates(income=income, spending=spending, essential=essential,
@@ -281,7 +338,8 @@ def essential_monthly(store) -> float:
     if agg is not None and agg.essential > 0:
         return agg.essential
     total = 0.0
-    for it in store.recurring():
+    from .recurrence import personal_recurring
+    for it in personal_recurring(store.transactions(), store.recurring()):
         if not it.active or it.amount >= 0 or it.kind == "ignore":
             continue
         if bucket_of(categorize(it.name, it.amount)) == "essential":
@@ -590,7 +648,7 @@ def category_monthly(tx: pd.DataFrame, window: int | None = None,
     """
     if tx is None or tx.empty:
         return {}
-    df = tx.copy()
+    df = personal_transactions(tx)
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
     df = df.dropna(subset=["date"])
     if df.empty:
@@ -636,6 +694,8 @@ def suggestions(agg: Aggregates, recurring: list[RecurringItem],
     """
     levers: list[Suggestion] = []
     notes: list[Suggestion] = []
+    from .recurrence import personal_recurring
+    recurring = personal_recurring(tx, recurring)
     r = agg.savings_rate or 0.0
     cat_month = category_monthly(tx, window)
 

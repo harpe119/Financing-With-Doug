@@ -4,23 +4,54 @@ from __future__ import annotations
 from datetime import date
 
 import pandas as pd
-from PyQt6.QtCore import QDate, Qt
+from PyQt6.QtCore import QDate, Qt, pyqtSignal
+from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (QCheckBox, QComboBox, QDateEdit, QDialog,
                              QDialogButtonBox, QFileDialog, QFormLayout,
-                             QHBoxLayout, QHeaderView, QLabel, QLineEdit,
-                             QMessageBox, QPushButton, QTableWidget,
-                             QTableWidgetItem, QVBoxLayout, QWidget)
+                             QFrame, QHBoxLayout, QHeaderView, QLabel,
+                             QLineEdit, QMenu, QMessageBox, QPushButton,
+                             QTableWidget, QTableWidgetItem, QVBoxLayout,
+                             QWidget)
 
+from ..account_view import (AccountStatus, account_statuses, ago_text,
+                            held_amount, money_exact, owed_amount,
+                            split_accounts, summary_line, terms_text)
 from ..models import Account, AccountType
 from ..ingest import (ImportConfig, SIGN_MODES, balances_from_activity,
                       guess_mapping, guess_snapshot_mapping, parse_snapshots,
                       parse_transactions, read_raw, sniff_delimiter)
 from ..pipeline import reimport_with_saved_mapping, refresh_derived
 from ..store import Store
-from ..util import fmt_money, fmt_rate
+from ..util import fmt_money
 from . import theme
 from .account_dialog import AccountDialog, _money_spin
-from .widgets import hint
+from .widgets import form_row, hint
+
+
+def confirm(parent, title: str, text: str, yes_text: str,
+            no_text: str = "Keep it", destructive: bool = True) -> bool:
+    """Ask before something that cannot be undone casually.
+
+    The buttons say what they do ("Delete account" / "Keep it") instead of
+    Yes / No, and the *safe* answer is the default, so pressing Enter or Esc
+    keeps the data. The old Yes/No boxes defaulted to Yes.
+    """
+    box = QMessageBox(parent)
+    box.setIcon(QMessageBox.Icon.Question)
+    box.setWindowTitle(title)
+    box.setText(text)
+    yes = box.addButton(yes_text, QMessageBox.ButtonRole.AcceptRole)
+    if destructive:
+        # QMessageBox styles its buttons as they are added, so a name set
+        # afterwards only takes effect once the button is polished again.
+        yes.setObjectName("danger")
+        yes.style().unpolish(yes)
+        yes.style().polish(yes)
+    no = box.addButton(no_text, QMessageBox.ButtonRole.RejectRole)
+    box.setDefaultButton(no)
+    box.setEscapeButton(no)
+    box.exec()
+    return box.clickedButton() is yes
 
 
 class SnapshotEntryDialog(QDialog):
@@ -91,8 +122,10 @@ class SnapshotImportDialog(QDialog):
         lay.addLayout(prow)
 
         mrow = QHBoxLayout()
-        mrow.addWidget(QLabel("This file lists"))
+        mode_label = QLabel("This file lists")
+        mrow.addWidget(mode_label)
         self.mode = QComboBox()
+        mode_label.setBuddy(self.mode)
         self.mode.addItem("Payments / activity — dated amounts", self.ACTIVITY)
         self.mode.addItem("Balances — a balance on each date", self.BALANCES)
         self.mode.currentIndexChanged.connect(self._sync_mode)
@@ -105,8 +138,8 @@ class SnapshotImportDialog(QDialog):
         bform.setContentsMargins(0, 0, 0, 0)
         self.c_date = QComboBox()
         self.c_balance = QComboBox()
-        bform.addRow("Date column", self.c_date)
-        bform.addRow("Balance column", self.c_balance)
+        form_row(bform, "Date column", self.c_date)
+        form_row(bform, "Balance column", self.c_balance)
         lay.addWidget(self.bal_box)
 
         # --- activity mode ---
@@ -123,13 +156,13 @@ class SnapshotImportDialog(QDialog):
         self.a_sign.addItem("Auto-detect", "auto")
         for key, label in SIGN_MODES.items():
             self.a_sign.addItem(label, key)
-        aform.addRow("Date column", self.a_date)
-        aform.addRow("Description column", self.a_desc)
-        aform.addRow("Amount column", self.a_amount)
-        aform.addRow("Credit/debit indicator", self.a_indicator)
-        aform.addRow("Debit / money out", self.a_debit)
-        aform.addRow("Credit / money in", self.a_credit)
-        aform.addRow("Amounts", self.a_sign)
+        form_row(aform, "Date column", self.a_date)
+        form_row(aform, "Description column", self.a_desc)
+        form_row(aform, "Amount column", self.a_amount)
+        form_row(aform, "Credit/debit indicator", self.a_indicator)
+        form_row(aform, "Debit / money out", self.a_debit)
+        form_row(aform, "Credit / money in", self.a_credit)
+        form_row(aform, "Amount signs", self.a_sign)
         self.reduces = QCheckBox("Payments in this file reduce the balance")
         self.reduces.setChecked(True)
         self.reduces.setToolTip(
@@ -148,6 +181,7 @@ class SnapshotImportDialog(QDialog):
         btns = QDialogButtonBox()
         self.ok = btns.addButton("Import", QDialogButtonBox.ButtonRole.AcceptRole)
         self.ok.setObjectName("primary")
+        self.ok.setDefault(True)
         self.ok.setEnabled(False)
         btns.addButton("Cancel", QDialogButtonBox.ButtonRole.RejectRole)
         btns.accepted.connect(self._do_import)
@@ -292,7 +326,7 @@ class SnapshotManagerDialog(QDialog):
         super().__init__(parent)
         self.store = store
         self.account = account
-        self.setWindowTitle(f"Snapshots — {account.name}")
+        self.setWindowTitle(f"Balance history — {account.name}")
         self.setMinimumSize(420, 420)
 
         lay = QVBoxLayout(self)
@@ -311,6 +345,8 @@ class SnapshotManagerDialog(QDialog):
         self.count_note = hint("")
         lay.addWidget(self.count_note)
         self.empty_note = hint(
+            "No snapshots yet. Add one whenever you know the exact balance on "
+            "a past date." if cashlike else
             "No snapshots yet. Add them one at a time, or use Import CSV… to "
             "load a balance-over-time export from your lender or brokerage.")
         lay.addWidget(self.empty_note)
@@ -368,6 +404,11 @@ class SnapshotManagerDialog(QDialog):
         close = QPushButton("Close")
         close.clicked.connect(self.accept)
         bar.addWidget(close)
+        # Enter closes the window. It used to press "Add…", so Enter on a
+        # selected snapshot opened an empty entry form instead.
+        for b in (add, edit, rm, imp):
+            b.setAutoDefault(False)
+        close.setDefault(True)
         lay.addLayout(bar)
 
         self._reload()
@@ -449,9 +490,9 @@ class SnapshotManagerDialog(QDialog):
         sid = self._selected_id()
         if sid is None:
             return
-        ok = QMessageBox.question(self, "Delete snapshot",
-                                  "Delete this snapshot?")
-        if ok == QMessageBox.StandardButton.Yes:
+        if confirm(self, "Delete snapshot",
+                   "Delete this snapshot?\n\nUndo (Ctrl+Z) brings it back.",
+                   yes_text="Delete snapshot", no_text="Keep it"):
             self.store.delete_snapshot(sid)
             self._reload()
 
@@ -466,8 +507,8 @@ class BalanceCheckDialog(QDialog):
     the culprit in a glance, which no per-account warning does as well.
     """
 
-    COLS = ["Account", "Rows", "Money in", "Money out", "Net", "Balance entered",
-            "Implied opening", "If it started at $0"]
+    COLS = ["Account", "Verdict", "Rows", "Money in", "Money out", "Net",
+            "Balance entered", "Implied opening", "If it started at $0"]
 
     def __init__(self, store: Store, parent=None):
         super().__init__(parent)
@@ -526,7 +567,12 @@ class BalanceCheckDialog(QDialog):
             "Undo a “Got it” — bring the dashboard warning back for every "
             "account it was dismissed on")
         self.unack_btn.clicked.connect(self._unacknowledge)
-        bb.addButton(QDialogButtonBox.StandardButton.Close)
+        close = bb.addButton(QDialogButtonBox.StandardButton.Close)
+        # Enter closes. It used to press "Restore removed rows", which is not
+        # what anyone reaching for Enter in a read-only table means.
+        for b in (self.dup_btn, self.undo_btn, self.unack_btn):
+            b.setAutoDefault(False)
+        close.setDefault(True)
         bb.rejected.connect(self.reject)
         lay.addWidget(bb)
         self._reload()
@@ -555,12 +601,13 @@ class BalanceCheckDialog(QDialog):
             QMessageBox.information(self, "Nothing to restore",
                                     "No rows have been removed as duplicates.")
             return
-        ok = QMessageBox.question(
-            self, "Restore removed rows",
-            f"Forget {n} duplicate removal{'s' if n != 1 else ''}?\n\n"
-            f"The rows themselves come back the next time you import the CSV "
-            f"they came from.")
-        if ok == QMessageBox.StandardButton.Yes:
+        if confirm(
+                self, "Restore removed rows",
+                f"Forget {n} duplicate removal{'s' if n != 1 else ''}?\n\n"
+                f"The rows themselves come back the next time you import the "
+                f"CSV they came from.",
+                yes_text="Forget removals", no_text="Keep them",
+                destructive=False):
             self.store.unsuppress_all()
             self._reload()
 
@@ -575,17 +622,21 @@ class BalanceCheckDialog(QDialog):
             def _c(x, sign=False):
                 s = "+" if sign and x > 0 else ("-" if x < 0 else "")
                 return f"{s}${abs(x):,.2f}"
-            cells = [i.account, str(i.n_rows), _c(i.inflow), _c(i.outflow),
-                     _c(i.net_flow, True), _c(i.entered), _c(i.opening),
-                     _c(i.if_opened_at_zero)]
+            # The verdict is words, and amber when it needs a look. A colour on
+            # the figure alone was the only cue, and the selected-row style
+            # replaced it; green also vouched for a number that was only
+            # checked in one direction.
+            verdict = "No red flags" if i.ok else "Needs a look"
+            cells = [i.account, verdict, str(i.n_rows), _c(i.inflow),
+                     _c(i.outflow), _c(i.net_flow, True), _c(i.entered),
+                     _c(i.opening), _c(i.if_opened_at_zero)]
             for c, v in enumerate(cells):
                 it = QTableWidgetItem(v)
-                if c >= 1:
+                if c >= 2:
                     it.setTextAlignment(Qt.AlignmentFlag.AlignRight
                                         | Qt.AlignmentFlag.AlignVCenter)
-                if c == 6:
-                    it.setForeground(theme.qcolor(
-                        theme.POSITIVE if i.ok else theme.RED))
+                if c in (1, 7) and not i.ok:
+                    it.setForeground(theme.qcolor(theme.AMBER))
                 self.table.setItem(r, c, it)
             if not i.ok:
                 bad.append(i)
@@ -605,13 +656,15 @@ class BalanceCheckDialog(QDialog):
             self.note.setText("No cash accounts with imported transactions yet.")
         elif not bad:
             self.note.setText(
-                "Every account reconciles — the balances you entered and the "
-                "transactions you imported agree with each other.")
+                "No account would have had to start below zero to fit its "
+                "transactions, so none is flagged. This check cannot tell "
+                "whether a balance is recent or an export is complete: the "
+                "Status column on the Accounts page covers that.")
         else:
             parts = []
             for i in bad:
                 parts.append(
-                    f"<b>{i.account}</b> does not reconcile. Its rows total "
+                    f"<b>{i.account}</b> needs a look. Its rows total "
                     f"{fmt_money(i.net_flow, signed=True)}, so with a balance "
                     f"of {fmt_money(i.entered)} it must have opened at "
                     f"{fmt_money(i.opening)}. If the account started empty, "
@@ -637,13 +690,13 @@ class DuplicateDialog(QDialog):
     it is made rather than after.
     """
 
-    COLS = ["", "Account", "Date", "Amount", "Keeping", "Removing", "Match"]
+    COLS = ["Remove", "Account", "Date", "Amount", "Keeping", "Removing", "Match"]
 
     def __init__(self, store: Store, parent=None):
         super().__init__(parent)
         self.store = store
         self.setWindowTitle("Possible duplicate rows")
-        self.setMinimumSize(1000, 520)
+        self.setMinimumSize(920, 520)
         self._rows: list = []          # (checkbox, pair, report)
 
         lay = QVBoxLayout(self)
@@ -683,7 +736,10 @@ class DuplicateDialog(QDialog):
         self.go = bb.addButton("Remove ticked rows",
                                QDialogButtonBox.ButtonRole.AcceptRole)
         self.go.setObjectName("danger")
-        bb.addButton("Close", QDialogButtonBox.ButtonRole.RejectRole)
+        close = bb.addButton("Close", QDialogButtonBox.ButtonRole.RejectRole)
+        # The destructive button must never be the one Enter presses.
+        self.go.setAutoDefault(False)
+        close.setDefault(True)
         bb.accepted.connect(self._apply)
         bb.rejected.connect(self.reject)
         lay.addWidget(bb)
@@ -699,6 +755,7 @@ class DuplicateDialog(QDialog):
         for rep in self._reports:
             for p in rep.pairs:
                 box = QCheckBox()
+                box.setAccessibleName(f"Remove “{p.drop_desc}” on {p.when.isoformat()}")
                 box.setChecked(p.drop_id in rep.suggested)
                 box.stateChanged.connect(lambda _s: self._sync_effect())
                 self.table.setCellWidget(r, 0, box)
@@ -728,8 +785,8 @@ class DuplicateDialog(QDialog):
             colour = (theme.POSITIVE if after >= -25 else theme.AMBER)
             parts.append(
                 f"<div><b>{rep.account}</b>: opening balance "
-                f"${rep.opening:,.2f} → <span style='color:{colour}'>"
-                f"${after:,.2f}</span> if the ticked rows go "
+                f"{money_exact(rep.opening)} → <span style='color:{colour}'>"
+                f"{money_exact(after)}</span> if the ticked rows go "
                 f"({len(picked)} of {len(rep.pairs)}).</div>")
         parts.append(
             f"<div style='color:{theme.MUTED};margin-top:4px'>An opening near "
@@ -745,14 +802,15 @@ class DuplicateDialog(QDialog):
             QMessageBox.information(self, "Nothing ticked",
                                     "Tick the rows you want removed first.")
             return
-        ok = QMessageBox.question(
-            self, "Remove rows",
-            f"Permanently remove {len(drop)} transaction"
-            f"{'s' if len(drop) != 1 else ''}?\n\n"
-            f"They will also be remembered as removed, so importing the same "
-            f"CSV again will not bring them back. You can undo that from "
-            f"Accounts → Check my balances if you change your mind.")
-        if ok != QMessageBox.StandardButton.Yes:
+        if not confirm(
+                self, "Remove rows",
+                f"Remove {len(drop)} transaction"
+                f"{'s' if len(drop) != 1 else ''}?\n\n"
+                f"They will also be remembered as removed, so importing the "
+                f"same CSV again will not bring them back. Undo (Ctrl+Z) "
+                f"restores them, and Accounts → Check my balances can forget "
+                f"the removals later.",
+                yes_text="Remove rows", no_text="Keep them"):
             return
         from ..dedup import apply as apply_dedup
         from ..pipeline import refresh_derived
@@ -765,110 +823,473 @@ class DuplicateDialog(QDialog):
         self.accept()
 
 
+class UpdateBalanceDialog(QDialog):
+    """The one-step way to say what an account holds today.
+
+    Editing an account to change one number means opening a form of eight
+    fields. This asks for the two things that actually change — the balance and
+    the day it was true — and re-anchors the account's history to them.
+    """
+
+    def __init__(self, account: Account, parent=None):
+        super().__init__(parent)
+        self.account = account
+        self.setWindowTitle(f"Update balance · {account.name}")
+        self.setMinimumSize(460, 260)
+        self.resize(480, 280)
+        owed = account.type in (AccountType.CREDIT, AccountType.LOAN)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(20, 20, 20, 20)
+        lay.setSpacing(16)
+        form = QFormLayout()
+        form.setSpacing(12)
+        lay.addLayout(form)
+        self.balance = _money_spin(0 if owed else -1e9)
+        shown = -account.balance if account.type == AccountType.CREDIT else account.balance
+        self.balance.setValue(shown)
+        label = QLabel("Amount owed" if owed else "Balance")
+        label.setBuddy(self.balance)
+        form.addRow(label, self.balance)
+        self.when = QDateEdit(QDate.currentDate())
+        self.when.setCalendarPopup(True)
+        self.when.setDisplayFormat("MMM d, yyyy")
+        asof = QLabel("As of")
+        asof.setBuddy(self.when)
+        form.addRow(asof, self.when)
+        lay.addWidget(hint(
+            "Use the figure on your latest statement or banking app, and the "
+            "day it was true. Doug re-anchors this account’s history to it. "
+            "Type digits as cents: 1234 becomes $12.34."))
+        lay.addStretch(1)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok
+                                   | QDialogButtonBox.StandardButton.Cancel)
+        ok = buttons.button(QDialogButtonBox.StandardButton.Ok)
+        ok.setText("Save balance")
+        ok.setObjectName("primary")
+        ok.setDefault(True)
+        buttons.accepted.connect(self._accept)
+        buttons.rejected.connect(self.reject)
+        lay.addWidget(buttons)
+
+    def _accept(self) -> None:
+        self.balance.interpretText()
+        self.accept()
+
+    def get_values(self) -> tuple[float, date]:
+        value = self.balance.value()
+        stored = -value if self.account.type == AccountType.CREDIT else value
+        d = self.when.date()
+        return stored, date(d.year(), d.month(), d.day())
+
+
+class AccountTable(QTableWidget):
+    """The accounts list, with the keys a list should answer to.
+
+    Enter opens the selected account for editing and Delete starts the delete
+    flow (which still asks first); neither did anything before.
+    """
+
+    editRequested = pyqtSignal()
+    deleteRequested = pyqtSignal()
+
+    def keyPressEvent(self, ev) -> None:
+        if ev.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            self.editRequested.emit()
+            ev.accept()
+            return
+        if ev.key() == Qt.Key.Key_Delete:
+            self.deleteRequested.emit()
+            ev.accept()
+            return
+        super().keyPressEvent(ev)
+
+
+_FIX_TIPS = {
+    "check": ("The imported transactions and the balance you entered can’t "
+              "both be right. Open Check my balances to see which to fix."),
+    "import": ("Import a newer statement so Doug can learn from recent "
+               "activity."),
+    "balance": ("Enter today’s balance so the history is anchored to a recent "
+                "figure."),
+}
+
+
 class AccountsPage(QWidget):
-    COLS = ["Name", "Type", "Balance / owed", "As of", "Rate",
-            "Payment / contribution"]
+    COLS = ["Name", "Type", "Balance", "Updated", "Status", "Going forward"]
+    _RIGHT = 2
 
     def __init__(self, store: Store, main):
         super().__init__()
         self.setObjectName("page")
         self.store = store
         self.main = main
+        self._statuses: dict[int, AccountStatus] = {}
+        self._simple = True
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(18, 16, 18, 16)
         lay.setSpacing(12)
 
-        bar = QHBoxLayout()
-        add = QPushButton("Add account")
-        add.setObjectName("primary")
-        add.clicked.connect(self._add)
-        edit = QPushButton("Edit")
-        edit.clicked.connect(self._edit)
-        rm = QPushButton("Delete")
-        rm.setObjectName("danger")
-        rm.clicked.connect(self._delete)
-        snap = QPushButton("Snapshots…")
-        snap.clicked.connect(self._snapshot)
-        update = QPushButton("Update from CSV…")
-        update.setToolTip("Import a newer CSV for the selected account — cash "
-                          "accounts reuse their saved column mapping; loans "
-                          "and investments open the balance/activity importer")
-        update.clicked.connect(self._update_csv)
-        check_bal = QPushButton("Check my balances…")
-        check_bal.setToolTip("Does each account's imported history agree with "
-                             "the balance you entered?")
-        check_bal.clicked.connect(self._check_balances)
-        for b in (add, edit, rm, snap, update, check_bal):
-            bar.addWidget(b)
-        bar.addStretch(1)
-        lay.addLayout(bar)
+        # --- what this page is, and whether the numbers on it can be trusted ---
+        head = QHBoxLayout()
+        head.setSpacing(10)
+        titles = QVBoxLayout()
+        titles.setSpacing(2)
+        self.title = QLabel("Your accounts")
+        self.title.setObjectName("pageTitle")
+        titles.addWidget(self.title)
+        self.summary = hint("")
+        titles.addWidget(self.summary)
+        head.addLayout(titles, 1)
+        self.check_btn = QPushButton("Check my balances…")
+        self.check_btn.setObjectName("link")
+        self.check_btn.setToolTip("Does each account's imported history agree "
+                                  "with the balance you entered?")
+        self.check_btn.clicked.connect(self._check_balances)
+        head.addWidget(self.check_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.add_btn = QPushButton("Add account")
+        self.add_btn.setObjectName("primary")
+        self.add_btn.clicked.connect(self._add)
+        head.addWidget(self.add_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+        lay.addLayout(head)
 
-        self.table = QTableWidget(0, len(self.COLS))
+        # --- the selected account's actions --------------------------------
+        # Edit, Update, Snapshots and Delete only mean something once a row is
+        # chosen, so they live in a bar that exists only then. Delete moved out
+        # of reach of Edit, into the menu.
+        self.sel_bar = QFrame()
+        self.sel_bar.setObjectName("selBar")
+        sb = QHBoxLayout(self.sel_bar)
+        sb.setContentsMargins(14, 10, 14, 10)
+        sb.setSpacing(8)
+        info = QVBoxLayout()
+        info.setSpacing(1)
+        self.sel_name = QLabel("")
+        self.sel_name.setObjectName("stepTitle")
+        info.addWidget(self.sel_name)
+        self.sel_status = hint("")
+        info.addWidget(self.sel_status)
+        sb.addLayout(info, 1)
+        self.fix_btn = QPushButton("Check this account")
+        self.fix_btn.clicked.connect(self._check_balances)
+        self.balance_btn = QPushButton("Update balance")
+        self.balance_btn.setToolTip("Enter what the account holds today")
+        self.balance_btn.clicked.connect(self._update_balance)
+        self.csv_btn = QPushButton("Update from CSV…")
+        self.csv_btn.clicked.connect(self._update_csv)
+        self.more_btn = QPushButton("More")
+        menu = QMenu(self.more_btn)
+        self.act_edit = menu.addAction("Edit details…\tEnter")
+        self.act_edit.triggered.connect(self._edit)
+        self.act_snap = menu.addAction("Balance history…")
+        self.act_snap.setToolTip("Dated balances that correct or extend the "
+                                 "account's history")
+        self.act_snap.triggered.connect(self._snapshot)
+        menu.addSeparator()
+        self.act_delete = menu.addAction("Delete account…\tDel")
+        self.act_delete.triggered.connect(self._delete)
+        self.more_btn.setMenu(menu)
+        for b in (self.fix_btn, self.balance_btn, self.csv_btn, self.more_btn):
+            sb.addWidget(b, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.sel_bar.setVisible(False)
+        lay.addWidget(self.sel_bar)
+
+        # --- the list ------------------------------------------------------
+        self.table = AccountTable(0, len(self.COLS))
+        self.table.setAccessibleName("Accounts")
+        self.table.setAccessibleDescription(
+            "Your accounts, grouped into what you have and what you owe, each "
+            "with its balance and whether it can be trusted.")
         self.table.setHorizontalHeaderLabels(self.COLS)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
-        self.table.setAlternatingRowColors(True)
-        self.table.verticalHeader().setVisible(False)
+        self.table.setAlternatingRowColors(False)
+        self.table.setShowGrid(False)
+        self.table.setWordWrap(True)
+        self.table.setTextElideMode(Qt.TextElideMode.ElideRight)
+        vh = self.table.verticalHeader()
+        vh.setVisible(False)
+        vh.setMinimumSectionSize(34)
+        vh.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         hdr = self.table.horizontalHeader()
-        hdr.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        hdr.setDefaultAlignment(Qt.AlignmentFlag.AlignLeft
+                                | Qt.AlignmentFlag.AlignVCenter)
+        hdr.setMinimumSectionSize(70)
+        hdr.setStretchLastSection(False)
+        # Name and the two sentences take the spare width; the figures size to
+        # what they hold, so nothing is clipped and no column is wasted.
+        for c, mode in enumerate((QHeaderView.ResizeMode.Stretch,
+                                  QHeaderView.ResizeMode.ResizeToContents,
+                                  QHeaderView.ResizeMode.ResizeToContents,
+                                  QHeaderView.ResizeMode.ResizeToContents,
+                                  QHeaderView.ResizeMode.Stretch,
+                                  QHeaderView.ResizeMode.Stretch)):
+            hdr.setSectionResizeMode(c, mode)
+        for c in range(len(self.COLS)):
+            h = self.table.horizontalHeaderItem(c)
+            h.setTextAlignment((Qt.AlignmentFlag.AlignRight if c == self._RIGHT
+                                else Qt.AlignmentFlag.AlignLeft)
+                               | Qt.AlignmentFlag.AlignVCenter)
+        self.table.itemSelectionChanged.connect(self._on_selection)
         self.table.doubleClicked.connect(lambda _: self._edit())
+        self.table.editRequested.connect(self._edit)
+        self.table.deleteRequested.connect(self._delete)
         lay.addWidget(self.table, 1)
 
-        lay.addWidget(hint(
-            "Loans and credit cards both show what you owe as a positive "
-            "figure; a negative one means the card is in credit. The forecast "
-            "amortizes loans monthly at APR/12 and grows investments at the "
-            "expected return."))
+        self.footer = hint(
+            "Money you owe is shown as a positive amount, under What you owe. "
+            "A card in credit counts as money you have.")
+        lay.addWidget(self.footer)
+
+        # --- first run -----------------------------------------------------
+        self.empty = self._build_empty()
+        lay.addWidget(self.empty, 1)
 
     # ---------------------------------------------------------------
+    def _build_empty(self) -> QWidget:
+        """What a person with no accounts sees: what to do, in the same voice
+        as the dashboard's welcome."""
+        wrap = QWidget()
+        outer = QVBoxLayout(wrap)
+        outer.setContentsMargins(0, 8, 0, 8)
+        outer.addStretch(1)
+        mid = QHBoxLayout()
+        mid.addStretch(1)
+        card = QFrame()
+        card.setObjectName("card")
+        card.setMaximumWidth(600)
+        card.setMinimumWidth(400)
+        cl = QVBoxLayout(card)
+        cl.setContentsMargins(28, 24, 28, 22)
+        cl.setSpacing(12)
+        t = QLabel("Add the accounts you want Doug to keep track of")
+        t.setObjectName("welcomeTitle")
+        t.setWordWrap(True)
+        cl.addWidget(t)
+        for head, body in (
+                ("Money you have", "checking, savings and investments"),
+                ("Money you owe", "credit cards and loans")):
+            row = QVBoxLayout()
+            row.setSpacing(1)
+            h = QLabel(head)
+            h.setObjectName("stepTitle")
+            row.addWidget(h)
+            row.addWidget(hint(body[0].upper() + body[1:]))
+            cl.addLayout(row)
+        cl.addWidget(hint(
+            "For each one you’ll enter today’s balance and the day it’s from. "
+            "Importing its statements comes next, and that is what lets Doug "
+            "see your habits."))
+        actions = QHBoxLayout()
+        go = QPushButton("Add your first account")
+        go.setObjectName("primary")
+        go.clicked.connect(self._add)
+        actions.addWidget(go)
+        demo = QPushButton("Explore with a demo first")
+        demo.setObjectName("link")
+        demo.setToolTip("Opens fictional data in a separate file; your own "
+                        "data is untouched")
+        demo.clicked.connect(
+            lambda: self.main._load_demo("balanced", confirm=False))
+        actions.addWidget(demo)
+        actions.addStretch(1)
+        cl.addLayout(actions)
+        self.empty_btn = go
+        mid.addWidget(card, 10)
+        mid.addStretch(1)
+        outer.addLayout(mid)
+        outer.addStretch(2)
+        return wrap
+
+    # ---------------------------------------------------------------
+    def set_simple(self, on: bool) -> None:
+        """Simple view hides the maintenance tool; everything else stays."""
+        self._simple = bool(on)
+        self.act_snap.setVisible(not on)
+
+    def resizeEvent(self, ev) -> None:
+        super().resizeEvent(ev)
+        if self.table.isVisible():
+            self.table.resizeRowsToContents()
+
+    # ---------------------------------------------------------------
+    @staticmethod
+    def _cell(text: str = "", right: bool = False, font=None, color: str | None = None,
+              enabled: bool = False, tip: str | None = None) -> QTableWidgetItem:
+        it = QTableWidgetItem(text)
+        align = Qt.AlignmentFlag.AlignRight if right else Qt.AlignmentFlag.AlignLeft
+        it.setTextAlignment(align | Qt.AlignmentFlag.AlignVCenter)
+        if font is not None:
+            it.setFont(font)
+        if color:
+            it.setForeground(theme.qcolor(color))
+        if tip:
+            it.setToolTip(tip)
+        if not enabled:
+            it.setFlags(Qt.ItemFlag.NoItemFlags)
+        return it
+
     def refresh(self) -> None:
         accounts = self.store.accounts()
-        self.table.setRowCount(len(accounts))
-        for r, a in enumerate(accounts):
-            rate = "—"
-            paycol = "—"
-            if a.type == AccountType.LOAN:
-                rate = f"{fmt_rate(a.apr)} APR"
-                if a.monthly_payment:
-                    paycol = f"{fmt_money(a.monthly_payment)}/mo · day {a.payment_day}"
-            elif a.type == AccountType.INVESTMENT:
-                rate = f"{a.annual_return * 100:.1f}% ± {a.volatility * 100:.0f}%"
-                if a.monthly_contribution:
-                    paycol = f"{fmt_money(a.monthly_contribution)}/mo"
-            elif a.type == AccountType.CREDIT and a.apr:
-                rate = f"{fmt_rate(a.apr)} APR"
-            # Debts read as a positive amount owed, matching what is typed in
-            # the dialog. A card stored at -1,500 and a loan stored at +1,500
-            # are the same statement about the world, and showing them with
-            # opposite signs is the inconsistency, not the storage.
-            shown = -a.balance if a.type == AccountType.CREDIT else a.balance
-            vals = [a.name, a.type.label, fmt_money(shown),
-                    a.balance_date.isoformat(), rate, paycol]
-            for c, v in enumerate(vals):
-                it = QTableWidgetItem(v)
-                if c == 2:
-                    it.setTextAlignment(Qt.AlignmentFlag.AlignRight
-                                        | Qt.AlignmentFlag.AlignVCenter)
-                if c == 0:
-                    it.setData(Qt.ItemDataRole.UserRole, a.id)
+        keep = self._selected_id()
+        self._statuses = account_statuses(self.store)
+        self.summary.setText(summary_line(accounts, self._statuses))
+        has = bool(accounts)
+        self.empty.setVisible(not has)
+        for w in (self.table, self.footer, self.check_btn, self.add_btn):
+            w.setVisible(has)
+        if not has:
+            self.sel_bar.setVisible(False)
+            self.table.setRowCount(0)
+            return
+
+        have, owe = split_accounts(accounts)
+        have_total = sum(held_amount(a) for a in have)
+        owe_total = sum(owed_amount(a) for a in owe)
+        rows: list[tuple] = []
+        if have:
+            rows.append(("group", "What you have"))
+            rows += [("acct", a, False) for a in have]
+            rows.append(("total", "Total you have", have_total, theme.TEXT))
+        if owe:
+            rows.append(("group", "What you owe"))
+            rows += [("acct", a, True) for a in owe]
+            rows.append(("total", "Total you owe", owe_total, theme.RED))
+        if have and owe:
+            net = have_total - owe_total
+            rows.append(("total", "Net worth", net,
+                         theme.POSITIVE if net >= 0 else theme.NEGATIVE))
+
+        self.table.clearSpans()
+        self.table.setRowCount(len(rows))
+        label_font = QFont()
+        label_font.setPixelSize(11)
+        label_font.setBold(True)
+        label_font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 1.2)
+        mono = theme.mono_font(13, True)
+        select_row = -1
+        for r, row in enumerate(rows):
+            kind = row[0]
+            if kind == "group":
+                self.table.setItem(r, 0, self._cell(row[1].upper(), font=label_font,
+                                                    color=theme.MUTED))
+                self.table.setSpan(r, 0, 1, len(self.COLS))
+                continue
+            if kind == "total":
+                _k, text, amount, color = row
+                bold = theme.mono_font(13, True)
+                lab = self._cell(text, font=self._bold(), color=theme.MUTED)
+                self.table.setItem(r, 0, lab)
+                self.table.setSpan(r, 0, 1, 2)
+                self.table.setItem(r, self._RIGHT, self._cell(
+                    money_exact(amount), right=True, font=bold, color=color))
+                continue
+            _k, a, is_owed = row
+            st = self._statuses.get(a.id) or AccountStatus("")
+            shown = owed_amount(a) if is_owed else held_amount(a)
+            amount_color = (theme.RED if is_owed or shown < 0 else None)
+            status_color = theme.AMBER if st.level == "caution" else theme.MUTED
+            tip = _FIX_TIPS.get(st.fix or "", "")
+            vals = [
+                self._cell(a.name, enabled=True, tip=a.name),
+                self._cell(a.type.label, enabled=True),
+                self._cell(money_exact(shown), right=True, font=mono,
+                           color=amount_color, enabled=True),
+                self._cell(ago_text(st.age_days), enabled=True,
+                           tip=(st.anchor.isoformat() if st.anchor else None)),
+                self._cell(st.text, color=status_color, enabled=True,
+                           tip=(f"{st.text}. {tip}" if tip else st.text)),
+                self._cell(terms_text(a), enabled=True, tip=terms_text(a)),
+            ]
+            vals[0].setData(Qt.ItemDataRole.UserRole, a.id)
+            for c, it in enumerate(vals):
                 self.table.setItem(r, c, it)
+            if a.id == keep:
+                select_row = r
+        self.table.resizeRowsToContents()
+        if select_row >= 0:
+            self.table.selectRow(select_row)
+        self._on_selection()
+
+    @staticmethod
+    def _bold():
+        f = QFont()
+        f.setPixelSize(13)
+        f.setBold(True)
+        return f
+
+    # ---------------------------------------------------------------
+    def _selected_id(self) -> int | None:
+        """The account that is *visibly* selected, and nothing else.
+
+        This used to read the table's current row. The current row and the
+        selection are different things: after clicking away, or tabbing into the
+        table, a row can be current without being highlighted, so Delete could
+        prompt about an account that no longer looked chosen.
+        """
+        sel = self.table.selectionModel()
+        if sel is None:
+            return None
+        rows = sel.selectedRows()
+        if not rows:
+            return None
+        it = self.table.item(rows[0].row(), 0)
+        if it is None:
+            return None
+        return it.data(Qt.ItemDataRole.UserRole)
 
     def _selected(self) -> Account | None:
-        r = self.table.currentRow()
-        if r < 0:
-            return None
-        aid = self.table.item(r, 0).data(Qt.ItemDataRole.UserRole)
-        return self.store.account(aid)
+        aid = self._selected_id()
+        return self.store.account(aid) if aid is not None else None
 
+    def _select_id(self, account_id: int) -> None:
+        for r in range(self.table.rowCount()):
+            it = self.table.item(r, 0)
+            if it is not None and it.data(Qt.ItemDataRole.UserRole) == account_id:
+                self.table.selectRow(r)
+                self.table.scrollToItem(it)
+                return
+
+    def _set_primary(self, btn: QPushButton, on: bool) -> None:
+        btn.setObjectName("primary" if on else "")
+        btn.style().unpolish(btn)
+        btn.style().polish(btn)
+
+    def _on_selection(self) -> None:
+        a = self._selected()
+        self.sel_bar.setVisible(a is not None)
+        if a is None:
+            return
+        st = self._statuses.get(a.id) or AccountStatus("")
+        self.sel_name.setText(a.name)
+        self.sel_status.setText(st.text)
+        self.sel_status.setStyleSheet(
+            f"color: {theme.AMBER};" if st.level == "caution" else "")
+        self.fix_btn.setVisible(st.fix == "check")
+        self._set_primary(self.fix_btn, st.fix == "check")
+        self._set_primary(self.balance_btn, st.fix == "balance")
+        self._set_primary(self.csv_btn, st.fix == "import")
+        self.csv_btn.setText("Update from CSV…" if a.type.is_cashlike
+                             else "Import balance history…")
+        self.csv_btn.setToolTip(
+            "Import a newer CSV for this account. Cash accounts reuse their "
+            "saved column mapping; loans and investments open the "
+            "balance-history importer.")
+        self.act_snap.setVisible(not self._simple)
+
+    # ---------------------------------------------------------------
     def _add(self) -> None:
         dlg = AccountDialog(self)
-        if dlg.exec() == QDialog.DialogCode.Accepted:
-            self.store.add_account(dlg.get_account())
-            self.refresh()
-            self.main.refresh_header()
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        acct = dlg.get_account()
+        new_id = self.store.add_account(acct)
+        self.refresh()
+        self._select_id(new_id)
+        self.main.refresh_header()
+        nxt = (" Next: import its statement." if acct.type.is_cashlike else "")
+        self.main.status(f"Added {acct.name}.{nxt}")
 
     def _edit(self) -> None:
         a = self._selected()
@@ -880,14 +1301,36 @@ class AccountsPage(QWidget):
             self.refresh()
             self.main.refresh_header()
 
+    def _update_balance(self) -> None:
+        a = self._selected()
+        if not a:
+            return
+        dlg = UpdateBalanceDialog(a, self)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        balance, when = dlg.get_values()
+        a.balance, a.balance_date = balance, when
+        self.store.update_account(a)
+        self.refresh()
+        self.main.refresh_current()
+        self.main.status(f"Balance updated for {a.name}.")
+
     def _delete(self) -> None:
         a = self._selected()
         if not a:
             return
-        ok = QMessageBox.question(
-            self, "Delete account",
-            f"Delete “{a.name}” and all of its transactions and snapshots?")
-        if ok == QMessageBox.StandardButton.Yes:
+        n_tx = len(self.store.transactions(a.id))
+        n_snap = len(self.store.snapshots(a.id))
+        parts = []
+        if n_tx:
+            parts.append(f"{n_tx} imported transaction{'s' if n_tx != 1 else ''}")
+        if n_snap:
+            parts.append(f"{n_snap} balance snapshot{'s' if n_snap != 1 else ''}")
+        removes = ("the account" + (", its " + " and ".join(parts) if parts else ""))
+        if confirm(self, "Delete account",
+                   f"Delete “{a.name}”?\n\nThis removes {removes}. You can bring "
+                   f"it all back with Undo (Ctrl+Z).",
+                   yes_text="Delete account", no_text="Keep it"):
             self.store.delete_account(a.id)
             self.refresh()
             self.main.refresh_header()
@@ -895,8 +1338,6 @@ class AccountsPage(QWidget):
     def _update_csv(self) -> None:
         a = self._selected()
         if a is None:
-            QMessageBox.information(self, "Update from CSV",
-                                    "Select an account first.")
             return
         if not a.type.is_cashlike:
             # No saved mapping to reuse — a loan/investment import writes
@@ -906,12 +1347,10 @@ class AccountsPage(QWidget):
             self._import_history(a)
             return
         if self.store.get_import_mapping(a.id) is None:
-            QMessageBox.information(
-                self, "No saved setup yet",
-                f"“{a.name}” hasn't been imported before, so there's no saved "
-                f"column mapping to reuse. Do a first import via File → Import "
-                f"CSV; after that, Update will remember the setup.")
-            self.main.open_import()
+            # Never imported: go straight to the first-import dialog for this
+            # account instead of a message that sends the person somewhere else.
+            self.main.import_for_account(a)
+            self.refresh()
             return
         path, _ = QFileDialog.getOpenFileName(
             self, f"Newer CSV for {a.name}", "",
@@ -923,20 +1362,23 @@ class AccountsPage(QWidget):
                 added, skipped = reimport_with_saved_mapping(self.store, a.id, path)
                 n_rec = refresh_derived(self.store)
         except LookupError:
-            self.main.open_import()
+            self.main.import_for_account(a)
+            self.refresh()
             return
         except ValueError as e:
-            QMessageBox.warning(self, "Import problem", str(e))
+            QMessageBox.warning(self, "Nothing was imported",
+                                f"{e}\n\nYour data is unchanged.")
             return
         self.main.refresh_current()
         QMessageBox.information(
             self, "Update complete",
             f"Added {added} new transaction{'s' if added != 1 else ''} "
             f"({skipped} already-imported rows skipped). {n_rec} recurring "
-            f"patterns are tracked.")
+            f"pattern{'s' if n_rec != 1 else ''} tracked.")
 
     def _check_balances(self) -> None:
         BalanceCheckDialog(self.store, self).exec()
+        self.refresh()
 
     def _import_history(self, account: Account) -> None:
         dlg = SnapshotImportDialog(self.store, account, self)
@@ -946,35 +1388,11 @@ class AccountsPage(QWidget):
             self.main.status(f"History imported for {account.name}.")
 
     def _snapshot(self) -> None:
-        accounts = self.store.accounts()
-        if not accounts:
-            QMessageBox.information(self, "No accounts",
-                                    "Add an account first.")
-            return
         a = self._selected()
         if a is None:
-            a = self._pick_account(accounts)
-            if a is None:
-                return
+            return
         dlg = SnapshotManagerDialog(self.store, a, self)
         dlg.exec()
         self.refresh()
         self.main.status(f"Snapshots updated for {a.name}.")
         self.main.refresh_current()
-
-    def _pick_account(self, options: list[Account]) -> Account | None:
-        dlg = QDialog(self)
-        dlg.setWindowTitle("Choose account")
-        form = QFormLayout(dlg)
-        combo = QComboBox()
-        for a in options:
-            combo.addItem(f"{a.name}  ({a.type.label})", a.id)
-        form.addRow("Account", combo)
-        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok
-                              | QDialogButtonBox.StandardButton.Cancel)
-        bb.accepted.connect(dlg.accept)
-        bb.rejected.connect(dlg.reject)
-        form.addRow(bb)
-        if dlg.exec() == QDialog.DialogCode.Accepted:
-            return self.store.account(combo.currentData())
-        return None

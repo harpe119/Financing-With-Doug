@@ -19,7 +19,7 @@ from datetime import date
 import numpy as np
 import pandas as pd
 
-from .categorize import INCOME_CATEGORIES
+from .categorize import INCOME_CATEGORIES, personal_transactions
 from .models import Account, AccountType
 from .store import Store
 
@@ -358,10 +358,8 @@ def networth_history(store: Store) -> pd.DataFrame:
 
 
 def spending_frame(tx: pd.DataFrame) -> pd.DataFrame:
-    """Transactions relevant to income/spending stats (transfers removed)."""
-    if tx.empty:
-        return tx
-    return tx[tx["category"] != "Transfer"].copy()
+    """Personal income/spending, excluding transfers and reimbursable business."""
+    return personal_transactions(tx)
 
 
 def monthly_cashflow(tx: pd.DataFrame, months: int = 13) -> pd.DataFrame:
@@ -427,7 +425,9 @@ def headline_stats(store: Store) -> dict:
 
 
 def weekly_category_matrix(tx: pd.DataFrame, exclude_keys: set[str],
-                           max_weeks: int = 78) -> tuple[pd.DataFrame, pd.Series]:
+                           max_weeks: int | None = 78,
+                           start_date: date | None = None,
+                           end_date: date | None = None) -> tuple[pd.DataFrame, pd.Series]:
     """Build the empirical weekly behavior sample used by the forecaster.
 
     Returns (W, irregular_income):
@@ -440,17 +440,29 @@ def weekly_category_matrix(tx: pd.DataFrame, exclude_keys: set[str],
     df = spending_frame(tx)
     if df.empty:
         return pd.DataFrame(), pd.Series(dtype=float)
+    bounded = start_date is not None or end_date is not None
+    if bounded:
+        first = max(df["date"].min().date(), start_date or df["date"].min().date())
+        last = min(df["date"].max().date(), end_date or df["date"].max().date())
+        if first > last:
+            return pd.DataFrame(), pd.Series(dtype=float)
+        # Include quiet weeks, but never a partial week spanning the cut-off.
+        weeks = [w for w in pd.period_range(first, last, freq="W-SUN")
+                 if w.start_time.date() >= first and w.end_time.date() <= last]
+        df = df[(df["date"] >= pd.Timestamp(first)) &
+                (df["date"] <= pd.Timestamp(last))]
     df["norm_key"] = [
         f"{normalize_desc(d)}|{'+' if a > 0 else '-'}"
         for d, a in zip(df["description"], df["amount"])
     ]
     df = df[~df["norm_key"].isin(exclude_keys)]
-    if df.empty:
+    if df.empty and not bounded:
         return pd.DataFrame(), pd.Series(dtype=float)
     df["week"] = df["date"].dt.to_period("W-SUN")
-    weeks = sorted(df["week"].unique())
-    if len(weeks) > 2:
-        weeks = weeks[1:-1]           # drop partial edge weeks
+    if not bounded:
+        weeks = sorted(df["week"].unique())
+        if len(weeks) > 2:
+            weeks = weeks[1:-1]           # drop partial edge weeks
     df = df[df["week"].isin(weeks)]
     spend = df[df["amount"] < 0]
     W = spend.pivot_table(index="week", columns="category", values="amount",
@@ -458,7 +470,7 @@ def weekly_category_matrix(tx: pd.DataFrame, exclude_keys: set[str],
     W = W.reindex(weeks, fill_value=0.0)
     inc = df[df["amount"] > 0].groupby("week")["amount"].sum()
     inc = inc.reindex(weeks, fill_value=0.0)
-    if len(W) > max_weeks:
+    if max_weeks is not None and len(W) > max_weeks:
         W = W.tail(max_weeks)
         inc = inc.tail(max_weeks)
     return W, inc

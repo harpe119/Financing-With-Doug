@@ -37,8 +37,9 @@ import pandas as pd
 
 from .categorize import categorize
 from .history import networth_history, weekly_category_matrix
+from .forecast_history import ForecastHistory, SETTING as HISTORY_SETTING
 from .models import Account, AccountType, Goal, RecurringItem, Scenario
-from .recurrence import detect, occurrences
+from .recurrence import detect, occurrences, personal_recurring
 from .store import Store
 from .util import add_months, clamp_day, month_firsts_between
 
@@ -84,6 +85,14 @@ class ForecastResult:
     as_of: date | None = None               # None = projected from today
     # How bad the dips actually are, as opposed to how often they happen.
     shortfall: "Shortfall | None" = None
+    history_weeks: int = 0
+    history_first: date | None = None
+    history_last: date | None = None
+    recurring_refitted: bool = False
+    # Unscaled monthly inputs for explaining scenario sliders. They use the
+    # same schedules and week weights as this run, before slider multipliers.
+    monthly_income_reference: float = 0.0
+    monthly_spending_reference: dict[str, float] = field(default_factory=dict)
 
 
 def token_set(s: str) -> set[str]:
@@ -455,7 +464,8 @@ def run_forecast(store: Store, horizon_days: int, n_paths: int,
                  essential_monthly: float | None = None,
                  as_of: date | None = None,
                  recurring_override: list[RecurringItem] | None = None,
-                 dof: float = T_DOF) -> ForecastResult:
+                 dof: float = T_DOF,
+                 history: ForecastHistory | None = None) -> ForecastResult:
     """Project cash and net worth.
 
     ``emergency_target`` is the months-of-essentials cash buffer to score paths
@@ -466,10 +476,16 @@ def run_forecast(store: Store, horizon_days: int, n_paths: int,
     existed then — the machinery behind the backtest. ``recurring_override``
     supplies patterns re-detected as of that date, so the projection doesn't
     quietly benefit from knowing how the patterns turned out.
+
+    ``history`` overrides the database's saved history selection for this run.
+    A short selection never falls back to older weeks.
     """
     scenario = scenario or Scenario()
     warnings: list[str] = []
     today = as_of or date.today()
+    history = history or ForecastHistory.from_setting(store.get_setting(HISTORY_SETTING))
+    ledger = store.transactions()
+    tx = history.transactions(ledger, today)
     H = int(horizon_days)
     n = H + 1                                  # index 0 = today
     dates = [today + timedelta(days=i) for i in range(n)]
@@ -492,6 +508,10 @@ def run_forecast(store: Store, horizon_days: int, n_paths: int,
 
     all_items = (recurring_override if recurring_override is not None
                  else store.recurring())
+    all_items = personal_recurring(ledger, all_items, as_of=today)
+    known_keys = {it.key for it in all_items}
+    all_items, history_warnings = history.patterns(tx, all_items, today)
+    warnings.extend(history_warnings)
     items = [it for it in all_items if it.active and it.kind != "ignore"]
     loan_accounts = {a.id: a for a in accounts if a.type == AccountType.LOAN}
     linked_payments: dict[int, RecurringItem] = {}
@@ -507,7 +527,7 @@ def run_forecast(store: Store, horizon_days: int, n_paths: int,
             warnings.append(
                 f"“{it.name}” looks like a loan payment but isn't linked to a "
                 f"loan account, so it was left out of the cash projection to "
-                f"avoid counting it twice. Link it on the Recurring page."
+                f"avoid counting it twice. Link it under Bills & payday → Recurring patterns."
             )
         else:
             flow_items.append(it)
@@ -528,6 +548,14 @@ def run_forecast(store: Store, horizon_days: int, n_paths: int,
              categorize(it.name, it.amount), 1.0)) * (30.44 / _cad_days(it))
         for it in flow_items
     )
+    monthly_income_reference = sum(
+        it.amount * (30.44 / _cad_days(it)) for it in flow_items if it.kind == "income")
+    monthly_spending_reference: dict[str, float] = {}
+    for it in flow_items:
+        if it.kind != "income" and it.amount < 0:
+            cat = categorize(it.name, it.amount)
+            monthly_spending_reference[cat] = (monthly_spending_reference.get(cat, 0.0)
+                                             - it.amount * (30.44 / _cad_days(it)))
 
     # ---- 2. loans -------------------------------------------------------
     loan_daily_total = np.zeros(n)
@@ -655,15 +683,17 @@ def run_forecast(store: Store, horizon_days: int, n_paths: int,
                         "it was ignored.")
 
     # ---- 4. discretionary behavior (bootstrap) --------------------------
-    tx = store.transactions()
-    if as_of is not None:
-        tx = tx[tx["date"] <= pd.Timestamp(as_of)]
     # Every *known* pattern is withheld from the behavioral sample, not just the
     # active ones. Excluding only active items meant deactivating a pattern (or
     # marking it 'ignore') quietly readmitted its history as variable spending,
     # so the control had almost no effect on the forecast.
-    exclude = {it.key for it in all_items}
-    W, irr_inc = weekly_category_matrix(tx, exclude_keys=exclude)
+    exclude = known_keys | {it.key for it in all_items}
+    W, irr_inc = weekly_category_matrix(
+        tx, exclude_keys=exclude,
+        max_weeks=78 if history.mode == "auto" else None,
+        start_date=history.start(today),
+        end_date=today if history.mode != "auto" else None,
+    )
     n_weeks = int(np.ceil(H / 7))
     if len(W) >= 4:
         cats = list(W.columns)
@@ -680,6 +710,10 @@ def run_forecast(store: Store, horizon_days: int, n_paths: int,
         # the same way, with the same half-life.
         obs_net = Iv - Wv @ mvec
         wts = _behaviour_weights(obs_net, seed=seed)
+        monthly_income_reference += float(np.dot(wts, irr_inc.values)) * (30.44 / 7)
+        for cat, amount in zip(cats, wts @ Wv):
+            monthly_spending_reference[cat] = (monthly_spending_reference.get(cat, 0.0)
+                                             + float(amount) * (30.44 / 7))
         pick = rng.choice(len(W), size=(n_paths, n_weeks), p=wts)
         net_w = Iv[pick] - Wv[pick] @ mvec                     # (paths, weeks)
         # Parameter uncertainty, not just sampling noise. Resampling weeks
@@ -710,9 +744,10 @@ def run_forecast(store: Store, horizon_days: int, n_paths: int,
     else:
         disc_paths = np.zeros((n_paths, n - 1))
         disc_det = np.zeros(n - 1)
-        if not tx.empty:
-            warnings.append("Under 4 complete weeks of history — variable "
-                            "day-to-day spending is not modeled yet.")
+        if not tx.empty or history.mode != "auto":
+            warnings.append("Under 4 complete weeks in the selected history — "
+                            "variable day-to-day spending is not modeled. "
+                            "Choose a longer period or import more recent data.")
 
     # ---- 5. assemble cash and net worth ---------------------------------
     cash_det = cash0 + np.concatenate(([0.0], np.cumsum(base_flow[1:] + disc_det)))
@@ -779,6 +814,12 @@ def run_forecast(store: Store, horizon_days: int, n_paths: int,
         cash_breach=cash_breach, min_cash_pct=min_cash_pct,
         first_breach_day=first_breach_day, runway_months=runway, as_of=as_of,
         shortfall=shortfall,
+        history_weeks=len(W),
+        history_first=W.index[0].start_time.date() if len(W) else None,
+        history_last=W.index[-1].end_time.date() if len(W) else None,
+        recurring_refitted=history.refit_recurring,
+        monthly_income_reference=monthly_income_reference,
+        monthly_spending_reference=monthly_spending_reference,
     )
 
 
@@ -841,16 +882,20 @@ def scheduled_flows(store: Store, start: date, end: date,
     accounts = store.accounts()
     loans = {a.id: a for a in accounts if a.type == AccountType.LOAN}
     out: list[ScheduledFlow] = []
+    history = ForecastHistory.from_setting(store.get_setting(HISTORY_SETTING))
+    ledger = store.transactions()
+    patterns = personal_recurring(ledger, store.recurring())
+    patterns, _ = history.patterns(ledger, patterns, date.today())
 
     # Only *active* patterns count as covering a loan, exactly as the
     # projection decides it. Deactivating a detected payment does not stop the
     # loan being amortised — the engine falls back to the account's own
     # monthly_payment — so treating the account as covered here dropped the
     # largest fixed outflow of the month out of the attribution list.
-    linked = {it.linked_account_id for it in store.recurring()
+    linked = {it.linked_account_id for it in patterns
               if it.kind == "loan_payment" and it.active
               and it.linked_account_id is not None}
-    for it in store.recurring():
+    for it in patterns:
         if not it.active or it.kind == "ignore":
             continue
         if it.kind == "loan_payment" and it.linked_account_id not in loans:
@@ -1070,8 +1115,17 @@ def backtest_cash(store: Store, lookback_days: int = 365,
 
     tx = store.transactions()
     past = tx[tx["date"] <= pd.Timestamp(as_of)]
-    if len(past) < 30:
+    history = ForecastHistory.from_setting(store.get_setting(HISTORY_SETTING))
+    selected = history.transactions(past, as_of)
+    if history.start(as_of):
+        train_days = min(train_days, (as_of - history.start(as_of)).days)
+    if train_days < 45:
         return None
+    if len(selected) < 30:
+        return None
+    # Learn known keys from the full past. run_forecast applies an optional
+    # refit to the selected period, while still withholding absent known
+    # schedules from its random sample. No future transactions enter either.
     items = detect(past)
 
     H = int(horizon_days or lookback_days)

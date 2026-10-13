@@ -9,6 +9,17 @@ available, so it's worth keeping them readable.
 
 ---
 
+## 1.20.0 — clearer forecasts and spending you can trace
+
+- **Two silent explanation videos.** The Forecast video shows how your recorded spending weeks build possible futures. Progress has a separate video showing how saved forecasts compare with later balances and how weekly spending changes are measured. Both use the program's calculations with fictional example data.
+- **See what makes up your spending.** On Dashboard → Spending, open How this works to expand Income, Necessities, Wants, Giving, and Unknown into categories and individual transactions. Dates, refunds, month weights, and each transaction's contribution explain the monthly totals.
+- **Choose the history that fits your life now.** Advanced Forecast controls let you select how far back the simulation samples spending weeks. After a new job or move, you can also re-estimate regular income and bills from that period.
+- **Separate reimbursable business spending.** Business (reimbursable) purchases are excluded from personal spending, scores, and behavioral predictions. A reimbursement marked inside a paycheck is excluded from personal income.
+- **Clearer everyday controls.** Transactions and Forecast have improved layouts, readable amounts, and controls that fit smaller windows. Forecast shows the cash verdict and the dollar effect of spending changes, with guidance for first-time setup and clearer recovery when a calculation fails.
+- **More transparent goals and accounts.** Goals explains the calculation behind Spare /mo. Account views show balances, terms, and the dates behind them more clearly.
+
+Financial records remain stored separately from the program. Forecasts are estimates from recorded history; a wider or narrower band does not establish prediction accuracy.
+
 ## 1.18.2 — easier to find things
 
 - **"Check for updates" is now a button along the top of the window**, next to

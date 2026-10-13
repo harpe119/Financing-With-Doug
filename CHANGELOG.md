@@ -6,6 +6,29 @@ intended to hand to someone else. The running version is shown in the app
 header and under **Help → About**, so a downloaded copy always identifies
 itself.
 
+## 1.20.0 — forecast explanations, history controls, and spending evidence
+
+- Bundle silent Manim Forecast and Progress videos, generated from seeded,
+  fictional examples using the application engine. Include both in the Windows
+  installer and open them through the system video player.
+- Trace recency-weighted monthly spending to categories and individual ledger
+  entries in the Spending help window. Share month selection and grouping with
+  the score; preserve signed refunds, group-level zero floors, original bank
+  amounts, and reimbursement exclusions.
+- Add saved forecast history selection and optional re-estimation of recurring
+  patterns from the chosen period. Keep scenario and analysis inputs aligned.
+- Exclude reimbursable business purchases and marked paycheck reimbursements
+  from personal analytics while retaining the original bank ledger.
+- Correct and explain goal surplus calculations using complete-month income,
+  categorized spending, giving, and debt-payment inputs.
+- Improve Transactions, Accounts, Dashboard, and Forecast layouts, responsive
+  controls, labels, and first-run guidance. Keep the cash verdict visible and
+  show scenario adjustments in dollars.
+- Harden event validation, atomic undo, database switching, and forecast failure
+  recovery. Correct video playback from the Forecast setup screen.
+- Add independent arithmetic, history-selection, business reimbursement, account
+  presentation, and desktop workflow regressions.
+
 ## 1.19.0 — simpler workflows and visible data-quality checks
 
 - Show a data-quality check beside the forecast, including in Simple view.

@@ -17,7 +17,9 @@ Python ≥ 3.10, PyQt6 and pyqtgraph. Your data lives at
 file — which is the safe way to poke at something without touching a real
 ledger.
 
-Run the test suite with `python tests/test_core.py`. It exercises ingestion and
+Run the test suite with `python tests/test_core.py`. It includes history-window
+and schedule-refit regressions in `tests/test_forecast_history.py`, including
+calendar boundaries and backtest cut-offs. It exercises ingestion and
 dedup, transfer pairing, recurrence detection, history reconstruction, forecast
 invariants and the UI, including `tests/test_usability.py`'s backup and workflow
 regressions. Run those focused checks separately with
@@ -26,6 +28,9 @@ Categorization-specific regressions are in `tests/test_categories.py` and also
 run as part of the core suite. Run them with `python tests/test_categories.py`.
 The hand-labeled synthetic cases are defect checks, not a measured accuracy
 rate for real bank exports.
+`tests/test_personal_finances.py` checks weighted spare-money arithmetic,
+business exclusions, paycheck reimbursement splits, old recurring schedules,
+and reimbursement persistence, backups and undo. It also runs in the core suite.
 Data-quality regressions are in `tests/test_data_quality.py`, also included
 in the core suite. They cover freshness boundaries, snapshots, per-account
 history gaps, category amounts, schedule assignment and read-only behavior.
@@ -133,6 +138,7 @@ packaging/build.ps1       test → PyInstaller → Inno Setup → checksums
 packaging/doug.spec       the PyInstaller bundle
 packaging/installer.iss   the per-user Windows installer
 assets/                   bundled explainer video (opened in the system player)
+scripts/video/            reproducible Manim scenes, synthetic example and renderer
 scripts/generate_sample_data.py   seeded synthetic bank exports
 sample_data/              bundled demo CSVs + meta.json
 tests/test_core.py        core-logic test suite
@@ -140,6 +146,10 @@ tests/test_usability.py   SQLite backup and desktop workflow regressions
 tests/test_categories.py  categorization safety regressions
 tests/test_data_quality.py  forecast evidence-check regressions
 ```
+
+The [forecast video guide](forecast-video.md) covers the visual animation,
+rendering, chapter markers and the fictional inputs used by both the Forecast
+and Progress explainers.
 
 ## Adding screenshots to the README
 

@@ -134,9 +134,9 @@ class DataQualityTests(unittest.TestCase):
         self.transactions(inv, [self.today], amount=-1000, category="Misc")
         check = self.check("categories")
         self.assertTrue(check.needs_review)
-        self.assertIn("last 180 days: 2", check.detail)
-        self.assertIn("$25.00 of outflows (25.0%", check.detail)
-        self.assertIn("$20.00 of inflows", check.detail)
+        self.assertIn("no category: 2", check.detail)
+        self.assertIn("$25.00 of money out (25.0%", check.detail)
+        self.assertIn("$20.00 of money in", check.detail)
         self.assertIn("not omitted from the forecast", check.detail)
 
     def test_correcting_a_category_removes_the_flag_without_cached_state(self):
@@ -150,7 +150,7 @@ class DataQualityTests(unittest.TestCase):
         aid = self.account()
         self.transactions(aid, [self.today], amount=20, category="Other income")
         detail = self.check("categories").detail
-        self.assertIn("$0.00 of outflows", detail)
+        self.assertIn("$0.00 of money out", detail)
         self.assertNotIn("nan", detail)
 
     def test_unassigned_calendar_outflows_include_events_but_not_income(self):
@@ -162,7 +162,7 @@ class DataQualityTests(unittest.TestCase):
         ignored = self.store.add_event(OneOffEvent("Inactive", self.today + timedelta(days=1), -300))
         self.store.update_event(ignored, active=False)
         check = self.check("unassigned")
-        self.assertIn("account: 1, totaling $100 between", check.detail)
+        self.assertIn("to pay from: 1, totaling $100 between", check.detail)
         self.assertIn("not the calendar's account-specific balances", check.detail)
 
     def test_confirmed_recurring_payment_is_not_unassigned(self):

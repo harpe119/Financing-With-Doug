@@ -31,7 +31,7 @@ from typing import Protocol, runtime_checkable
 
 import pandas as pd
 
-from .categorize import categorize
+from .categorize import BUSINESS_CATEGORY, categorize
 from .recurrence import normalize_desc
 
 
@@ -67,7 +67,8 @@ class LearnedRules:
 
     @classmethod
     def from_store(cls, store) -> "LearnedRules":
-        return cls(table=store.learned_categories())
+        return cls(table={k: v for k, v in store.learned_categories().items()
+                          if v != BUSINESS_CATEGORY})
 
     def predict(self, description: str, amount: float) -> str | None:
         return self.table.get(feedback_key(description, amount))
@@ -140,11 +141,13 @@ def record_corrections(store, tx_rows: pd.DataFrame, new_category: str,
     ``tx_rows`` is a slice of the transactions frame (needs description,
     amount, category, account_id).
     """
-    if tx_rows is None or tx_rows.empty:
+    if tx_rows is None or tx_rows.empty or new_category == BUSINESS_CATEGORY:
         return 0
     account_types = account_types or {}
     records = []
     for _, r in tx_rows.iterrows():
+        if r.get("category") == BUSINESS_CATEGORY:
+            continue
         desc, amt = str(r["description"]), float(r["amount"])
         records.append({
             "norm_key": feedback_key(desc, amt),
@@ -172,6 +175,7 @@ def training_frame(store) -> pd.DataFrame:
                                      "abs_amount", "is_inflow", "account_type",
                                      "label"])
     df = df.drop_duplicates(subset=["norm_key"], keep="last").copy()
+    df = df[df["new_category"] != BUSINESS_CATEGORY]
     df["abs_amount"] = df["amount"].abs()
     # Older review-queue feedback wrote every representative amount negative,
     # even when its identity ended in |+. Keep the stored audit history intact
@@ -374,7 +378,7 @@ class NearestMerchant:
         direction = "+" if amount is not None and amount > 0 else "-"
         scores: dict[str, tuple[float, str]] = {}
         for i, (desc, cat) in enumerate(self.labelled):
-            if cat == "Transfer":
+            if cat in {"Transfer", BUSINESS_CATEGORY}:
                 continue
             if amount is not None and self.signs is not None and self.signs[i] != direction:
                 continue
@@ -508,14 +512,15 @@ def label_cluster(store, cluster: MerchantCluster, category: str) -> int:
     # so they are one step to undo.
     with store.undo_group(f"Label {cluster.display} as {category}"):
         store.set_category(matching, category)
-        store.add_category_feedback([{
-            "norm_key": cluster.norm_key,
-            "description": cluster.display,
-            "amount": (1 if is_inflow else -1) * abs(cluster.total / max(cluster.n_tx, 1)),
-            "old_category": "Other income" if is_inflow else "Misc",
-            "new_category": category,
-            "source": "review-queue",
-        }])
+        if category != BUSINESS_CATEGORY:
+            store.add_category_feedback([{
+                "norm_key": cluster.norm_key,
+                "description": cluster.display,
+                "amount": (1 if is_inflow else -1) * abs(cluster.total / max(cluster.n_tx, 1)),
+                "old_category": "Other income" if is_inflow else "Misc",
+                "new_category": category,
+                "source": "review-queue",
+            }])
     return len(matching)
 
 

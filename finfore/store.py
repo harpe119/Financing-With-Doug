@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import functools
 import json
+import math
 import os
 import sqlite3
 import tempfile
@@ -110,6 +111,10 @@ CREATE TABLE IF NOT EXISTS transactions (
     import_hash TEXT NOT NULL UNIQUE
 );
 CREATE INDEX IF NOT EXISTS idx_tx_date ON transactions(date);
+CREATE TABLE IF NOT EXISTS business_reimbursements (
+    transaction_id INTEGER PRIMARY KEY REFERENCES transactions(id) ON DELETE CASCADE,
+    amount REAL NOT NULL CHECK(amount >= 0)
+);
 CREATE TABLE IF NOT EXISTS recurring (
     id INTEGER PRIMARY KEY,
     key TEXT NOT NULL UNIQUE,
@@ -493,11 +498,13 @@ class Store:
         return added, len(df) - added
 
     def transactions(self, account_id: int | None = None) -> pd.DataFrame:
-        q = ("SELECT id, account_id, date, description, amount, category "
-             "FROM transactions")
+        q = ("SELECT t.id, t.account_id, t.date, t.description, t.amount, t.category, "
+             "COALESCE(b.amount, 0.0) AS business_reimbursement "
+             "FROM transactions t LEFT JOIN business_reimbursements b "
+             "ON b.transaction_id=t.id")
         params: tuple = ()
         if account_id is not None:
-            q += " WHERE account_id=?"
+            q += " WHERE t.account_id=?"
             params = (account_id,)
         q += " ORDER BY date"
         df = pd.read_sql_query(q, self.con, params=params)
@@ -506,7 +513,35 @@ class Store:
         # format makes pandas give up on inference and hand back NaT (or plain
         # strings), which then blows up every consumer that calls .strftime().
         df["date"] = pd.to_datetime(df["date"], format="ISO8601", errors="coerce")
-        return _numeric(df, id="int64", account_id="int64", amount="float64")
+        return _numeric(df, id="int64", account_id="int64", amount="float64",
+                        business_reimbursement="float64")
+
+    @undoable("Set paycheck reimbursement")
+    def set_business_reimbursement(self, transaction_id: int, amount: float) -> None:
+        """Mark a pass-through part of a deposit; never alter its bank amount."""
+        from .categorize import PERSONAL_EXCLUSIONS
+        row = self.con.execute("SELECT amount, category FROM transactions WHERE id=?",
+                               (transaction_id,)).fetchone()
+        try:
+            value = float(amount)
+        except (ValueError, TypeError) as e:
+            raise ValueError("Enter a valid reimbursement amount.") from e
+        if not math.isfinite(value) or value < 0:
+            raise ValueError("Enter a finite, non-negative reimbursement amount.")
+        value = round(value, 2)
+        if row is None or row["amount"] <= 0 or row["category"] in PERSONAL_EXCLUSIONS:
+            raise ValueError("Select a personal income deposit to separate its reimbursement.")
+        if not 0 <= value <= round(float(row["amount"]), 2):
+            raise ValueError("Reimbursement must be between zero and the deposit amount.")
+        if value == 0:
+            self.con.execute("DELETE FROM business_reimbursements WHERE transaction_id=?",
+                             (transaction_id,))
+        else:
+            self.con.execute(
+                "INSERT INTO business_reimbursements(transaction_id, amount) VALUES (?,?) "
+                "ON CONFLICT(transaction_id) DO UPDATE SET amount=excluded.amount",
+                (transaction_id, value))
+        self.con.commit()
 
     # ---------------- removing rows ----------------
     def suppressed_hashes(self) -> set[str]:
@@ -691,12 +726,21 @@ class Store:
 
     @undoable("Add one-off event")
     def add_event(self, e: OneOffEvent) -> int:
-        cur = self.con.execute(
-            "INSERT INTO events (label, when_date, amount, active) VALUES (?,?,?,?)",
-            (e.label, e.when.isoformat(), float(e.amount), int(e.active)))
-        self.con.commit()
-        e.id = cur.lastrowid
-        return e.id
+        return self.add_events([e])[0]
+
+    @undoable("Add one-off events")
+    def add_events(self, events: list[OneOffEvent]) -> list[int]:
+        """Save related events together; a failed insert leaves none behind."""
+        ids = []
+        with self.con:
+            for e in events:
+                cur = self.con.execute(
+                    "INSERT INTO events (label, when_date, amount, active) VALUES (?,?,?,?)",
+                    (e.label, e.when.isoformat(), float(e.amount), int(e.active)))
+                ids.append(cur.lastrowid)
+        for e, event_id in zip(events, ids):
+            e.id = event_id
+        return ids
 
     @undoable("Edit one-off event")
     def update_event(self, event_id: int, **fields) -> None:
@@ -713,13 +757,13 @@ class Store:
         if not sets:
             return
         vals.append(event_id)
-        self.con.execute(f"UPDATE events SET {', '.join(sets)} WHERE id=?", vals)
-        self.con.commit()
+        with self.con:
+            self.con.execute(f"UPDATE events SET {', '.join(sets)} WHERE id=?", vals)
 
     @undoable("Delete one-off event")
     def delete_event(self, event_id: int) -> None:
-        self.con.execute("DELETE FROM events WHERE id=?", (event_id,))
-        self.con.commit()
+        with self.con:
+            self.con.execute("DELETE FROM events WHERE id=?", (event_id,))
 
     @undoable("Add goal")
     def add_goal(self, g: Goal) -> int:
@@ -847,12 +891,12 @@ class Store:
     # ---------------- misc ----------------
     @undoable("Change a setting")
     def set_setting(self, key: str, value) -> None:
-        self.con.execute(
-            "INSERT INTO settings (key, value) VALUES (?,?) "
-            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-            (key, json.dumps(value)),
-        )
-        self.con.commit()
+        with self.con:
+            self.con.execute(
+                "INSERT INTO settings (key, value) VALUES (?,?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (key, json.dumps(value)),
+            )
 
     def get_setting(self, key: str, default=None):
         r = self.con.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
@@ -860,7 +904,7 @@ class Store:
 
     @undoable("Reset all data")
     def clear_all(self) -> None:
-        for t in ("snapshots", "transactions", "recurring", "goals", "accounts",
+        for t in ("snapshots", "business_reimbursements", "transactions", "recurring", "goals", "accounts",
                   "settings", "category_feedback", "events", "checkpoints",
                   "suppressed"):
             self.con.execute(f"DELETE FROM {t}")

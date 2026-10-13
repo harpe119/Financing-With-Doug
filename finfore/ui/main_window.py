@@ -59,7 +59,7 @@ class MainWindow(QMainWindow):
         self.real_db_path = Path(real_db_path or store.path)
         self.demo_key: str | None = None
         self.setWindowTitle("Financing with Doug")
-        self.resize(1280, 850)
+        self.resize(1280, 900)
         # An explicit minimum takes precedence over minimumSizeHint, which is
         # what was forcing the window open to ~2100x1200: a QStackedWidget
         # adopts the largest size hint among its pages, and the charts and
@@ -74,8 +74,12 @@ class MainWindow(QMainWindow):
         outer.setSpacing(0)
 
         header = QWidget()
-        header.setStyleSheet(f"background: {theme.BG_DARKER};"
-                             f"border-bottom: 1px solid {theme.BORDER};")
+        # Scoped to the header widget itself. An unscoped rule cascades to every
+        # label inside it, which drew a rule under the title, the version and
+        # the tagline.
+        header.setObjectName("header")
+        header.setStyleSheet(f"QWidget#header {{ background: {theme.BG_DARKER};"
+                             f" border-bottom: 1px solid {theme.BORDER}; }}")
         hl = QHBoxLayout(header)
         hl.setContentsMargins(18, 10, 18, 10)
         title = QLabel("Financing with Doug")
@@ -429,6 +433,12 @@ class MainWindow(QMainWindow):
                     f"{'Ctrl+Shift+Z puts it back.' if direction == 'undo' else ''}")
 
     # ---------------------------------------------------------------
+    def open_account(self) -> None:
+        """Create an account through the existing editor, then update the active page."""
+        row, _ = self._destinations["Accounts"]
+        self.sections[row]._add()
+        self.refresh_current()
+
     def open_import(self) -> None:
         """Single import entry point for every account type.
 

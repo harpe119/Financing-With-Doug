@@ -1,0 +1,5 @@
+# Rendering tools only; the desktop application does not need Manim.
+manim==0.19.0
+numpy==2.5.4
+pandas==3.0.6
+imageio-ffmpeg==0.6.0

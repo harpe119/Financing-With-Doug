@@ -11,7 +11,7 @@ from datetime import date
 import numpy as np
 import pandas as pd
 import pyqtgraph as pg
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import QEvent, QObject, Qt
 from PyQt6.QtGui import QFont
 
 from . import theme
@@ -28,19 +28,7 @@ def to_ts(dates) -> np.ndarray:
 
 class MoneyAxis(pg.AxisItem):
     def tickStrings(self, values, scale, spacing):
-        out = []
-        for v in values:
-            av = abs(v)
-            if av >= 1_000_000:
-                s = f"${v / 1_000_000:.1f}M"
-            elif av >= 10_000:
-                s = f"${v / 1000:.0f}k"
-            elif av >= 1000:
-                s = f"${v / 1000:.1f}k"
-            else:
-                s = f"${v:.0f}"
-            out.append(s)
-        return out
+        return [_short(v) for v in values]
 
 
 def new_plot(date_axis: bool = True, money_left: bool = True,
@@ -53,19 +41,19 @@ def new_plot(date_axis: bool = True, money_left: bool = True,
     if money_left:
         axes["left"] = MoneyAxis(orientation="left")
     w = pg.PlotWidget(axisItems=axes)
-    w.showGrid(x=True, y=True, alpha=0.12)
+    w.showGrid(x=True, y=True, alpha=0.16)
     w.getPlotItem().hideButtons()
     w.getPlotItem().setMenuEnabled(False)
     w.getViewBox().setMouseMode(pg.ViewBox.PanMode)
     tick_font = QFont()
-    tick_font.setPointSize(8)
+    tick_font.setPointSize(9)
     for side in ("left", "bottom"):
         ax = w.getAxis(side)
         ax.setTickFont(tick_font)
         ax.setPen(pg.mkPen(theme.BORDER))
         ax.setTextPen(pg.mkPen(theme.MUTED))
     if legend:
-        lg = w.addLegend(offset=(8, 4), labelTextSize="8pt")
+        lg = w.addLegend(offset=(8, 4), labelTextSize="9pt")
         lg.setBrush(pg.mkBrush(theme.qcolor(theme.SURFACE, 210)))
         lg.setPen(pg.mkPen(theme.BORDER))
     return w
@@ -249,8 +237,56 @@ def lock_view(plot: pg.PlotWidget, x_min: float, x_max: float, y_series,
         yMin=None, yMax=None, minYRange=None, maxYRange=None,
     )
     _install_home(plot, (view_x_lo, frame_x_hi), (view_y_lo, view_y_hi))
+    vb._window_ctx = {"x_lo": x_lo, "x_hi": frame_x_hi, "y_series": y_series,
+                      "x_data": x_data, "include_y": include_y, "pad_y": pad_y,
+                      "zoom_y": zoom_y}
     vb.setRange(xRange=(view_x_lo, frame_x_hi), yRange=(view_y_lo, view_y_hi),
                 padding=0)
+
+
+def reframe(plot: pg.PlotWidget, y_series, include_y, days: float | None) -> None:
+    """Refit a locked date chart's vertical range to the series being shown.
+
+    The opening frame is computed from every layer, so a deep debt line or a
+    far-off reference floor stretches the axis and flattens the series people
+    actually read for trends. When a layer is hidden the frame should follow
+    the layers that are left, which is what this does.
+    """
+    ctx = getattr(plot.getViewBox(), "_window_ctx", None)
+    if not ctx:
+        return
+    ctx["y_series"] = y_series
+    ctx["include_y"] = include_y
+    show_window(plot, days)
+
+
+def show_window(plot: pg.PlotWidget, days: float | None) -> None:
+    """Reframe a locked date chart on its trailing ``days`` (None = all of it).
+
+    This is what the 3 months / 1 year / All buttons call. The y-range is
+    refitted to the points that are actually in the window, so a short window
+    on a long ledger shows its own detail instead of a flat line squeezed into
+    the scale of three years.
+    """
+    vb = plot.getViewBox()
+    ctx = getattr(vb, "_window_ctx", None)
+    if not ctx:
+        return
+    x_lo, x_hi = ctx["x_lo"], ctx["x_hi"]
+    view_lo = x_lo if not days else max(x_lo, x_hi - float(days) * DAY)
+    frac = min(1.0, (x_hi - view_lo) / max(x_hi - x_lo, DAY))
+    y_lo = y_hi = None
+    if ctx["zoom_y"]:
+        tail = _tail(ctx["y_series"], ctx["x_data"], frac)
+        if tail.size:
+            y_lo, y_hi = _y_bounds(tail, ctx["include_y"], ctx["pad_y"])
+    if y_lo is None or y_hi - y_lo < 1.0:
+        data = _finite(ctx["y_series"])
+        if data.size == 0:
+            return
+        y_lo, y_hi = _y_bounds(data, ctx["include_y"], ctx["pad_y"])
+    vb._home_range = ((view_lo, x_hi), (y_lo, y_hi))
+    vb.setRange(xRange=(view_lo, x_hi), yRange=(y_lo, y_hi), padding=0)
 
 
 def _install_home(plot: pg.PlotWidget, x_range, y_range) -> None:
@@ -313,8 +349,11 @@ def nums(a) -> np.ndarray:
 
 
 def line(plot: pg.PlotWidget, x, y, color: str, width: float = 2.0,
-         name: str | None = None, dashed: bool = False):
-    style = Qt.PenStyle.DashLine if dashed else Qt.PenStyle.SolidLine
+         name: str | None = None, dashed: bool | str = False):
+    """A line series. ``dashed`` may be True (dashes) or "dot" (dots), so two
+    series of similar hue can still be told apart without relying on colour."""
+    style = (Qt.PenStyle.DotLine if dashed == "dot" else
+             Qt.PenStyle.DashLine if dashed else Qt.PenStyle.SolidLine)
     pen = pg.mkPen(color, width=width, style=style)
     return plot.plot(nums(x), nums(y), pen=pen, name=name)
 
@@ -360,6 +399,21 @@ def today_line(plot: pg.PlotWidget, when: date | None = None):
     return ln
 
 
+def data_end_line(plot: pg.PlotWidget, when: date, text: str = "last transaction"):
+    """Where the imported data stops, so a flat run after it reads as 'no data
+    yet' rather than 'nothing happened'."""
+    ln = pg.InfiniteLine(
+        pos=to_ts([when])[0], angle=90,
+        pen=pg.mkPen(theme.AMBER, width=1, style=Qt.PenStyle.DotLine),
+        label=text, labelOpts={"color": theme.AMBER, "position": 0.14,
+                               "fill": theme.qcolor(theme.BG, 200),
+                               "anchors": [(1.0, 1.0), (1.0, 1.0)]},
+    )
+    ln.setZValue(3)
+    plot.addItem(ln)
+    return ln
+
+
 def target_line(plot: pg.PlotWidget, value: float, text: str):
     ln = pg.InfiniteLine(
         pos=value, angle=0,
@@ -398,11 +452,139 @@ def category_bars(plot: pg.PlotWidget, names: list[str], values: np.ndarray) -> 
     plot.setMouseEnabled(x=False, y=False)
 
 
+def on_bar_click(plot: pg.PlotWidget, names: list[str], callback) -> None:
+    """Call ``callback(name)`` when a horizontal category bar is clicked."""
+    old = getattr(plot, "_bar_click", None)
+    if old is not None:
+        try:
+            plot.scene().sigMouseClicked.disconnect(old)
+        except (TypeError, RuntimeError):
+            pass
+    n = len(names)
+    vb = plot.getViewBox()
+
+    def handler(ev) -> None:
+        if ev.button() != Qt.MouseButton.LeftButton:
+            return
+        if not vb.sceneBoundingRect().contains(ev.scenePos()):
+            return
+        y = vb.mapSceneToView(ev.scenePos()).y()
+        i = n - 1 - int(round(y))
+        if 0 <= i < n and abs(y - round(y)) <= 0.45:
+            callback(names[i])
+
+    plot._bar_click = handler
+    plot.scene().sigMouseClicked.connect(handler)
+    plot.setCursor(Qt.CursorShape.PointingHandCursor)
+    plot.setToolTip("Click a bar to see its transactions")
+
+
+# --- hover readout ----------------------------------------------------------
+class _Readout(QObject):
+    """A vertical guide and a small box with the exact values under the mouse.
+
+    Every chart was drawn but none could be read: the numbers behind a line
+    were visible nowhere. The box lists each series at the point nearest the
+    mouse, in the series' own colour, and disappears when the mouse leaves.
+    """
+
+    def __init__(self, plot: pg.PlotWidget, x, series, label, tolerance):
+        super().__init__(plot)
+        self.plot = plot
+        self.x = nums(x)
+        self.series = [(n, c, nums(y)) for n, c, y in series]
+        self.label = label
+        self.tolerance = tolerance
+        self.vline = pg.InfiniteLine(
+            angle=90, movable=False,
+            pen=pg.mkPen(theme.MUTED, width=1))
+        self.vline.setZValue(6)
+        self.text = pg.TextItem(
+            anchor=(0, 0), fill=theme.qcolor(theme.SURFACE, 240),
+            border=pg.mkPen(theme.BORDER_STRONG))
+        self.text.setZValue(7)
+        for it in (self.vline, self.text):
+            plot.addItem(it, ignoreBounds=True)
+            it.setVisible(False)
+        self.proxy = pg.SignalProxy(plot.scene().sigMouseMoved,
+                                    rateLimit=60, slot=self._moved)
+        plot.viewport().installEventFilter(self)
+
+    def detach(self) -> None:
+        try:
+            self.proxy.disconnect()
+        except (TypeError, RuntimeError):
+            pass
+        try:
+            self.plot.viewport().removeEventFilter(self)
+        except RuntimeError:
+            pass
+
+    def eventFilter(self, obj, ev) -> bool:
+        if ev.type() == QEvent.Type.Leave:
+            self._hide()
+        return False
+
+    def _hide(self) -> None:
+        for it in (self.vline, self.text):
+            it.setVisible(False)
+
+    def _moved(self, evt) -> None:
+        pos = evt[0]
+        vb = self.plot.getViewBox()
+        if self.x.size == 0 or not vb.sceneBoundingRect().contains(pos):
+            self._hide()
+            return
+        mouse = vb.mapSceneToView(pos)
+        i = int(np.clip(np.searchsorted(self.x, mouse.x()), 0, self.x.size - 1))
+        if i > 0 and abs(self.x[i - 1] - mouse.x()) < abs(self.x[i] - mouse.x()):
+            i -= 1
+        if self.tolerance is not None and abs(self.x[i] - mouse.x()) > self.tolerance:
+            self._hide()
+            return
+        when = self.label(self.x[i])
+        rows = [f"<div style='color:{theme.MUTED};font-size:12px'>{when}</div>"]
+        for name, color, y in self.series:
+            if i < y.size and np.isfinite(y[i]):
+                rows.append(
+                    f"<div style='font-size:12px'><span style='color:{color}'>"
+                    f"&#9632;</span> {name} "
+                    f"<b style='color:{theme.TEXT}'>{_precise(y[i])}</b></div>")
+        self.text.setHtml("".join(rows))
+        self.vline.setPos(float(self.x[i]))
+        (x0, x1), (y0, y1) = vb.viewRange()
+        right_half = self.x[i] > (x0 + x1) / 2
+        self.text.setAnchor((1, 0) if right_half else (0, 0))
+        self.text.setPos(float(self.x[i]), y1)
+        for it in (self.vline, self.text):
+            it.setVisible(True)
+
+
+def _precise(v: float) -> str:
+    return f"-${abs(v):,.0f}" if v < 0 and round(abs(v)) else f"${abs(v):,.0f}"
+
+
+def attach_readout(plot: pg.PlotWidget, x, series, label=None,
+                   tolerance: float | None = None) -> None:
+    """Show exact values on hover. ``series`` is a list of (name, colour, y).
+
+    Call after ``plot.clear()`` and the drawing; a previous readout on the same
+    plot is detached first so redraws do not stack listeners.
+    """
+    old = getattr(plot, "_readout", None)
+    if old is not None:
+        old.detach()
+    fmt = label or (lambda ts: pd.Timestamp(ts, unit="s").strftime("%b ") +
+                    str(pd.Timestamp(ts, unit="s").day) +
+                    pd.Timestamp(ts, unit="s").strftime(", %Y"))
+    plot._readout = _Readout(plot, x, series, fmt, tolerance)
+
+
 # --- reference floors -------------------------------------------------------
 # Three horizontal reference lines that give a money chart a sense of "how bad
 # is bad". Zero is drawn hardest because crossing it is categorically different
 # from any other move on the chart: below it you are borrowing, not saving.
-FLOOR_ZERO_WIDTH = 2.6
+FLOOR_ZERO_WIDTH = 1.6
 # Label placement along the line, 0 = left edge, 1 = right edge. These used to
 # sit at 0.03, which put them directly on top of the y-axis tick labels and let
 # the plot's left margin clip them in half. Sitting them well to the right
@@ -424,13 +606,17 @@ def _floor_label_opts(color: str, slot: str) -> dict:
 
 def zero_floor(plot: pg.PlotWidget, label: str = "$0 · debt below this",
                slot: str = "zero"):
-    """The hard floor. Thick, solid, red — the line not to cross."""
+    """The hard floor: solid, and neutral grey-white rather than red, because
+    red is the debt line itself and the two sit together near zero."""
     ln = pg.InfiniteLine(
         pos=0.0, angle=0,
-        pen=pg.mkPen(theme.RED, width=FLOOR_ZERO_WIDTH),
-        label=label, labelOpts=_floor_label_opts(theme.RED, slot),
+        pen=pg.mkPen(theme.REFERENCE, width=FLOOR_ZERO_WIDTH),
+        label=label, labelOpts=_floor_label_opts(theme.REFERENCE, slot),
     )
-    ln.setZValue(-5)          # behind the data, in front of the grid
+    # Above the data, not behind it: a label is a child of its line, so it
+    # stacks wherever the line does, and behind the data it was struck through
+    # by every series that crossed it. The lines are thin enough to sit on top.
+    ln.setZValue(2)
     plot.addItem(ln)
     return ln
 
@@ -446,7 +632,7 @@ def soft_floor(plot: pg.PlotWidget, value: float, label: str,
         pen=pg.mkPen(col, width=1.2, style=Qt.PenStyle.DashLine),
         label=label, labelOpts=_floor_label_opts(col, slot),
     )
-    ln.setZValue(-6)
+    ln.setZValue(1)
     plot.addItem(ln)
     return ln
 
@@ -465,14 +651,16 @@ def money_floors(plot: pg.PlotWidget, starter: float = 1000.0,
 
 
 def _short(v: float) -> str:
+    """$1.2k, -$10k: the sign leads, as it does everywhere else in the app."""
     av = abs(v)
+    sign = "-" if v < 0 and round(av) != 0 else ""
     if av >= 1_000_000:
-        return f"${v / 1_000_000:.1f}M"
+        return f"{sign}${av / 1_000_000:.1f}M"
     if av >= 10_000:
-        return f"${v / 1000:.0f}k"
+        return f"{sign}${av / 1000:.0f}k"
     if av >= 1000:
-        return f"${v / 1000:.1f}k"
-    return f"${v:.0f}"
+        return f"{sign}${av / 1000:.1f}k"
+    return f"{sign}${av:.0f}"
 
 
 def tornado(plot: pg.PlotWidget, levers: list[str], lows: np.ndarray,

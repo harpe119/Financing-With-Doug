@@ -100,6 +100,28 @@ RULES: list[tuple[tuple[str, ...], str]] = [
 ]
 
 INCOME_CATEGORIES = {"Income", "Interest & dividends", "Other income"}
+BUSINESS_CATEGORY = "Business (reimbursable)"
+PERSONAL_EXCLUSIONS = {"Transfer", BUSINESS_CATEGORY}
+
+
+def personal_transactions(tx: pd.DataFrame) -> pd.DataFrame:
+    """Personal behavior only, while retaining the original bank ledger.
+
+    Business purchases and repayments are pass-through money. A separately
+    marked reimbursement inside a paycheck is subtracted from the analytical
+    amount only. Clear that marker in the copy so this operation is idempotent.
+    """
+    out = tx.copy()
+    if out.empty:
+        return out
+    if "category" in out:
+        out = out[~out["category"].isin(PERSONAL_EXCLUSIONS)].copy()
+    if "business_reimbursement" in out:
+        reimbursement = pd.to_numeric(out["business_reimbursement"], errors="coerce").fillna(0)
+        out["amount"] = out["amount"] - reimbursement.clip(lower=0, upper=out["amount"].clip(lower=0))
+        out = out[~(reimbursement.gt(0) & out["amount"].eq(0))].copy()
+        out["business_reimbursement"] = 0.0
+    return out
 
 # These are intentional bank abbreviations or word stems, rather than arbitrary
 # substring matches. Everything else must end at a boundary (or a plural S).

@@ -15,13 +15,24 @@ from ..ingest import ImportConfig, SIGN_MODES, guess_mapping, read_raw, sniff_de
 from ..models import AccountType
 from ..pipeline import import_with_config, refresh_derived
 from ..store import Store
-from .widgets import Card, hint
+from .widgets import Card, form_row, hint
 
 _DELIMS = [("Auto-detect", "auto"), ("Comma  ,", ","), ("Semicolon  ;", ";"),
            ("Tab", "\t"), ("Pipe  |", "|")]
 
 
 class ImportDialog(QDialog):
+    _NO_ACCOUNT = ("There is no checking, savings or credit-card account to "
+                   "import into yet. Close this window, add one under "
+                   "Accounts → Add account, then import again.")
+    _CHOOSE_FILE = ("Choose the CSV file you downloaded from your bank. Doug "
+                    "suggests which columns to use; you can check them before "
+                    "anything is imported.")
+    _CHECK_PREVIEW = ("Check that Date, Description and Amount point at the "
+                      "right columns in the preview. Spending should be saved "
+                      "as negative and income as positive; if your bank shows "
+                      "it the other way round, change Amount signs.")
+
     def __init__(self, store: Store, parent=None, account_id: int | None = None):
         super().__init__(parent)
         self.store = store
@@ -39,6 +50,7 @@ class ImportDialog(QDialog):
         self.path.setReadOnly(True)
         self.path.setPlaceholderText("Choose a CSV export from your bank…")
         browse = QPushButton("Browse…")
+        browse.setAutoDefault(False)
         browse.clicked.connect(self._browse)
         self.account = QComboBox()
         for a in store.accounts():
@@ -48,12 +60,22 @@ class ImportDialog(QDialog):
             i = self.account.findData(account_id)
             if i >= 0:
                 self.account.setCurrentIndex(i)
-        top.addWidget(QLabel("File"), 0, 0)
+        file_label = QLabel("File")
+        file_label.setBuddy(self.path)
+        top.addWidget(file_label, 0, 0)
         top.addWidget(self.path, 0, 1)
         top.addWidget(browse, 0, 2)
-        top.addWidget(QLabel("Into account"), 1, 0)
+        acct_label = QLabel("Account")
+        acct_label.setBuddy(self.account)
+        top.addWidget(acct_label, 1, 0)
         top.addWidget(self.account, 1, 1, 1, 2)
         lay.addLayout(top)
+
+        # Import stays disabled until a file is chosen; say what is expected
+        # instead of leaving a grey button to explain itself.
+        self.note = hint(self._NO_ACCOUNT if self.account.count() == 0
+                         else self._CHOOSE_FILE)
+        lay.addWidget(self.note)
 
         # options
         opts = QHBoxLayout()
@@ -65,10 +87,14 @@ class ImportDialog(QDialog):
         for key, label in SIGN_MODES.items():
             self.sign.addItem(label, key)
         self.dayfirst = QCheckBox("Day-first dates (31/12/2025)")
-        opts.addWidget(QLabel("Delimiter"))
+        sep_label = QLabel("Column separator")
+        sep_label.setBuddy(self.delim)
+        opts.addWidget(sep_label)
         opts.addWidget(self.delim)
         opts.addSpacing(12)
-        opts.addWidget(QLabel("Amounts"))
+        sign_label = QLabel("Amount signs")
+        sign_label.setBuddy(self.sign)
+        opts.addWidget(sign_label)
         opts.addWidget(self.sign, 1)
         opts.addWidget(self.dayfirst)
         lay.addLayout(opts)
@@ -83,17 +109,19 @@ class ImportDialog(QDialog):
         self.c_indicator = QComboBox()
         self.c_debit = QComboBox()
         self.c_credit = QComboBox()
-        form.addRow("Date", self.c_date)
-        form.addRow("Description", self.c_desc)
-        form.addRow("Amount", self.c_amount)
-        form.addRow("Credit/debit indicator", self.c_indicator)
-        form.addRow("Debit / money out", self.c_debit)
-        form.addRow("Credit / money in", self.c_credit)
+        form_row(form, "Date", self.c_date)
+        form_row(form, "Description", self.c_desc)
+        form_row(form, "Amount", self.c_amount)
+        form_row(form, "Credit/debit indicator", self.c_indicator)
+        form_row(form, "Debit / money out", self.c_debit)
+        form_row(form, "Credit / money in", self.c_credit)
         map_card.body.addLayout(form)
         map_card.body.addWidget(hint(
-            "Map a signed Amount column; or an unsigned Amount plus a "
-            "credit/debit indicator column; or the Debit/Credit pair. "
-            "Running-balance columns are ignored."))
+            "Banks lay out amounts in one of three ways. Pick the columns that "
+            "match yours: one Amount column (spending is negative), an Amount "
+            "column plus a column marking each row as credit or debit, or "
+            "separate Debit and Credit columns. Running-balance columns are "
+            "ignored."))
         lay.addWidget(map_card)
 
         # preview
@@ -110,6 +138,7 @@ class ImportDialog(QDialog):
         cancel.clicked.connect(self.reject)
         self.go = QPushButton("Import")
         self.go.setObjectName("primary")
+        self.go.setDefault(True)
         self.go.clicked.connect(self._import)
         self.go.setEnabled(False)
         actions.addWidget(cancel)
@@ -138,7 +167,11 @@ class ImportDialog(QDialog):
         try:
             df = read_raw(p, self._delimiter(), nrows=50)
         except Exception as e:
-            QMessageBox.warning(self, "Cannot read file", str(e))
+            QMessageBox.warning(
+                self, "Couldn't read this file",
+                "Doug couldn't open this file as a table. Check that it is a "
+                "CSV exported from your bank, or try a different Column "
+                f"separator.\n\nDetails: {e}")
             return
         self._columns = list(df.columns)
         g = guess_mapping(self._columns, df)
@@ -164,11 +197,15 @@ class ImportDialog(QDialog):
                 self.preview.setItem(r, c, QTableWidgetItem(str(df.iat[r, c])))
         self.preview.resizeColumnsToContents()
         self.go.setEnabled(self.account.count() > 0)
+        self.note.setText(self._CHECK_PREVIEW if self.account.count() > 0
+                          else self._NO_ACCOUNT)
 
     def _import(self) -> None:
         if self.account.currentData() is None:
-            QMessageBox.information(self, "No account",
-                                    "Create a checking/savings/credit account first.")
+            QMessageBox.information(
+                self, "No account to import into",
+                "Add a checking, savings or credit-card account first "
+                "(Accounts → Add account), then import again.")
             return
         sign = self.sign.currentData()
         if sign == "auto":
@@ -201,12 +238,19 @@ class ImportDialog(QDialog):
                 added, skipped = import_with_config(self.store, cfg)
                 n_rec = refresh_derived(self.store)
         except ValueError as e:
-            QMessageBox.warning(self, "Import problem", str(e))
+            QMessageBox.warning(
+                self, "Nothing was imported",
+                f"{e}\n\nYour data is unchanged. Check the column choices "
+                "above and try again.")
             return
         self.result_counts = (added, skipped)
         QMessageBox.information(
             self, "Import complete",
-            f"Added {added} transactions ({skipped} duplicates skipped).\n"
-            f"{n_rec} recurring patterns are now tracked — review them on the "
-            f"Recurring page.")
+            f"Added {added} transaction{'s' if added != 1 else ''}; "
+            f"{skipped} already imported {'was' if skipped == 1 else 'were'} "
+            f"skipped.\n"
+            f"Doug found {n_rec} recurring bill or income "
+            f"pattern{'s' if n_rec != 1 else ''}. Review "
+            f"{'it' if n_rec == 1 else 'them'} under Bills & payday → "
+            f"Recurring patterns.")
         self.accept()

@@ -7,15 +7,15 @@ goes, subscriptions carved out), and dollar-ranked reduction suggestions.
 from __future__ import annotations
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import (QHBoxLayout, QLabel, QScrollArea,
+from PyQt6.QtWidgets import (QHBoxLayout, QLabel, QMessageBox, QPushButton, QScrollArea,
                              QSizePolicy, QVBoxLayout, QWidget)
 
-from ..insights import (breakdown, monthly_aggregates, spending_score,
+from ..insights import (breakdown, monthly_aggregates, monthly_breakdown, spending_score,
                         suggestions, window_note)
 from ..store import Store
 from ..util import fmt_money
 from . import theme
-from .widgets import Card, DonutChart, hint, hsplit, nerd_button, vsplit
+from .widgets import Card, DonutChart, hint, hsplit, vsplit
 
 _KIND_ACCENT = {
     "subscriptions": theme.PURPLE, "trim": theme.AMBER,
@@ -62,7 +62,11 @@ class InsightsPage(QWidget):
         # measured against and the weighting live behind the button.
         nrow = QHBoxLayout()
         nrow.addStretch(1)
-        nrow.addWidget(nerd_button(self._nerd_panel))
+        self.how_btn = QPushButton("How this works")
+        self.how_btn.setObjectName("small")
+        self.how_btn.setToolTip("Inspect the categories and transactions behind each monthly figure and the score.")
+        self.how_btn.clicked.connect(self._show_breakdown)
+        nrow.addWidget(self.how_btn)
         self.score_card.body.addLayout(nrow)
         srow = QHBoxLayout()
         srow.setSpacing(18)
@@ -151,6 +155,18 @@ class InsightsPage(QWidget):
         root.addWidget(vsplit(self.score_card, bottom, sizes=[330, 380]), 1)
 
     # ---------------------------------------------------------------
+    def _show_breakdown(self):
+        from .spending_details import SpendingDetailsDialog
+        try:
+            self.refresh()
+            details = monthly_breakdown(self.store.transactions())
+            _, html = self._nerd_panel()
+            accounts = {a.id: a.name for a in self.store.accounts()}
+            SpendingDetailsDialog(details, html, accounts, self).exec()
+        except Exception:
+            QMessageBox.warning(self, "Spending details unavailable",
+                                "The spending details could not be loaded. Refresh the page and try again.")
+
     def set_simple(self, on: bool) -> None:
         """Drop the score's arithmetic; keep the grade and the sentence.
 
@@ -169,6 +185,7 @@ class InsightsPage(QWidget):
         self.empty.setVisible(not has)
         self.score_card.setVisible(has)
         if not has:
+            self._agg = self._score = None
             self._clear_legend()
             self._clear_suggestions()
             self.donut.set_data([])

@@ -144,7 +144,8 @@ def _occurrence_amounts(tx: pd.DataFrame, key: str) -> pd.Series:
     norm, sign = key.rsplit("|", 1)
     df = tx
     if "category" in df.columns:
-        df = df[df["category"] != "Transfer"]
+        from .categorize import personal_transactions
+        df = personal_transactions(df)
     if df.empty:
         return pd.Series(dtype=float)
     want = df["amount"] > 0 if sign == "+" else df["amount"] < 0

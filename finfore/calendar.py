@@ -11,6 +11,7 @@ from datetime import date, timedelta
 import pandas as pd
 
 from .forecast import scheduled_flows
+from .categorize import PERSONAL_EXCLUSIONS
 from .history import cash_anchor, cash_history
 from .recurrence import normalize_desc
 from .store import Store
@@ -52,7 +53,8 @@ def upcoming_schedule(store: Store, end: date, today: date | None = None) -> Sch
     opening = dict(balances)
     pattern_accounts: dict[str, set[int]] = {}
     for row in tx.itertuples(index=False):
-        if pd.isna(row.date) or row.date.date() > today or row.category == "Transfer":
+        if (pd.isna(row.date) or row.date.date() > today or
+                row.category in PERSONAL_EXCLUSIONS):
             continue
         key = f"{normalize_desc(row.description)}|{'+' if row.amount > 0 else '-'}"
         pattern_accounts.setdefault(key, set()).add(int(row.account_id))

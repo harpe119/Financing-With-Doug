@@ -20,7 +20,7 @@ from ..progress import (ALPHA, MIN_WEEKS, N_BOOTSTRAP, N_PERMUTATIONS, capture,
                         significance_since)
 from ..store import Store
 from ..util import fmt_money
-from . import charts, theme
+from . import charts, theme, video
 from .widgets import (Card, FlowLayout, StatCard, hint, hsplit, info_button, nerd_button,
                       vsplit)
 
@@ -119,6 +119,11 @@ class ProgressPage(QWidget):
             lambda: ("Checkpoints, and what this page compares", _WHAT_IS_THIS),
             tooltip="What a checkpoint is, what reconstructing history does, "
                     "and what neither of them touches"))
+        self.video_btn = QPushButton("Watch explanation")
+        self.video_btn.setObjectName("small")
+        self.video_btn.setToolTip("Watch a silent visual explanation of checkpoints, forecast accuracy, and spending changes.")
+        self.video_btn.clicked.connect(lambda: video.play(self, kind="progress"))
+        bar.addWidget(self.video_btn)
         bar.addWidget(nerd_button(self._nerd_panel))
         root.addWidget(controls)
 

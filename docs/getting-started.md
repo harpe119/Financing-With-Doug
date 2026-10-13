@@ -133,6 +133,22 @@ than assuming it was interpreted correctly.
 ## 3. Review transactions and patterns
 
 In **Transactions**, search for entries and correct mistaken categories.
+Use **Business (reimbursable)** for company travel and other expenses that
+will be repaid. Apply the same category to a separate reimbursement deposit.
+Both are excluded from the personal score, spending habits, detected spare
+money, and repeated forecast samples. It is a per-transaction label; marking
+one business flight does not make every future flight a business expense.
+
+If reimbursement arrives inside your paycheck, keep the deposit categorized
+as income. Right-click it and select **Business reimbursement…**, then enter
+only the reimbursed portion. A $3,500 deposit containing $500 of reimbursement
+counts as $3,000 of personal income. The ledger keeps the full $3,500 bank
+deposit; the amount tooltip shows the separation. Enter zero to clear it.
+
+Business expenses still affect actual cash balances until repayment arrives.
+To model an expected repayment on a known future date, add a one-off income
+event in Forecast. The business category does not create a repayment date.
+
 Use **Review uncategorized…** to work through rows that need attention.
 The review queue separates purchases from incoming payments. A selection updates
 matching uncategorized entries, including older ones outside the displayed
@@ -199,6 +215,19 @@ Open **Goals → Add goal…** to enter a target.
 Review the amount and priority order yourself. These targets are not separate
 bank balances or automatic transfers.
 
+**Spare /mo** is the detected monthly personal income minus spending, floored
+at zero. It uses up to 24 recorded completed months, weighted toward recent
+ones with a three-month half-life. The current month is left out. The
+breakdown below the control shows the income, spending and calculation;
+hover it for the weighting formula. Recorded loan payments are included in
+spending. Verify that the ledger contains all your commitments before treating
+this estimate as available money.
+
+Editing Spare /mo creates a manual override. **Use detected** clears it and
+keeps the estimate updated after future imports. Existing saved amounts may
+be marked manual because older versions accidentally saved detected values
+during refresh; use this button to restore automatic detection.
+
 For loans and investments, use **Update from CSV…** on Accounts when you have
 new balance history. Keep account terms current as well as transactions.
 
@@ -220,7 +249,7 @@ be moved forward by newer transactions. These flags tell you what to verify
 against your statements; they do not establish that a forecast is accurate.
 The checks read your records without changing them or blocking a forecast.
 
-**Watch explanation** opens the original video in your computer's video
+**Watch explanation** opens the animated video in your computer's video
 player. **How this works** gives the written explanation and assumptions.
 If the video cannot open, check that the computer has a player for MP4 files.
 
@@ -229,6 +258,23 @@ include extra debt payments, investing, and one-off expenses or income.
 The chart updates after you finish an adjustment.
 **Reset scenario** restores temporary controls; saved events remain in the
 database. Manage goal targets on Goals, not in a second forecast editor.
+
+In Everything view, expand **Forecast history** to choose how far back the
+simulation samples spending weeks and irregular income. Presets cover three
+months through two years; **Since a date…** is useful after moving or changing
+jobs. **All available history** removes the usual 78-week sample cap. Automatic
+keeps the existing behavior: up to 78 recorded weeks. Your choice is saved
+with the current database and also applies to baseline comparisons, sensitivity
+analysis and Progress forecasts. Reset scenario keeps this history setting.
+
+Regular salary and rent normally come from your saved recurring patterns.
+Check **Re-estimate paydays and bills too** to detect schedules and amounts
+using only the selected period for the forecast. Disabled patterns and loan
+links are respected, and saved records stay unchanged. Review the patterns
+after a change: short windows can miss quarterly or annual bills, or a new
+payday with too few repetitions. The panel shows the number and dates of
+complete weeks actually available. Under four weeks, variable spending is
+omitted and a warning asks you to extend the period or import recent data.
 
 **What's causing this?** explains a modeled cash dip using nearby scheduled
 items. Moving a date in that analysis changes the scenario only. Contact the
@@ -261,3 +307,25 @@ forecast. Save a backup before a large correction.
 **File → Save a month in review…** exports an HTML summary for a chosen month.
 The exported report contains financial information; treat it as private.
 Check the open-database path and demo banner before exporting or backing up.
+
+
+### Inspecting monthly spending
+
+On Dashboard → Spending, open **How this works**. The **Monthly breakdown** tab
+lists Income, Necessities, Wants, Giving, and Unknown. Expand a category to see
+the dates, descriptions, original ledger amounts, and weighted monthly
+contributions of its transactions. For example, rent appears under Housing;
+groceries, utilities, insurance, fuel, transport, debt payments, and health &
+fitness also enter Necessities. Categorized refunds reduce their group.
+
+The figures are recency-weighted averages of complete months, rather than a
+single month's bills. **Months & exclusions** shows each month's share and
+explains what is omitted. Hover a transaction for its account, exact contribution,
+and any reimbursement removed from the personal amount. Transfers and
+reimbursable business purchases are excluded. A marked reimbursement inside a
+paycheck is also excluded from personal income. **How the score works** retains
+the score calculation and assumptions.
+
+Forecast → Progress also has **Watch explanation**, a silent animation of
+checkpoints, recorded balances versus an earlier forecast, and weekly spending
+comparisons. It uses fictional data calculated by the program.

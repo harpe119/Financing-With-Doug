@@ -9,6 +9,7 @@ from PyQt6.QtWidgets import (QComboBox, QDateEdit, QDialog, QDialogButtonBox,
                              QVBoxLayout)
 
 from ..models import Account, AccountType
+from . import theme
 from .widgets import IntSpinBox, MoneySpinBox, hint
 
 _TYPES = [AccountType.CHECKING, AccountType.SAVINGS, AccountType.CREDIT,
@@ -60,22 +61,42 @@ class AccountDialog(QDialog):
         lay.addLayout(form)
 
         self.name = QLineEdit()
+        self.name.setPlaceholderText("e.g. Everyday checking")
         self.type = QComboBox()
         for t in _TYPES:
             self.type.addItem(t.label, t)
         self.balance = _money_spin()
         self.balance_date = QDateEdit(QDate.currentDate())
         self.balance_date.setCalendarPopup(True)
-        self.balance_date.setDisplayFormat("yyyy-MM-dd")
+        self.balance_date.setDisplayFormat("MMM d, yyyy")
 
         form.addRow("Name", self.name)
         form.addRow("Type", self.type)
         self.balance_label = QLabel("Balance")
+        self.balance_label.setBuddy(self.balance)
         form.addRow(self.balance_label, self.balance)
         form.addRow("Balance as of", self.balance_date)
 
         self.balance_hint = hint("")
         lay.addWidget(self.balance_hint)
+        # Shown only while editing, and only while the date is following the
+        # balance. Retyping a balance and leaving its old date in place quietly
+        # makes the account look stale (and re-anchors its history to the wrong
+        # day), so the date moves to today and says so.
+        self.date_hint = hint("“Balance as of” moved to today because you changed "
+                              "the balance. Change the date if the figure is "
+                              "from another day.")
+        self.date_hint.setVisible(False)
+        lay.addWidget(self.date_hint)
+        self._date_touched = False
+        self._orig_balance: float | None = None
+
+        self.error = QLabel("")
+        self.error.setWordWrap(True)
+        self.error.setStyleSheet(f"color: {theme.RED};")
+        self.error.setVisible(False)
+        lay.addWidget(self.error)
+        self.name.textChanged.connect(lambda _t: self.error.setVisible(False))
 
         # loan fields
         self.apr = _rate_spin()
@@ -95,16 +116,27 @@ class AccountDialog(QDialog):
         self.volatility = _pct_spin(0, 100)
         self.volatility.setValue(15.0)
         self.contribution = _money_spin(0)
+        self.annual_return.setToolTip(
+            "The yearly growth you are assuming. It is an assumption, not a "
+            "promise, and the forecast shows a range around it.")
+        self.volatility.setToolTip(
+            "How much the value typically swings up and down in a year. "
+            "Higher means a bumpier ride and a wider forecast range.")
         self._inv_rows = [
-            (QLabel("Expected annual return"), self.annual_return),
-            (QLabel("Volatility (σ, annual)"), self.volatility),
+            (QLabel("Expected yearly return"), self.annual_return),
+            (QLabel("Yearly ups and downs (volatility)"), self.volatility),
             (QLabel("Monthly contribution"), self.contribution),
         ]
         for lbl, w in self._loan_rows + self._inv_rows:
+            lbl.setBuddy(w)
             form.addRow(lbl, w)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok
                                    | QDialogButtonBox.StandardButton.Cancel)
+        ok = buttons.button(QDialogButtonBox.StandardButton.Ok)
+        ok.setText("Save changes" if account else "Add account")
+        ok.setObjectName("primary")
+        ok.setDefault(True)
         buttons.accepted.connect(self._validate)
         buttons.rejected.connect(self.reject)
         lay.addWidget(buttons)
@@ -120,12 +152,17 @@ class AccountDialog(QDialog):
                 else account.balance)
             d = account.balance_date
             self.balance_date.setDate(QDate(d.year, d.month, d.day))
+            self._orig_balance = self.balance.value()
             self.apr.setValue(account.apr * 100)
             self.payment.setValue(account.monthly_payment)
             self.payment_day.setValue(account.payment_day)
             self.annual_return.setValue(account.annual_return * 100)
             self.volatility.setValue(account.volatility * 100)
             self.contribution.setValue(account.monthly_contribution)
+        # Connected last, so filling the form in does not count as the person
+        # changing the balance or choosing a date.
+        self.balance.valueChanged.connect(self._balance_changed)
+        self.balance_date.dateChanged.connect(self._date_edited)
 
     @staticmethod
     def _owed_type(t: AccountType) -> bool:
@@ -149,26 +186,52 @@ class AccountDialog(QDialog):
         for lbl, w in self._inv_rows:
             lbl.setVisible(t == AccountType.INVESTMENT)
             w.setVisible(t == AccountType.INVESTMENT)
+        entry = " Type digits as cents: 1234 becomes $12.34."
         tips = {
-            AccountType.CHECKING: "Import this account's CSV so history and "
-                                  "habits can be learned from it.",
-            AccountType.SAVINGS: "Import this account's CSV so history and "
-                                 "habits can be learned from it.",
-            AccountType.CREDIT: "Enter what you owe as a positive number — "
-                                "the same way as a loan. A negative figure "
-                                "means the card is in credit. Import its CSV "
-                                "like a cash account.",
-            AccountType.LOAN: "Enter what you owe as a positive number. "
-                              "Import the lender's CSV — balances or payment "
-                              "activity — to draw its history. A payment "
-                              "detected in your cash imports links automatically.",
-            AccountType.INVESTMENT: "Tracked by dated balances and projected "
-                                    "with an expected return. Import a "
-                                    "balance or activity CSV to give it a "
-                                    "history line.",
+            AccountType.CHECKING: "Money you have, ready to spend. Import this "
+                                  "account's CSV so history and habits can be "
+                                  "learned from it." + entry,
+            AccountType.SAVINGS: "Money you have, set aside. Import this "
+                                 "account's CSV so history and habits can be "
+                                 "learned from it." + entry,
+            AccountType.CREDIT: "Money you owe. Enter what you owe as a "
+                                "positive number — the same way as a loan. A "
+                                "negative figure means the card is in credit. "
+                                "Import its CSV like a cash account." + entry,
+            AccountType.LOAN: "Money you owe. Enter what you owe as a positive "
+                              "number. Import the lender's CSV — balances or "
+                              "payment activity — to draw its history. A "
+                              "payment detected in your cash imports links "
+                              "automatically." + entry,
+            AccountType.INVESTMENT: "Money you've invested. Tracked by dated "
+                                    "balances and projected with an expected "
+                                    "return. Import a balance or activity CSV "
+                                    "to give it a history line." + entry,
         }
         self.balance_hint.setText(tips[t])
         self.adjustSize()
+
+    def _balance_changed(self, value: float) -> None:
+        """While editing, a changed balance carries its date to today."""
+        if (self._editing is None or self._orig_balance is None
+                or self._date_touched):
+            return
+        if abs(value - self._orig_balance) < 0.005:
+            self.date_hint.setVisible(False)
+            d = self._editing.balance_date
+            self.balance_date.blockSignals(True)
+            self.balance_date.setDate(QDate(d.year, d.month, d.day))
+            self.balance_date.blockSignals(False)
+            return
+        self.balance_date.blockSignals(True)
+        self.balance_date.setDate(QDate.currentDate())
+        self.balance_date.blockSignals(False)
+        self.date_hint.setVisible(True)
+
+    def _date_edited(self, _d) -> None:
+        """Once the person sets the date themselves, stop moving it for them."""
+        self._date_touched = True
+        self.date_hint.setVisible(False)
 
     def _validate(self) -> None:
         # Spin boxes only fold their text into value() when editing ends, which
@@ -178,6 +241,9 @@ class AccountDialog(QDialog):
                   self.volatility, self.contribution, self.payment_day):
             w.interpretText()
         if not self.name.text().strip():
+            self.error.setText("Enter a name for this account, such as "
+                               "“Everyday checking”.")
+            self.error.setVisible(True)
             self.name.setFocus()
             return
         self.accept()

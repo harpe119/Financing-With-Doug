@@ -2509,6 +2509,7 @@ def main() -> None:
     check("and the score's arithmetic on Insights",
           not _insp.components.isVisibleTo(_insp))
     # The answer itself must never be what gets hidden.
+    _fcp.refresh()  # Inspect a computed answer, rather than an empty placeholder.
     check("but the cash chart, the verdict and For nerds all stay",
           _fcp.cash_card.isVisibleTo(_fcp) and _fcp.risk.isVisibleTo(_fcp)
           and _fcp.horizon.isVisibleTo(_fcp))
@@ -2958,6 +2959,16 @@ def main() -> None:
     from test_data_quality import run_tests as run_quality_tests
     if not run_quality_tests().wasSuccessful():
         raise AssertionError("data-quality regressions failed")
+
+    print("forecast history selection regressions")
+    from test_forecast_history import run_tests as run_history_tests
+    if not run_history_tests().wasSuccessful():
+        raise AssertionError("forecast history regressions failed")
+
+    print("personal budget and business reimbursement regressions")
+    from test_personal_finances import run_tests as run_personal_tests
+    if not run_personal_tests().wasSuccessful():
+        raise AssertionError("personal finance regressions failed")
 
     print("\nall tests passed")
 

@@ -131,16 +131,12 @@ class Plan:
 def surplus_monthly(store) -> float:
     """Spare income per month: what is left after everything already spent.
 
-    Taken from the recency-weighted aggregates, so it is what actually happens
-    rather than a budget. Loan minimums are already inside ``spending`` — they
-    are real outflows and mostly categorised as debt payments — so the figure
-    returned here is genuinely uncommitted, and the planner can hand all of it
-    out without double-counting a payment the ledger has already made.
+    Taken from recency-weighted completed-month income minus personal spending,
+    floored at zero. Recorded loan payments are already inside ``spending`` and
+    must not be subtracted twice. This is observed surplus: it does not prove
+    that every future commitment was recorded or that cash is available today.
     """
-    try:
-        agg = monthly_aggregates(store.transactions())
-    except Exception:
-        agg = None
+    agg = monthly_aggregates(store.transactions())
     return max(0.0, float(agg.surplus)) if agg else 0.0
 
 
@@ -454,7 +450,8 @@ def _cut_candidates(store) -> list[Cut]:
 
     cuts: list[Cut] = []
     seen_recurring = 0.0
-    for it in store.recurring():
+    from .recurrence import personal_recurring
+    for it in personal_recurring(store.transactions(), store.recurring()):
         if not it.active or it.amount >= 0 or it.kind in ("ignore", "loan_payment"):
             continue
         cat = categorize(it.name, it.amount)

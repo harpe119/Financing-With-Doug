@@ -65,9 +65,24 @@ include only items with a payment account supported by the imported ledger.
 Everyday spending, future transfers, and unassigned items are excluded.
 Check the **Unassigned items** filter before relying on an account total.
 
-On the Forecast tab, **Watch explanation** opens the original video in your
-computer's video player. **How this works** opens the written explanation.
+On the Forecast tab, **Watch explanation** opens a silent visual explanation
+in your computer's video player. Animated spending weeks build possible futures,
+which become the shaded chart bands. It also shows a scenario comparison and
+a cash dip, using short labels and amounts, and closes by recalling that the
+forecast replays your real recorded history. There are no caption strips.
+**How this works** opens the written explanation. Progress has its own
+**Watch explanation** video for saved forecasts and measured spending changes.
+On Dashboard → Spending, **How this works** opens the monthly breakdown. Expand
+Necessities or another group, then a category, to inspect its transactions,
+refunds, and contributions to the monthly average.
 Use **Reset scenario** to undo temporary forecast adjustments.
+The Goals page shows how **Spare /mo** is calculated; **Use detected** keeps it
+updated after imports. In Transactions, **Business (reimbursable)** excludes
+company expenses and repayments from personal analytics. Right-click a
+paycheck's **Business reimbursement…** action to separate a bundled repayment.
+In Everything view, **Forecast history** selects recent spending weeks or a
+start date after a move or job change. You can also re-estimate paydays and
+bills from that period; the choice is saved separately for each database.
 The **Data quality** panel flags records to verify before interpreting the
 projection. **Review data** explains each flag and links to the relevant page.
 These checks identify possible gaps; they do not measure forecast accuracy.

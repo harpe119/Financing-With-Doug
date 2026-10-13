@@ -137,6 +137,28 @@ is bootstrapped the same way under the income multiplier. At least four
 complete weeks of history are required; otherwise variable spending is
 zero and a warning is shown.
 
+**History selection.** The advanced Forecast history control is saved per
+database. Automatic retains the existing cap of 78 recorded weekly samples.
+A rolling period applies a hard calendar cut-off relative to the projection's
+date; Since a date applies a fixed cut-off; All available history removes the
+cap. Explicit selections include only Monday–Sunday weeks fully inside both
+the cut-off and the recorded ledger span. Quiet weeks inside that span remain
+zero-spending samples. No older week is used to fill a short selection.
+
+The optional payday/bill refit detects patterns within the same period without
+editing saved patterns. It preserves disabled/ignored status and loan links,
+uses recently detected amounts and cadences, and omits patterns not detected
+in the period with a warning. All known pattern keys are still withheld from
+weekly sampling, including missing or disabled ones, to avoid replaying a
+scheduled payment as discretionary spending. Automatic refits use the last
+78 calendar weeks. Loan terms and investment assumptions remain account
+settings. Short periods can miss infrequent schedules and require review.
+
+Backtests apply rolling selections relative to their historical refit date,
+and detect patterns only from transactions available then. A fixed start date
+later than that refit date leaves no training data, so the backtest is
+unavailable rather than silently sampling older weeks.
+
 The behavioural bootstrap carries **parameter uncertainty** as well as sampling
 noise: resampling weeks independently makes week-to-week variation average out
 like √t, which implicitly claims the historical mean weekly net is known
@@ -201,6 +223,37 @@ one shared balance and are filled in priority order, so a lower goal shows
 progress only once the ones above it are covered. The simulation is monthly and
 deterministic: this is a schedule to act on, and the Monte Carlo fan on the
 Forecast page already answers "what might happen".
+
+The detected spare amount is `max(0, I − S)`, where income and personal
+spending are averaged across up to 24 recorded completed calendar months,
+with weights `0.5^(month age / 3)`. The current month and future transactions
+are excluded. Recorded loan payments are already part of spending; the
+calculation does not establish that every planned payment was imported.
+The page shows the weighted income, spending and resulting surplus. Automatic
+detection stays automatic after refreshes and imports. Only editing the amount
+creates a manual override; Use detected clears that override even when the
+spinner's value stays the same. Existing saved amounts are treated as manual
+because older versions did not distinguish intentional overrides from values
+that were accidentally saved during refresh.
+
+**Reimbursable business activity.** Business (reimbursable) is a deliberate
+per-transaction category for company expenses and separate repayments. Both
+signs are excluded from personal income/spending analytics, habits, goals'
+detected surplus, recurrence detection and forecast weekly samples. It is
+not learned as a merchant rule: the same airline or hotel can serve both a
+personal and a business trip.
+
+A business reimbursement included in a paycheck is stored separately against
+the original deposit's transaction ID. Personal analytics use the deposit
+minus that portion, while bank history keeps its full amount. This adjustment
+is idempotent, survives re-import and backups, and can be undone. Existing
+recurring schedules affected by business corrections are refitted in memory
+from personal transactions, preserving manual switches and loan links.
+
+Actual account balances and reconstructed cash history include business
+transactions. Exclusion from habits does not imply reimbursement has arrived.
+An expected reimbursement with a known future date can be entered as a one-off
+income event; the app does not invent an amount or payment date.
 
 **Bills that moved on their own** (`alerts.py`). Each active recurring pattern's
 per-occurrence amounts are rebuilt from the ledger — the stored item keeps only

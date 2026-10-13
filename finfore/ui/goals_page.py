@@ -21,6 +21,7 @@ from PyQt6.QtWidgets import (QComboBox, QDateEdit, QDialog, QDialogButtonBox, QF
 from ..goals import (GOAL, LOAN, POLICIES, build_plan, deadline_plan,
                      emergency_goal_amount, speedups, surplus_monthly, targets)
 from ..models import Goal
+from ..insights import monthly_aggregates
 from ..store import Store
 from ..util import fmt_money
 from . import charts, theme
@@ -96,7 +97,7 @@ class GoalsPage(QWidget):
             "What is left over each month after everything you already spend, "
             "including loan minimums. Detected from your ledger — override it "
             "if you know better.")
-        self.surplus.valueChanged.connect(self._rerun)
+        self.surplus.valueChanged.connect(self._surplus_changed)
         income_row.addWidget(self.surplus, 1)
         detect = QPushButton("Use detected")
         detect.setObjectName("small")
@@ -109,6 +110,8 @@ class GoalsPage(QWidget):
         self.policy.currentIndexChanged.connect(self._policy_changed)
         form.addRow("Split", self.policy)
         ladder.body.addLayout(form)
+        self.surplus_note = hint("")
+        ladder.body.addWidget(self.surplus_note)
 
         self.table = QTableWidget(0, len(self.COLS))
         self.table.setHorizontalHeaderLabels(self.COLS)
@@ -241,17 +244,25 @@ class GoalsPage(QWidget):
 
     def _refresh_inner(self) -> None:
         self._loading = True
-        i = self.policy.findData(self.store.plan_policy())
-        self.policy.setCurrentIndex(max(0, i))
-        detected = surplus_monthly(self.store)
-        stored = self.store.get_setting("plan_surplus", None)
-        self.surplus.setValue(float(stored) if stored is not None else detected)
-        self._loading = False
+        try:
+            i = self.policy.findData(self.store.plan_policy())
+            self.policy.setCurrentIndex(max(0, i))
+            detected = surplus_monthly(self.store)
+            stored = self.store.get_setting("plan_surplus", None)
+            self.surplus.setValue(float(stored) if stored is not None else detected)
+        finally:
+            self._loading = False
         self._rerun()
 
     def _use_detected(self) -> None:
         self.store.set_setting("plan_surplus", None)
-        self.surplus.setValue(surplus_monthly(self.store))
+        self._refresh_inner()
+
+    def _surplus_changed(self) -> None:
+        if self._loading:
+            return
+        self.store.set_setting("plan_surplus", self.surplus.value())
+        self._rerun()
 
     def _policy_changed(self) -> None:
         if self._loading:
@@ -262,13 +273,39 @@ class GoalsPage(QWidget):
     def _rerun(self) -> None:
         if self._loading:
             return
-        self.store.set_setting("plan_surplus", self.surplus.value())
+        self._show_surplus_calculation()
         self._plan = build_plan(self.store, policy=self.policy.currentData(),
                                 surplus=self.surplus.value())
         self._render_table()
         self._render_chart()
         self._render_cascades()
         self._render_faster()
+
+    def _show_surplus_calculation(self) -> None:
+        agg = monthly_aggregates(self.store.transactions())
+        manual = self.store.get_setting("plan_surplus", None) is not None
+        prefix = "Manual amount. Detected: " if manual else "Detected: "
+        if agg is None:
+            self.surplus_note.setText(prefix + "no completed months of personal transactions yet.")
+            return
+        net = f"{'−' if agg.surplus < 0 else '+'}${abs(agg.surplus):,.2f}"
+        note = (f"{prefix}${agg.income:,.2f} income − "
+                f"${agg.spending:,.2f} spending ≈ {net}/mo. "
+                f"Weighted across {agg.n_months} completed month"
+                f"{'s' if agg.n_months != 1 else ''}; recent months count more. "
+                "The current month, transfers and reimbursable business amounts are excluded.")
+        if agg.surplus < 0:
+            note += " The detected amount available for goals is $0 because spending exceeds income."
+        if manual:
+            note += " Use detected keeps this amount updated after imports."
+        self.surplus_note.setText(note)
+        self.surplus_note.setToolTip(
+            "Each recorded completed calendar month is weighted by "
+            "0.5^(months older than the newest / 3), using up to 24 months. "
+            "Income and spending each equal sum(weight × monthly total) / "
+            "sum(weights). Spare is max(0, income − spending). "
+            "Loan payments count when recorded in personal spending; "
+            "this is observed surplus, not a guarantee of future free cash.")
 
     # ---------------------------------------------------------------
     def _render_table(self) -> None:

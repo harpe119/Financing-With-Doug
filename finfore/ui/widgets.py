@@ -9,6 +9,7 @@ from PyQt6.QtGui import QAction, QColor, QFont, QPainter, QPen, QValidator
 from PyQt6.QtWidgets import (QCheckBox, QDialog, QDoubleSpinBox, QFrame,
                              QHBoxLayout, QLabel, QLayout, QMenu, QPushButton,
                              QSizePolicy, QSpinBox, QSplitter, QTextBrowser,
+                             QStyle, QStyleOptionButton, QStylePainter,
                              QVBoxLayout, QWidget)
 
 from . import theme
@@ -81,6 +82,59 @@ class FlowLayout(QLayout):
             x += w.width() + self._spacing
             row_h = max(row_h, w.height())
         return y + row_h - rect.y() + m.bottom()
+
+
+class WrappedCheckBox(QCheckBox):
+    """A native checkbox whose caption can wrap in a narrow container."""
+
+    def __init__(self, text: str, parent=None):
+        super().__init__(text, parent)
+        self.caption = QLabel(text, self)
+        self.caption.setTextFormat(Qt.TextFormat.PlainText)
+        self.caption.setWordWrap(True)
+        self.caption.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self._caption_layout = QHBoxLayout(self)
+        self._caption_layout.addWidget(self.caption)
+        self._caption_layout.setSpacing(0)
+        self._update_caption_margin()
+        policy = QSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
+        policy.setHeightForWidth(True)
+        self.setSizePolicy(policy)
+
+    def _update_caption_margin(self) -> None:
+        style = self.style()
+        inset = (style.pixelMetric(QStyle.PixelMetric.PM_IndicatorWidth, None, self)
+                 + style.pixelMetric(QStyle.PixelMetric.PM_CheckBoxLabelSpacing, None, self))
+        self._caption_layout.setContentsMargins(inset + 2, 2, 2, 2)
+
+    def sizeHint(self) -> QSize:
+        size = self._caption_layout.sizeHint()
+        size.setHeight(self.heightForWidth(self.width()))
+        return size
+
+    def minimumSizeHint(self) -> QSize:
+        return self._caption_layout.minimumSize()
+
+    def heightForWidth(self, width: int) -> int:
+        indicator = self.style().pixelMetric(QStyle.PixelMetric.PM_IndicatorHeight, None, self)
+        return max(indicator + 4, self._caption_layout.totalHeightForWidth(width))
+
+    def paintEvent(self, event) -> None:
+        option = QStyleOptionButton()
+        self.initStyleOption(option)
+        option.text = ""
+        painter = QStylePainter(self)
+        painter.drawControl(QStyle.ControlElement.CE_CheckBox, option)
+
+    def hitButton(self, pos) -> bool:
+        return self.rect().contains(pos)
+
+    def changeEvent(self, event) -> None:
+        super().changeEvent(event)
+        if (hasattr(self, "_caption_layout") and event.type() in
+                (QEvent.Type.StyleChange, QEvent.Type.FontChange)):
+            self._update_caption_margin()
+            self.updateGeometry()
 
 
 class _SelectOnClickMixin:
@@ -379,18 +433,40 @@ class CollapsibleCard(QFrame):
 
 
 class StatCard(Card):
-    """Headline number with a caption and optional sub-line."""
+    """Headline number with a caption and a sub-line that explains it.
 
-    def __init__(self, title: str, parent=None):
-        super().__init__(title, parent)
+    The sub-line slot is always occupied, even when empty, so a row of cards
+    keeps its numbers on one baseline instead of the one card that has a
+    sub-line sitting higher than the rest. ``swatch`` is the chart colour of
+    the series this number is read against, so a figure can be traced to its
+    line without a legend.
+    """
+
+    def __init__(self, title: str, parent=None, swatch: str | None = None,
+                 hero: bool = False, dashed: bool = False):
+        super().__init__(None, parent)
+        self._title_text = title
+        head = QHBoxLayout()
+        head.setSpacing(7)
+        if swatch:
+            head.addWidget(Swatch(swatch, line=True, dashed=dashed, width=18))
+        self.title = QLabel(title.upper())
+        self.title.setObjectName("cardTitle")
+        head.addWidget(self.title)
+        head.addStretch(1)
+        self.body.addLayout(head)
+        self.body.setContentsMargins(14, 12, 14, 12)
+        self.body.setSpacing(6)
         self.value = QLabel("—")
-        self.value.setObjectName("statValue")
-        self.sub = QLabel("")
+        self.value.setObjectName("statHero" if hero else "statValue")
+        self.sub = QLabel(" ")
         self.sub.setObjectName("statSub")
-        self.sub.setVisible(False)
+        self.sub.setWordWrap(True)
         self.body.addWidget(self.value)
         self.body.addWidget(self.sub)
+        self.body.addStretch(1)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self._announce()
 
     def set_money(self, x: float | None, colored: bool = False,
                   sub: str | None = None) -> None:
@@ -406,8 +482,14 @@ class StatCard(Card):
                  sub: str | None = None) -> None:
         self.value.setText(text)
         self.value.setStyleSheet(f"color: {color};" if color else "")
-        self.sub.setVisible(bool(sub))
-        self.sub.setText(sub or "")
+        self.sub.setText(sub or " ")
+        self._announce()
+
+    def _announce(self) -> None:
+        """What a screen reader says for this card: its title, value, note."""
+        note = self.sub.text().strip()
+        self.setAccessibleName(f"{self._title_text}: {self.value.text()}"
+                               + (f". {note}" if note else ""))
 
 
 def split(orientation, *panes, sizes=None, collapsible: bool = False) -> QSplitter:
@@ -462,6 +544,20 @@ def hsep() -> QFrame:
     return f
 
 
+def form_row(form, text: str, widget) -> None:
+    """A form row whose label is tied to its field.
+
+    QFormLayout only sets the buddy when the widget can take focus at the
+    moment it is added, and the mapping combos in the import dialogs are empty
+    until a file is chosen, so their labels were never connected. A tied label
+    is what a screen reader announces and what a mnemonic or a click on the
+    label uses.
+    """
+    label = QLabel(text)
+    label.setBuddy(widget)
+    form.addRow(label, widget)
+
+
 def hint(text: str) -> QLabel:
     l = QLabel(text)
     l.setObjectName("hint")
@@ -474,7 +570,7 @@ class Swatch(QWidget):
     """A small colour chip used to label chart bands."""
 
     def __init__(self, color: str, alpha: int = 255, width: int = 22,
-                 height: int = 11, line: bool = False, dashed: bool = False):
+                 height: int = 11, line: bool = False, dashed: bool | str = False):
         super().__init__()
         self.setFixedSize(width, height)
         self._color = color
@@ -490,7 +586,9 @@ class Swatch(QWidget):
         c = theme.qcolor(self._color, self._alpha)
         if self._line:
             pen = QPen(c, 2.4)
-            if self._dashed:
+            if self._dashed == "dot":
+                pen.setStyle(Qt.PenStyle.DotLine)
+            elif self._dashed:
                 pen.setStyle(Qt.PenStyle.DashLine)
             p.setPen(pen)
             y = self.height() // 2
@@ -500,6 +598,35 @@ class Swatch(QWidget):
             p.setBrush(QBrush(c))
             p.drawRoundedRect(0, 0, self.width(), self.height(), 2, 2)
         p.end()
+
+
+class ChartKey(QWidget):
+    """A chart legend that sits beside the plot instead of over the data.
+
+    The in-plot legend pyqtgraph draws floats on top of whatever is under it,
+    which on a short chart is the bars. A row of swatches under the plot costs
+    one line of height and never covers a data point.
+    """
+
+    def __init__(self, entries: list[tuple], parent=None):
+        """entries: (label, color, kind) with kind in {'bar', 'line', 'dash'}."""
+        super().__init__(parent)
+        lay = FlowLayout(self, margin=2, spacing=14)
+        for label, color, kind in entries:
+            entry = QWidget()
+            row = QHBoxLayout(entry)
+            row.setContentsMargins(0, 0, 0, 0)
+            row.setSpacing(5)
+            row.addWidget(Swatch(color, 190 if kind == "bar" else 255,
+                                 line=kind != "bar", dashed=kind == "dash"))
+            lbl = QLabel(label)
+            lbl.setObjectName("hint")
+            row.addWidget(lbl)
+            lay.addWidget(entry)
+        pol = QSizePolicy(QSizePolicy.Policy.Preferred,
+                          QSizePolicy.Policy.Minimum)
+        pol.setHeightForWidth(True)
+        self.setSizePolicy(pol)
 
 
 class SeriesRegistry:
@@ -569,13 +696,14 @@ class LegendToggles(QWidget):
             if key not in main_keys:
                 continue
             alpha = {"band_outer": 34, "band_inner": 62}.get(kind, 255)
-            is_line = kind in ("line", "dash")
+            is_line = kind in ("line", "dash", "dot")
             entry = QWidget()
             row = QHBoxLayout(entry)
             row.setContentsMargins(0, 0, 0, 0)
             row.setSpacing(4)
             row.addWidget(Swatch(color, alpha, line=is_line,
-                                 dashed=(kind == "dash")))
+                                 dashed=("dot" if kind == "dot"
+                                         else kind == "dash")))
             lbl = QLabel(label)
             lbl.setObjectName("hint")
             row.addWidget(lbl)

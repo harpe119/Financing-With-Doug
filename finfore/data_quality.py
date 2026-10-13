@@ -64,7 +64,9 @@ reported separately and cannot make a historical check look more current.
     valid = tx[tx["date"].notna() & (tx["date"] <= pd.Timestamp(today))]
     cash_ids = {a.id for a in accounts if a.type.is_cashlike}
     cash = valid[valid["account_id"].isin(cash_ids)]
-    behavior = cash[(cash["category"] != "Transfer") & (cash["amount"] != 0)]
+    from .categorize import personal_transactions
+    behavior = personal_transactions(cash)
+    behavior = behavior[behavior["amount"] != 0]
     first = cash["date"].min().date() if len(cash) else None
     last = cash["date"].max().date() if len(cash) else None
     checks: list[QualityCheck] = []
@@ -111,8 +113,8 @@ reported separately and cannot make a historical check look more current.
     if not behavior.empty:
         span = (behavior["date"].max() - behavior["date"].min()).days + 1
     add("history_length", "Spending history", span < HISTORY_REMINDER_DAYS,
-        ("No non-transfer cash transactions are recorded." if not span else
-         f"Recorded non-transfer cash transactions span {span} days, from "
+        ("No spending or income transactions are recorded." if not span else
+         f"Recorded transactions, not counting transfers between your accounts, span {span} days, from "
          f"{behavior['date'].min().date().isoformat()} to {behavior['date'].max().date().isoformat()}.")
         + "\nLess than 90 days is flagged as a short history. A longer span may show more variation, but does not establish completeness or capture every seasonal expense.",
         "Transactions", "Review history")
@@ -145,20 +147,20 @@ reported separately and cannot make a historical check look more current.
     unknown_income = float(unknown.loc[unknown["amount"] > 0, "amount"].sum())
     share = f" ({unknown_spend / spent:.1%} of recorded spending)" if spent else ""
     add("categories", "Categories to review", len(unknown),
-        (f"Nonzero cash transactions labeled Misc, Other income or without a category in the last 180 days: {len(unknown)}. "
-         f"They include {fmt_money(unknown_spend)} of outflows{share} and {fmt_money(unknown_income)} of inflows."
-         if len(unknown) else "No Misc, Other income or blank categories were found among nonzero cash transactions in the last 180 days.")
+        (f"Transactions from the last 180 days labeled Misc, Other income or with no category: {len(unknown)}. "
+         f"They include {fmt_money(unknown_spend)} of money out{share} and {fmt_money(unknown_income)} of money in."
+         if len(unknown) else "No transactions from the last 180 days are labeled Misc, Other income or left without a category.")
         + "\nThese entries are not omitted from the forecast. Review the labels before interpreting category-specific spending or scenarios; Misc and Other income can also be intentional. This check does not verify the other labels.",
         "Transactions", "Review categories")
 
     end = today + timedelta(days=SCHEDULE_WINDOW_DAYS)
     unassigned = [e for e in upcoming_schedule(store, end, today).entries
                   if e.amount < 0 and e.account_id is None]
-    add("unassigned", "Scheduled outflows without an account", unassigned,
-        (f"Scheduled outflows without a confirmed payment account: {len(unassigned)}, "
+    add("unassigned", "Upcoming payments with no account", unassigned,
+        (f"Upcoming payments with no confirmed account to pay from: {len(unassigned)}, "
          f"totaling {fmt_money(-sum(e.amount for e in unassigned))} "
          f"between {(today + timedelta(days=1)).isoformat()} and {end.isoformat()}."
-         if unassigned else "Every scheduled outflow in the next 30 days has a confirmed payment account, or none is scheduled.")
+         if unassigned else "Every payment scheduled in the next 30 days has a confirmed account to pay from, or none is scheduled.")
         + "\nUnassigned bills, loan payments, investment contributions and saved expenses still affect the combined forecast, but not the calendar's account-specific balances. The app does not invent a payment account. Review the Unassigned calendar filter and recurring patterns.",
         "Calendar", "Review calendar")
 
