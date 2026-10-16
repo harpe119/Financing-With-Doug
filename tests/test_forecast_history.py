@@ -196,7 +196,8 @@ class ForecastHistoryTests(unittest.TestCase):
         with patch("finfore.forecast.date", ForecastDate), \
              patch("finfore.forecast.weekly_category_matrix", wraps=weekly_category_matrix) as matrix:
             sensitivity(self.store, Scenario(), 60, ["Groceries"])
-        self.assertGreater(matrix.call_count, 1)
+        # Each lever reuses the same selected empirical weeks.
+        self.assertEqual(matrix.call_count, 1)
         for call in matrix.call_args_list:
             self.assertEqual(call.kwargs["start_date"], self.changed)
             self.assertEqual(call.kwargs["end_date"], self.today)

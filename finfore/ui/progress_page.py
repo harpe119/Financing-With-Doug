@@ -266,6 +266,7 @@ class ProgressPage(QWidget):
             QMessageBox.warning(self, "Couldn't take a checkpoint", str(e))
             return
         self.refresh()
+        self.main.refresh_header()
         self.main.status("Checkpoint recorded.")
 
     def _backfill(self) -> None:
@@ -311,6 +312,7 @@ class ProgressPage(QWidget):
         finally:
             QApplication.restoreOverrideCursor()
         self.refresh()
+        self.main.refresh_header()
         self.main.status(
             f"Reconstructed {made} checkpoint{'s' if made != 1 else ''}."
             if made else
@@ -358,6 +360,7 @@ class ProgressPage(QWidget):
         for c in cps:
             self.store.delete_checkpoint(c.id)
         self.refresh()
+        self.main.refresh_header()
         self.main.status(
             f"Cleared {len(cps)} checkpoint{'s' if len(cps) != 1 else ''}. "
             f"{n_tx} transactions untouched.")

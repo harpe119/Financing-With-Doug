@@ -112,6 +112,7 @@ class RecurringPage(QWidget):
         iid = item.data(Qt.ItemDataRole.UserRole)
         self.store.update_recurring(
             iid, active=item.checkState() == Qt.CheckState.Checked)
+        self.main.refresh_header()
 
     def _context_menu(self, point) -> None:
         """Right-click: the rare reclassifications, off the main surface."""
@@ -152,11 +153,13 @@ class RecurringPage(QWidget):
     def _set_kind(self, item_id: int, kind: str, link) -> None:
         self.store.update_recurring(item_id, kind=kind, linked_account_id=link)
         self.refresh()
+        self.main.refresh_header()
         self.main.status("Recurring item updated.")
 
     def _redetect(self) -> None:
         n = refresh_derived(self.store)
         self.refresh()
+        self.main.refresh_header()
         self.main.status(f"Detection refreshed — {n} patterns tracked.")
 
     def _delete(self) -> None:
@@ -177,4 +180,5 @@ class RecurringPage(QWidget):
         if ok == QMessageBox.StandardButton.Yes:
             self.store.delete_recurring(item_id)
             self.refresh()
+            self.main.refresh_header()
             self.main.status(f"Deleted “{name}”.")

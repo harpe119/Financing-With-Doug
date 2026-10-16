@@ -144,10 +144,12 @@ def _month_figures(rows: pd.DataFrame) -> tuple[float, float,
 
 
 def _outlook(store: Store, rep: MonthReport) -> None:
-    from .forecast import run_forecast
+    from .forecast import goal_plan_enabled, run_forecast
+    from .models import Scenario
     from .insights import essential_monthly
     ess = essential_monthly(store)
-    res = run_forecast(store, 365, 200, emergency_target=max(0.0, ess * 3),
+    res = run_forecast(store, 365, 200, Scenario(follow_goal_plan=goal_plan_enabled(store)),
+                       emergency_target=max(0.0, ess * 3),
                        essential_monthly=ess)
     if res.shortfall is not None:
         rep.outlook_head = res.shortfall.headline

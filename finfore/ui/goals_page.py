@@ -310,18 +310,21 @@ class GoalsPage(QWidget):
     def _use_detected(self) -> None:
         self.store.set_setting("plan_surplus", None)
         self._refresh_inner()
+        self.main.refresh_header()
 
     def _surplus_changed(self) -> None:
         if self._loading:
             return
         self.store.set_setting("plan_surplus", self.surplus.value())
         self._rerun()
+        self.main.refresh_header()
 
     def _policy_changed(self) -> None:
         if self._loading:
             return
         self.store.set_plan_policy(self.policy.currentData())
         self._rerun()
+        self.main.refresh_header()
 
     def _rerun(self) -> None:
         if self._loading:
@@ -485,6 +488,8 @@ class GoalsPage(QWidget):
                 "already met" if a.target.complete else
                 a.eta.strftime("%b %Y") if a.eta else "beyond 30 yrs")
         self._show_payment_breakdown()
+
+        self.main.refresh_header()
 
     def _sync_custom_note(self) -> None:
         if self.policy.currentData() != "custom":
@@ -714,6 +719,7 @@ class GoalsPage(QWidget):
         keys[i], keys[j] = keys[j], keys[i]
         self.store.set_plan_order(keys)
         self._rerun()
+        self.main.refresh_header()
         self.table.selectRow(j)
 
     def _add(self) -> None:

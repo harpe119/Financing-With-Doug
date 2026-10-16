@@ -22,6 +22,7 @@ from ..ingest import (ImportConfig, SIGN_MODES, balances_from_activity,
                       parse_transactions, read_raw, sniff_delimiter)
 from ..pipeline import reimport_with_saved_mapping, refresh_derived
 from ..store import Store
+from ..history import current_accounts
 from ..util import fmt_money
 from . import theme
 from .account_dialog import AccountDialog, _money_spin
@@ -1039,6 +1040,7 @@ class AccountsPage(QWidget):
         lay.addWidget(self.table, 1)
 
         self.footer = hint(
+            "Balances are calculated through today from dated balances, snapshots and transactions. "
             "Money you owe is shown as a positive amount, under What you owe. "
             "A card in credit counts as money you have.")
         lay.addWidget(self.footer)
@@ -1132,7 +1134,7 @@ class AccountsPage(QWidget):
         return it
 
     def refresh(self) -> None:
-        accounts = self.store.accounts()
+        accounts = current_accounts(self.store)
         keep = self._selected_id()
         self._statuses = account_statuses(self.store)
         self.summary.setText(summary_line(accounts, self._statuses))

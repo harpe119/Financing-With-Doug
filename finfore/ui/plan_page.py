@@ -27,6 +27,7 @@ class PlanPage(QWidget):
         self._loading = False
         self._dirty = False
         self._signature = None
+        self._loaded_goal_budget = None
         root = QVBoxLayout(self)
         root.setContentsMargins(18, 16, 18, 16)
         self.scroll = QScrollArea()
@@ -134,24 +135,42 @@ class PlanPage(QWidget):
     def reset_for_store(self):
         self._dirty = False
         self._signature = None
+        self._loaded_goal_budget = None
 
     def refresh(self):
         signature = (self.store.get_setting('spending_plan'), self.store.get_setting('plan_surplus'))
         if self._dirty and signature == self._signature:
             self._render()
             return
+        # Merge saved changes from Goals without throwing away unrelated edits
+        # in this page's draft. Only controls changed locally override incoming
+        # saved values; an untouched allowance follows the shared Goals value.
+        draft = self._overrides() if self._dirty else {}
+        previous = (self._signature[0] or {}) if self._signature else {}
+        changed = ({key for key in set(draft) | set(previous)
+                    if draft.get(key) != previous.get(key)} if self._dirty else set())
+        budget = self.goal_budget.value()
+        keep_budget = self._dirty and budget != self._loaded_goal_budget
         self._loading = True
         plan = calculate_plan(self.store)
+        overrides = dict(plan.overrides)
+        for key in changed:
+            if key in draft:
+                overrides[key] = draft[key]
+            else:
+                overrides.pop(key, None)
+        draft_plan = calculate_plan(self.store, overrides)
         self._signature = signature
         for row, key in enumerate(LABELS):
             self.table.item(row, 1).setText(dollars(plan.detected[key]))
-            self.checks[key].setChecked(key in plan.overrides)
-            self.boxes[key].setValue(plan.amounts[key])
-            self.boxes[key].setEnabled(key in plan.overrides)
+            self.checks[key].setChecked(key in overrides)
+            self.boxes[key].setValue(draft_plan.amounts[key])
+            self.boxes[key].setEnabled(key in overrides)
         stored = self.store.get_setting('plan_surplus')
-        self.goal_budget.setValue(stored if stored is not None else max(0, plan.available))
+        self._loaded_goal_budget = stored if stored is not None else max(0, plan.available)
+        self.goal_budget.setValue(budget if keep_budget else self._loaded_goal_budget)
         self._loading = False
-        self._dirty = False
+        self._dirty = overrides != plan.overrides or self.goal_budget.value() != self._loaded_goal_budget
         self._render()
 
     def _overrides(self):
@@ -243,7 +262,8 @@ class PlanPage(QWidget):
         self.funding_note.setText(' '.join(warnings) +
             ' Monthly actual = recorded contributions minus releases; purchases remain goal progress. '
             'Override spending already covered by a goal reserve to avoid budgeting that purchase twice. '
-            'Plan amounts are intentions and do not change the Forecast scenario or move money.')
+            'Forecast can use this saved allowance and the Goals priority for loan repayments. '
+            'Income and spending overrides do not change its scenario controls or move money.')
         self.state.setText('Complete income & spending first' if not self._ready else 'Unsaved changes' if self._dirty else
                            'Saved monthly plan' if self.store.get_setting('spending_plan') is not None else 'Preview — save to use on Goals')
         self.save_btn.setEnabled(self._ready and (self._dirty or self.store.get_setting('spending_plan') is None))

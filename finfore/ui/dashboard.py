@@ -14,7 +14,8 @@ from PyQt6.QtWidgets import (QButtonGroup, QComboBox, QFrame, QGridLayout, QHBox
 from ..alerts import annual_total, bill_changes, summarise
 from ..calendar import upcoming_schedule
 from ..data_quality import BALANCE_REMINDER_DAYS
-from ..forecast import run_forecast
+from ..forecast import goal_plan_enabled, run_forecast
+from ..models import Scenario
 from ..history import (acknowledge, category_spending, headline_stats,
                        monthly_cashflow, networth_history, account_balance_history, unacknowledged)
 from ..insights import emergency_fund_target, essential_monthly
@@ -918,6 +919,7 @@ class DashboardPage(QWidget):
         try:
             ess = essential_monthly(self.store)
             res = run_forecast(self.store, LOOKAHEAD_DAYS, LOOKAHEAD_PATHS,
+                               Scenario(follow_goal_plan=goal_plan_enabled(self.store)),
                                emergency_target=ess * 3, essential_monthly=ess)
             sf = res.shortfall
             lo = float(res.cash_pct[10][-1])

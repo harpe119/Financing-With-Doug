@@ -35,6 +35,21 @@ Data-quality regressions are in `tests/test_data_quality.py`, also included
 in the core suite. They cover freshness boundaries, snapshots, per-account
 history gaps, category amounts, schedule assignment and read-only behavior.
 
+## Measuring performance
+
+Run `python scripts/benchmark.py --rounds 3 --json timings.json` to measure page
+loads and forecast changes with temporary fictional data and preferences.
+On headless Linux, set `QT_QPA_PLATFORM=offscreen`. The default fixture contains
+six years of transactions across four cash accounts, plus a loan, an investment,
+goals and checkpoints. It never opens the normal app database.
+
+Add `--profile timing.prof` to collect a cProfile trace. Profile runs include
+instrumentation overhead, so use separate runs for timing comparisons. Compare
+the same fixture and interpreter sequentially, with other heavy jobs stopped.
+[Performance notes](performance.md) record the measured improvements and the
+rules for reusing calculations. Cache correctness and seeded Progress statistics
+are checked in `tests/test_performance.py`, included in the core suite.
+
 ## The demo datasets
 
 **File → Load demo dataset** offers five situations, each in its **own database

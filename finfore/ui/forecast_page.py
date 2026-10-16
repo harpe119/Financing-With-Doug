@@ -20,7 +20,7 @@ from PyQt6.QtWidgets import (QCheckBox, QComboBox, QDateEdit, QDialog,
 
 from ..forecast import (MATERIAL_MIN, STARTER_BUFFER, SUSTAINED_DAYS, T_DOF,
                         ForecastResult, backtest_cash, crunch_causes,
-                        run_forecast, sensitivity)
+                        goal_plan_enabled, run_forecast, sensitivity)
 from ..insights import emergency_fund_target, essential_monthly
 from ..history import category_spending, networth_history
 from ..forecast_history import ForecastHistory, SETTING as HISTORY_SETTING
@@ -463,6 +463,7 @@ class ForecastPage(QWidget):
         self.main = main
         self._cat_sliders: list[SliderRow] = []
         self._analysis = "tornado"
+        self._analysis_dirty = True
         self._goal_labels: dict[int, QLabel] = {}
         # Last run's results, kept so the "for nerds" window can describe what
         # is currently on screen rather than recomputing it (a second forecast
@@ -739,6 +740,13 @@ class ForecastPage(QWidget):
         self.event_card = ev
 
         goals = CollapsibleCard("Goals", expanded=False)
+        self.follow_goals = WrappedCheckBox("Use Goals funding plan")
+        self.follow_goals.setToolTip('Apply the allowance, priority and allocation policy from Goals '
+            'to future loan repayments. Savings earmarks remain part of household cash.')
+        self.follow_goals.toggled.connect(self._goal_plan_changed)
+        goals.body.addWidget(self.follow_goals)
+        goals.body.addWidget(hint('The graph follows your Goals loan repayments when enabled. '
+            'Turn this off to use the separate extra-loan and rollover controls.'))
         self.goal_box = QVBoxLayout()
         self.goal_box.setSpacing(8)
         goals.body.addLayout(self.goal_box)
@@ -1267,6 +1275,10 @@ class ForecastPage(QWidget):
         self.retry_btn.hide()
         self.chart_scroll.show()
         self._load_history()
+        self.follow_goals.blockSignals(True)
+        self.follow_goals.setChecked(goal_plan_enabled(self.store))
+        self.follow_goals.blockSignals(False)
+        self._sync_goal_plan_controls()
         # rebuild category sliders, preserving positions by name
         prev = {s.name: s.slider.value() for s in self._cat_sliders}
         _clear_layout(self.cat_box)
@@ -1415,10 +1427,30 @@ class ForecastPage(QWidget):
         return Scenario(
             category_multipliers={s.name: s.value() for s in self._cat_sliders},
             income_multiplier=self.income_slider.value(),
-            extra_loan_payment=self.extra_loan.value(),
+            extra_loan_payment=0.0 if self.follow_goals.isChecked() else self.extra_loan.value(),
             extra_investing=self.extra_invest.value(),
-            snowball=self.snowball.isChecked(),
+            snowball=True if self.follow_goals.isChecked() else self.snowball.isChecked(),
+            follow_goal_plan=self.follow_goals.isChecked(),
         )
+
+    def _sync_goal_plan_controls(self) -> None:
+        following = self.follow_goals.isChecked()
+        self.extra_loan.setEnabled(not following)
+        self.snowball.setEnabled(not following)
+
+    def _goal_plan_changed(self, checked) -> None:
+        try:
+            self.store.set_setting('forecast_goal_plan', bool(checked))
+        except Exception as error:
+            self.follow_goals.blockSignals(True)
+            self.follow_goals.setChecked(not checked)
+            self.follow_goals.blockSignals(False)
+            self._sync_goal_plan_controls()
+            self._forecast_failed(error, 'The Goals plan setting could not be saved. Refresh the forecast to try again.')
+            return
+        self._sync_goal_plan_controls()
+        self.main.refresh_header()
+        self._schedule_run()
 
     def _load_history(self) -> None:
         history = ForecastHistory.from_setting(self.store.get_setting(HISTORY_SETTING))
@@ -1458,6 +1490,7 @@ class ForecastPage(QWidget):
             self._forecast_failed(error, "The history setting could not be saved. "
                                   "Check that this ledger is writable, then select Refresh forecast.")
             return
+        self.main.refresh_header()
         self._schedule_run()
 
     # ---------------- what-if events ----------------
@@ -1542,6 +1575,7 @@ class ForecastPage(QWidget):
             return
         if self.run_btn.isEnabled():
             self.run()
+        self.main.refresh_header()
 
     def _sync_event_repeat(self) -> None:
         repeating = self.e_repeat.currentData() != "once"
@@ -1713,8 +1747,14 @@ class ForecastPage(QWidget):
                 zip(weights, (show_cash, show_nw, show_analysis))]
         s = sum(live) or 1
         self.chart_split.setSizes([int(total * w / s) for w in live])
+        self._maybe_run_analysis()
 
     # ---------------- analysis panel ----------------
+    def _maybe_run_analysis(self) -> None:
+        if (self._analysis_dirty and self._res is not None
+                and self.analysis_card.isVisibleTo(self)):
+            self._run_analysis()
+
     def _set_analysis(self, which: str) -> None:
         self._analysis = which
         self.btn_tornado.setChecked(which == "tornado")
@@ -1723,6 +1763,7 @@ class ForecastPage(QWidget):
         self._run_analysis()
 
     def _run_analysis(self) -> None:
+        self._analysis_dirty = False
         self.analysis_note.setToolTip("")
         self.analysis_note.setStyleSheet("")
         which = getattr(self, "_analysis", "tornado")
@@ -1897,6 +1938,8 @@ class ForecastPage(QWidget):
     # ---------------- for nerds ----------------
     def _nerd_panel(self) -> tuple[str, str]:
         """Everything the page deliberately does not say out loud."""
+        if self._analysis_dirty and self._res is not None:
+            self._run_analysis()
         res = getattr(self, "_res", None)
         if res is None:
             return ("Forecast · the numbers underneath",
@@ -2077,6 +2120,7 @@ class ForecastPage(QWidget):
                            emergency_target=ef_target, essential_monthly=ess)
         self._bt = None
         self._sens = []
+        self._analysis_dirty = True
         self._res, self._ef_target, self._ef_months = res, ef_target, months
         self.income_slider.set_monthly_reference(res.monthly_income_reference)
         for row in self._cat_sliders:
@@ -2096,7 +2140,8 @@ class ForecastPage(QWidget):
                                       "Choose a longer period or import recent data.")
         base: ForecastResult | None = None
         if self.overlay.isChecked() and (not scenario.is_baseline() or not scenario.snowball):
-            base = run_forecast(store, H, self.paths.value(), Scenario(),
+            base = run_forecast(store, H, self.paths.value(),
+                                Scenario(follow_goal_plan=scenario.follow_goal_plan),
                                 emergency_target=ef_target,
                                 essential_monthly=ess)
 
@@ -2199,7 +2244,7 @@ class ForecastPage(QWidget):
                     "above it on that date and half below. It is not a guaranteed balance. "
                     + self.overlay.toolTip())
         self._render_risk(res, ef_target, months)
-        self._run_analysis()
+        self._maybe_run_analysis()
 
         # ----- goal ETAs -----
         fmt = "%b %Y"
@@ -2221,7 +2266,11 @@ class ForecastPage(QWidget):
                 lbl.setText(f"Average inputs: {mid}\nBand crossings: {early} – {late}")
 
         # ----- summary -----
-        bits = [f"Scheduled cash flow only ≈ {fmt_money(res.monthly_recurring_net, signed=True)}/mo"]
+        bits = [f"Paydays and bills ≈ {fmt_money(res.monthly_recurring_net, signed=True)}/mo "
+                "before loan payments and investing"]
+        if res.goal_plan_budget is not None:
+            bits.insert(0, f"Goals funding plan · {fmt_money(res.goal_plan_budget)}/mo extra · "
+                        "loan repayments applied to this graph")
         for lo in res.loans:
             when = lo.payoff.strftime(fmt) if lo.payoff else "beyond horizon"
             bits.append(f"{lo.account.name}: {fmt_money(lo.payment)}/mo → paid off "

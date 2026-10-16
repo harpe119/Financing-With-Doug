@@ -863,6 +863,7 @@ class TransactionsPage(QWidget):
         self.table.setRowCount(len(df))
         pos = QBrush(QColor(theme.POSITIVE))
         neg = QBrush(QColor(theme.NEGATIVE))
+        attention = needs_attention(df)
         for r, (_, row) in enumerate(df.iterrows()):
             d = QTableWidgetItem(fmt_date(row["date"]))
             d.setData(Qt.ItemDataRole.UserRole, int(row["id"]))
@@ -871,7 +872,7 @@ class TransactionsPage(QWidget):
             a.setToolTip(a.text())
             desc.setToolTip(desc.text())
             state = ('Reviewed' if row.category_reviewed else
-                     'Needs checking' if needs_attention(pd.DataFrame([row])).iloc[0] else 'Not reviewed')
+                     'Needs checking' if attention.loc[row.name] else 'Not reviewed')
             desc.setData(_REVIEW_STATE, state)
             desc.setData(_ATTENTION, state == 'Needs checking')
             desc.setData(Qt.ItemDataRole.AccessibleTextRole, f'{row.description}. {state}.')

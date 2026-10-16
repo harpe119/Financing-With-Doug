@@ -8,6 +8,29 @@ itself.
 
 ## Unreleased — goal planning, CSV overlap and account balance debugging
 
+- Connect Forecast curves to the Goals funding allowance, priority and payment
+  allocations. Add a saved Use Goals funding plan choice, shared by Dashboard
+  outlooks, reports and new checkpoints. Keep savings earmarks in household cash
+  and apply actual loan repayments once; preserve historical backtest cut-offs.
+- Keep recurring payments without a loan account in Calendar, consistent with
+  Forecast. Clarify that the payday/bill subtotal is before loans and investing.
+
+- Keep Accounts totals, Dashboard, Goals, new checkpoints and Forecast starting
+  balances consistent after later transactions and balance snapshots. Respect
+  explicit balance corrections when a snapshot already exists on the same date.
+- Preserve unsaved spending-plan edits when the shared Goals allowance changes.
+  Refresh header Undo controls after recurring, goal-plan, event and checkpoint edits.
+
+- Reuse ledger reads, balance histories, plans and seeded forecasts until data
+  changes. Bound cached results in memory and invalidate after edits, imports,
+  external writes, Undo/Redo and a new day; bypass caching inside transactions.
+- Calculate Forecast sensitivity/backtesting only when requested. Reuse fitted
+  schedules and spending weeks across scenarios, calculate percentile bands
+  together, and batch Progress resampling and duplicate-posting checks.
+- Avoid loading an intermediate page when following a sub-tab link. Calculate
+  transaction review indicators once per displayed batch instead of per row.
+- Add a repeatable fictional-data benchmark and cache correctness regressions.
+
 - Simplify Transactions around search, filters and the review queue. Move
   diagnostics/export/help into Tools, show review state beside descriptions,
   wrap long descriptions and retain readable columns through horizontal scrolling.

@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from datetime import date, timedelta
+from .cache import cached_read
 
 import numpy as np
 import pandas as pd
@@ -95,7 +96,8 @@ def capture(store: Store, label: str = "", horizon_days: int = 365,
     and the whole point: storing what the model claimed, before the weeks it
     claimed it about have happened, is what makes the later comparison honest.
     """
-    from .forecast import run_forecast          # local: avoids an import cycle
+    from .forecast import goal_plan_enabled, run_forecast  # local: avoids an import cycle
+    from .models import Scenario
     from .insights import essential_monthly
 
     tx = store.transactions()
@@ -128,6 +130,7 @@ def capture(store: Store, label: str = "", horizon_days: int = 365,
         try:
             ess = essential_monthly(store)
             res = run_forecast(store, horizon_days, n_paths,
+                               Scenario(follow_goal_plan=goal_plan_enabled(store)),
                                emergency_target=max(0.0, ess * 3),
                                essential_monthly=ess)
             cp.forecast = {
@@ -135,6 +138,7 @@ def capture(store: Store, label: str = "", horizon_days: int = 365,
                 **{f"p{p}": [float(v) for v in res.cash_pct[p]]
                    for p in (10, 25, 50, 75, 90)},
                 "horizon_days": horizon_days,
+                "goal_plan": res.goal_plan_budget is not None,
             }
         except Exception:
             # A projection that cannot be built must not block the checkpoint:
@@ -398,6 +402,7 @@ class Significance:
         return self.diff * 52.0 / 12.0
 
 
+@cached_read
 def weekly_discretionary(store: Store) -> pd.Series:
     """Weekly totals of non-recurring, non-essential spending.
 
@@ -456,7 +461,7 @@ def compare_periods(before: np.ndarray, after: np.ndarray,
     n_b = len(before)
     observed = abs(out.diff)
     # Vectorised permutation: shuffle the labels, not the values.
-    perms = np.array([rng.permutation(combined) for _ in range(N_PERMUTATIONS)])
+    perms = rng.permuted(np.broadcast_to(combined, (N_PERMUTATIONS, len(combined))), axis=1)
     diffs = perms[:, n_b:].mean(axis=1) - perms[:, :n_b].mean(axis=1)
     out.p_value = float((np.abs(diffs) >= observed - 1e-12).mean())
     out.significant = out.p_value < ALPHA
@@ -464,11 +469,12 @@ def compare_periods(before: np.ndarray, after: np.ndarray,
     # the honest answer to "so there was no change, right?" when p is large.
     out.detectable = float(np.percentile(np.abs(diffs), 95))
 
-    boot = np.empty(N_BOOTSTRAP)
-    for i in range(N_BOOTSTRAP):
-        b = rng.choice(before, size=n_b, replace=True)
-        a = rng.choice(after, size=len(after), replace=True)
-        boot[i] = a.mean() - b.mean()
+    # Interleave before/after indices per replicate, preserving the original
+    # seeded draws while computing the sample means in NumPy rather than
+    # dispatching 8,000 separate random-choice and mean calls through Python.
+    bounds = np.concatenate((np.full(n_b, n_b), np.full(len(after), len(after))))
+    draws = rng.integers(bounds, size=(N_BOOTSTRAP, len(bounds)))
+    boot = after[draws[:, n_b:]].mean(axis=1) - before[draws[:, :n_b]].mean(axis=1)
     out.ci_low, out.ci_high = (float(np.percentile(boot, 2.5)),
                                float(np.percentile(boot, 97.5)))
 

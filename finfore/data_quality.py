@@ -15,6 +15,7 @@ from .calendar import upcoming_schedule
 from .history import cash_anchor
 from .store import Store
 from .util import fmt_money
+from .cache import cached_read
 
 BALANCE_REMINDER_DAYS = 30
 HISTORY_REMINDER_DAYS = 90
@@ -52,6 +53,7 @@ class QualityReport:
         return "No gaps flagged by these checks"
 
 
+@cached_read
 def inspect_data_quality(store: Store, today: date | None = None) -> QualityReport:
     """Inspect recorded balances, cash ledgers, categories and calendar routing.
 

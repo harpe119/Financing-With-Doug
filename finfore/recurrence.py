@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import re
 from datetime import date, timedelta
+from functools import lru_cache
 
 import numpy as np
 import pandas as pd
@@ -41,6 +42,7 @@ _NOISE = {
 _token_re = re.compile(r"[A-Z&']+")
 
 
+@lru_cache(maxsize=8192)
 def normalize_desc(s: str) -> str:
     toks = _token_re.findall((s or "").upper())
     toks = [t for t in toks if t not in _NOISE and len(t) > 1]

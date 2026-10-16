@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QSignalBlocker
 from PyQt6.QtGui import QAction, QKeySequence
 from PyQt6.QtWidgets import (QApplication, QHBoxLayout, QLabel, QListWidget,
                              QMainWindow, QMessageBox, QPushButton, QSizePolicy,
@@ -36,8 +36,9 @@ with ≥3 events whose inter-arrival intervals match a cadence (weekly …
 annual, incl. twice-monthly) within robust tolerances become patterns, scored
 by count, interval regularity, and amount stability.</p>
 <p><b>Forecast.</b> Active patterns replay forward at median amounts. Loans
-amortize monthly at APR/12 on their payment day; extra payment goes to the
-highest-APR loan, and freed payments optionally snowball. Investments follow
+amortize monthly at APR/12 on their payment day. Use Goals funding plan applies
+the saved allowance and priority to repayments; separate controls can instead
+send extra payments to the highest-APR loan and roll freed payments forward. Investments follow
 V<sub>k+1</sub> = V<sub>k</sub>·exp[(μ−σ²/2)Δt + σ√Δt·Z] with monthly
 contributions debited from cash.</p>
 <p><b>Variable spending.</b> Everything unmatched is bootstrapped: whole
@@ -378,10 +379,17 @@ class MainWindow(QMainWindow):
         if destination is None:
             return
         row, page = destination
-        self.nav.setCurrentRow(row)
         section = self.sections[row]
-        if page is not None:
-            section.setCurrentWidget(page)
+        tab_changed = page is not None and section.currentWidget() is not page
+        # Resolve the destination before emitting navigation signals. Otherwise
+        # a link to Progress first calculates Projection, then loads Progress.
+        if tab_changed:
+            with QSignalBlocker(section):
+                section.setCurrentWidget(page)
+        if self.nav.currentRow() != row:
+            self.nav.setCurrentRow(row)
+        elif tab_changed:
+            self.refresh_current()
 
     # ---------------- undo / redo ----------------
     def _sync_undo(self) -> None:

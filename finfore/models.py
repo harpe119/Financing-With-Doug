@@ -138,6 +138,7 @@ class Scenario:
     extra_investing: float = 0.0         # $/month additional contribution
     snowball: bool = True                # roll freed loan payments into next loan
     events: list = field(default_factory=list)   # list[OneOffEvent]
+    follow_goal_plan: bool = False      # apply the saved Goals funding ladder
 
     def is_baseline(self) -> bool:
         return (

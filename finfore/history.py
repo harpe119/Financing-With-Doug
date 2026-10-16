@@ -13,7 +13,7 @@ snapshot.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 
 import numpy as np
@@ -22,6 +22,7 @@ import pandas as pd
 from .categorize import INCOME_CATEGORIES, personal_transactions
 from .models import Account, AccountType
 from .store import Store
+from .cache import cached_read
 
 
 def cash_anchor(store: Store, account: Account) -> tuple[pd.Timestamp, float]:
@@ -262,6 +263,7 @@ def acknowledge(store: Store, issues: list[LedgerIssue]) -> None:
     store.set_ledger_acknowledgements(ack)
 
 
+@cached_read
 def reconcile_all(store: Store) -> list[LedgerIssue]:
     """The same check for every cash account, whether or not it looks wrong.
 
@@ -310,14 +312,11 @@ def _double_postings(sub: pd.DataFrame) -> tuple[int, float]:
     """
     if sub.empty:
         return 0, 0.0
-    n = 0
-    total = 0.0
-    for (_d, amt), grp in sub.groupby([sub["date"].dt.normalize(), "amount"]):
-        if len(grp) < 2 or grp["description"].nunique() < 2:
-            continue
-        n += len(grp) - 1
-        total += float(amt) * (len(grp) - 1)
-    return n, total
+    groups = sub.groupby([sub["date"].dt.normalize(), "amount"])["description"].agg(
+        rows='size', descriptions='nunique')
+    candidates = groups[(groups.rows > 1) & (groups.descriptions > 1)]
+    extra = candidates.rows - 1
+    return int(extra.sum()), float((extra * candidates.index.get_level_values('amount')).sum())
 
 
 def transaction_balances(store: Store, tx: pd.DataFrame | None = None) -> pd.DataFrame:
@@ -350,6 +349,7 @@ def transaction_balances(store: Store, tx: pd.DataFrame | None = None) -> pd.Dat
     return result
 
 
+@cached_read
 def account_balance_history(store: Store, account_ids=None) -> pd.DataFrame:
     """Signed balance per selected account: assets positive, money owed negative.
 
@@ -382,6 +382,25 @@ def account_balance_history(store: Store, account_ids=None) -> pd.DataFrame:
     return pd.DataFrame(balances, index=index)
 
 
+@cached_read
+def current_accounts(store: Store) -> list[Account]:
+    """Accounts valued through today using the same history as the charts.
+
+    These are calculation inputs, not new bank observations. Keep the stored
+    dated anchors intact; later transactions and snapshots determine the
+    current value without moving those anchors or counting flows twice.
+    """
+    balances = account_balance_history(store)
+    result = []
+    for account in store.accounts():
+        balance = float(balances[account.id].iloc[-1])
+        if account.type == AccountType.LOAN:
+            balance = abs(balance)
+        result.append(replace(account, balance=balance, balance_date=date.today()))
+    return result
+
+
+@cached_read
 def networth_history(store: Store, account_ids=None) -> pd.DataFrame:
     """Daily frame with columns cash, investments, debt, networth over the
     span of the transaction ledger (falling back to the last 90 days)."""
@@ -457,9 +476,10 @@ def category_spending(tx: pd.DataFrame, days: int = 90, top: int = 9) -> pd.Seri
     return s.head(top)
 
 
+@cached_read
 def headline_stats(store: Store) -> dict:
     """Numbers for the dashboard stat cards."""
-    accounts = store.accounts()
+    accounts = current_accounts(store)
     tx = store.transactions()
     # A credit card carrying a balance is debt, not negative cash. Counting it
     # in both places broke the identity the stat cards are read as:

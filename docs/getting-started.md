@@ -274,9 +274,19 @@ through Uncategorised spending, including $0 amounts, before saving a manual pla
 Set **To goals & extra debt / month** and press **Save spending plan**. Goals
 uses this same extra-money allowance and its existing priority order. The answer
 at the top shows what remains unassigned or how much the plan exceeds income.
+Changing the allowance on Goals updates it here when you return. Unsaved
+spending-line edits are kept; an allowance you have edited locally also remains
+a draft until you save or reload the spending plan.
 **Inspect income & spending transactions…** traces detected amounts back to
 categories and ledger entries. Overrides are planning assumptions; they do not
-change imported transactions or the Forecast scenario.
+change imported transactions or Forecast's income and spending controls.
+Forecast's **Goals → Use Goals funding plan** applies the saved extra-money
+allowance, priority order and allocation policy to loan repayments in the graph.
+It starts enabled when goals or a saved funding allowance exist. Dashboard's
+outlook, reports and new Progress checkpoints use the same saved choice.
+Turn it off to use Forecast's separate extra-loan and rollover controls.
+Savings earmarks remain household cash; they are not automatically spent when
+a goal becomes fully funded. Record or schedule the purchase to model that outflow.
 
 Select a savings goal and open **Record / view goal activity…** on Plan, or
 **Goal activity…** on Goals:
@@ -477,6 +487,13 @@ older hashes or changes in capitalization and whitespace do not add another
 copy. Repeated identical purchases within an export remain separate entries.
 Importing transactions keeps the entered balance and its date as the anchor;
 use **Update balance…** when you have a newer balance to enter.
+
+Accounts, Dashboard totals, Goals balance milestones and the Forecast starting
+balances use the balance calculated through today from those dated observations
+and later transactions. Investment and loan snapshots also carry through to
+their forecast starting values. If you correct a balance on a date that already
+has a snapshot, both records use the corrected amount. Historical Progress
+checkpoints remain records of what was saved on their original dates.
 
 On **Transactions**, select an account and enable **Tools → Running account balances**.
 The **Account balance** column gives its calculated balance after each entry.

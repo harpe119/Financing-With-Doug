@@ -74,6 +74,14 @@ linearly in time through balance snapshots. Net worth is
 $N(t) = C(t) + \sum_i V_i(t) - \sum_j L_j(t)$ for cash $C$, investments $V$,
 and debts $L$.
 
+Accounts totals, Dashboard cards, the header, Goals milestones and new
+checkpoints use these balances calculated through today. Forecast starts cash,
+loans and investments from the same current values. The stored dated balance
+remains an observation, rather than being overwritten after an import. An
+explicit account balance edit also updates an existing snapshot on that date,
+so an older same-day snapshot cannot override the edit. Editing account terms
+alone leaves snapshot values unchanged.
+
 **Balance history from two shapes of file.** Loan and investment accounts accept
 either a *balance* export (a date and a balance per row) or an *activity* export
 (dated payments and charges, far more common). For the latter the balance
@@ -256,9 +264,25 @@ line can be overridden. Remaining monthly money is income minus spending,
 reserves, investing and the goal/extra-debt allowance. Negative results remain
 visible. The allowance shares `plan_surplus` with Goals; the detected spare
 amount uses the saved plan when one exists. Saving a plan is one atomic,
-undoable action. It does not change the forecast scenario or schedule bank
-transfers. Historical purchases covered by a reserve may require a spending
+undoable action. Its income and spending overrides do not change forecast
+sliders or schedule bank transfers. Historical purchases covered by a reserve may require a spending
 override; Doug does not automatically remove those transactions from analytics.
+
+With **Use Goals funding plan** selected, Forecast reuses the Goals planner's
+monthly loan payment amounts, including regular payments, allocated extras,
+priority changes and payments freed after payoff. It uses the saved allowance
+when present and detected spare money otherwise. Required loan amounts retain
+the forecast's selected recurring-history inputs; linked payments are summed
+at their monthly cadence without adding the Accounts fallback again.
+Each loan's monthly cycles are placed on its next future payment date, then
+the same day in subsequent months. The monthly Goals chart is an allocation
+estimate; Forecast supplies the dated cash/debt steps. Each payment reduces cash
+and the loan balance once, with interest included. Goal savings remain cash,
+and completion does not invent a future purchase. Separate extra-loan and
+rollover controls are disabled while the Goals plan supplies those decisions.
+Other scenario controls still apply. The unchanged-controls overlay uses the
+same Goals mode. Dashboard outlooks, reports and new checkpoints use the saved
+mode too; historical backtests never use today's funding choices.
 
 Legacy cash goals draw from
 one shared balance and are filled in priority order, so a lower goal shows

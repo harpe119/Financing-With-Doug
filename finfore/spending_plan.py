@@ -6,6 +6,7 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 from .insights import monthly_breakdown
 from .models import AccountType
+from .cache import cached_read
 
 LABELS = {
     "income": "Take-home income",
@@ -55,6 +56,7 @@ class SpendingPlan:
         return round(self.available - goal_budget, 2)
 
 
+@cached_read
 def calculate_plan(store, overrides: dict | None = None) -> SpendingPlan:
     from .goals import targets, LOAN
     details = monthly_breakdown(store.transactions())

@@ -33,10 +33,11 @@ from dataclasses import dataclass, field
 from datetime import date
 import math
 
-from .history import headline_stats
+from .history import current_accounts, headline_stats
 from .insights import emergency_fund_target, monthly_aggregates
 from .models import AccountType
 from .util import add_months
+from .cache import cached_read
 
 # A loan is a target whose "amount" is what is owed and whose "progress" is what
 # has been repaid. Keeping both kinds in one shape is what lets the cascade not
@@ -123,6 +124,7 @@ class Plan:
     warnings: list[str] = field(default_factory=list)
     horizon_months: int = PLAN_HORIZON_MONTHS
     custom: dict[str, float] = field(default_factory=dict)
+    loan_payments: dict[str, list[float]] = field(default_factory=dict)
 
     @property
     def all_done(self) -> date | None:
@@ -154,6 +156,7 @@ def surplus_monthly(store) -> float:
     return max(0.0, float(agg.surplus)) if agg else 0.0
 
 
+@cached_read
 def _pot(store) -> tuple[float, float]:
     """(cash, net worth) available to count as progress against goals."""
     try:
@@ -163,6 +166,7 @@ def _pot(store) -> tuple[float, float]:
         return 0.0, 0.0
 
 
+@cached_read
 def targets(store) -> list[Target]:
     """The ladder, ordered by the user's stored priority.
 
@@ -181,7 +185,7 @@ def targets(store) -> list[Target]:
             linked[it.linked_account_id] = (linked.get(it.linked_account_id, 0.0)
                                           + abs(it.monthly_equivalent))
     items: list[Target] = []
-    for a in store.accounts():
+    for a in current_accounts(store):
         if a.type != AccountType.LOAN or abs(a.balance) <= _EPS:
             continue
         items.append(Target(key=f"loan:{a.id}", kind=LOAN, name=a.name,
@@ -237,7 +241,8 @@ def build_plan(store, policy: str | None = None,
                surplus: float | None = None,
                custom: dict[str, float] | None = None,
                horizon_months: int = PLAN_HORIZON_MONTHS,
-               extra_monthly: float = 0.0) -> Plan:
+               extra_monthly: float = 0.0,
+               target_overrides: list[Target] | None = None) -> Plan:
     """Walk the ladder forward month by month, cascading as things complete.
 
     ``extra_monthly`` adds to the spare pool without persisting anything — it
@@ -246,7 +251,7 @@ def build_plan(store, policy: str | None = None,
     """
     policy = policy or store.plan_policy()
     custom = custom if custom is not None else store.plan_allocations()
-    items = targets(store)
+    items = targets(store) if target_overrides is None else target_overrides
     pool0 = (surplus_monthly(store) if surplus is None else float(surplus))
     pool0 = max(0.0, pool0 + float(extra_monthly))
 
@@ -281,6 +286,7 @@ def build_plan(store, policy: str | None = None,
     cascades: list[Cascade] = []
     dates: list[date] = []
     progress: dict[str, list[float]] = {t.key: [] for t in items}
+    payments = {t.key: [] for t in items if t.kind == LOAN}
 
     # Loan minimums keep flowing whether or not there is any surplus; when a
     # loan clears, that payment is what makes the snowball big.
@@ -298,6 +304,8 @@ def build_plan(store, policy: str | None = None,
         dates.append(when)
         pool = pool0 + freed
         live = [t for t in items if t.key not in done]
+        for values in payments.values():
+            values.append(0.0)
 
         # --- required loan payments (already committed, outside the pool) ---
         for t in live:
@@ -306,6 +314,7 @@ def build_plan(store, policy: str | None = None,
             owed = t.amount - saved[t.key]
             owed += owed * (t.apr / 12.0)
             pay = min(t.required, owed)
+            payments[t.key][-1] += pay
             pool += t.required - pay
             saved[t.key] = t.amount - (owed - pay)
 
@@ -320,6 +329,8 @@ def build_plan(store, policy: str | None = None,
             used = 0.0
             for key, amount in proposed.items():
                 put = min(amount, max(0.0, state[key].amount - saved[key]))
+                if key in payments:
+                    payments[key][-1] += put
                 saved[key] += put
                 shares[key] = shares.get(key, 0.0) + put
                 used += put
@@ -369,7 +380,8 @@ def build_plan(store, policy: str | None = None,
             f"up the ladder.")
     return Plan(surplus=pool0, policy=policy, allocations=allocations,
                 cascades=cascades, dates=dates, progress=progress,
-                warnings=warnings, horizon_months=horizon_months, custom=dict(custom))
+                warnings=warnings, horizon_months=horizon_months, custom=dict(custom),
+                loan_payments=payments)
 
 
 def _shares_for(live: list[Target], policy: str, custom: dict[str, float],

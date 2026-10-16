@@ -15,6 +15,7 @@ from .categorize import PERSONAL_EXCLUSIONS
 from .history import cash_anchor, cash_history
 from .recurrence import normalize_desc
 from .store import Store
+from .cache import cached_read
 
 
 @dataclass(frozen=True)
@@ -34,6 +35,7 @@ class Schedule:
     closing_balances: dict[int, float]
 
 
+@cached_read
 def upcoming_schedule(store: Store, end: date, today: date | None = None) -> Schedule:
     """Replay scheduled items after today's entered/reconstructed balances.
 

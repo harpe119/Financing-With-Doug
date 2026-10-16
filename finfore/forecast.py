@@ -29,15 +29,16 @@ across paths at each t.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
 
 import numpy as np
 import pandas as pd
 
 from .categorize import categorize
-from .history import networth_history, weekly_category_matrix
+from .history import current_accounts, networth_history, weekly_category_matrix
 from .forecast_history import ForecastHistory, SETTING as HISTORY_SETTING
+from .cache import cached_read
 from .models import Account, AccountType, Goal, RecurringItem, Scenario
 from .recurrence import detect, occurrences, personal_recurring
 from .store import Store
@@ -93,11 +94,18 @@ class ForecastResult:
     # same schedules and week weights as this run, before slider multipliers.
     monthly_income_reference: float = 0.0
     monthly_spending_reference: dict[str, float] = field(default_factory=dict)
+    goal_plan_budget: float | None = None
 
 
 def token_set(s: str) -> set[str]:
     return {t for t in "".join(c if c.isalnum() else " " for c in s.upper()).split()
             if len(t) > 3}
+
+
+def goal_plan_enabled(store: Store) -> bool:
+    """Default app outlook follows a configured Goals ladder; scripts opt in."""
+    configured = bool(store.goals()) or store.get_setting('plan_surplus') is not None
+    return bool(store.get_setting('forecast_goal_plan', configured))
 
 
 def auto_link_loans(store: Store) -> int:
@@ -458,6 +466,29 @@ def _shocks(rng, shape, dof: float = T_DOF) -> np.ndarray:
     return rng.standard_t(dof, size=shape) / np.sqrt(dof / (dof - 2.0))
 
 
+@cached_read
+def _prepared_history(store, today, history, recurring_override):
+    """History and fitted schedules shared by every scenario in an analysis."""
+    ledger = store.transactions()
+    tx = history.transactions(ledger, today)
+    saved = recurring_override if recurring_override is not None else store.recurring()
+    saved = personal_recurring(ledger, saved, as_of=today)
+    known_keys = {it.key for it in saved}
+    items, warnings = history.patterns(tx, saved, today)
+    return tx, items, known_keys, warnings
+
+
+@cached_read
+def _goal_payment_plan(store, required, horizon_months):
+    from .goals import PLAN_HORIZON_MONTHS, build_plan, targets
+    minimums = dict(required)
+    items = [replace(t, required=minimums[t.key]) if t.key in minimums else t
+             for t in targets(store)]
+    return build_plan(store, target_overrides=items, surplus=store.get_setting('plan_surplus'),
+                      horizon_months=max(PLAN_HORIZON_MONTHS, horizon_months))
+
+
+@cached_read
 def run_forecast(store: Store, horizon_days: int, n_paths: int,
                  scenario: Scenario | None = None, seed: int = 7,
                  emergency_target: float | None = None,
@@ -483,9 +514,10 @@ def run_forecast(store: Store, horizon_days: int, n_paths: int,
     scenario = scenario or Scenario()
     warnings: list[str] = []
     today = as_of or date.today()
+    follow_goals = scenario.follow_goal_plan and as_of is None
     history = history or ForecastHistory.from_setting(store.get_setting(HISTORY_SETTING))
-    ledger = store.transactions()
-    tx = history.transactions(ledger, today)
+    tx, all_items, known_keys, history_warnings = _prepared_history(
+        store, today, history, recurring_override)
     H = int(horizon_days)
     n = H + 1                                  # index 0 = today
     dates = [today + timedelta(days=i) for i in range(n)]
@@ -494,7 +526,7 @@ def run_forecast(store: Store, horizon_days: int, n_paths: int,
     def idx(d: date) -> int:
         return (d - today).days
 
-    accounts = store.accounts()
+    accounts = current_accounts(store) if as_of is None else store.accounts()
     hist = networth_history(store)
     if len(hist) == 0:
         cash0 = 0.0
@@ -506,11 +538,6 @@ def run_forecast(store: Store, horizon_days: int, n_paths: int,
         cash0 = float(hist["cash"].asof(ts)) if ts >= hist.index[0] else \
             float(hist["cash"].iloc[0])
 
-    all_items = (recurring_override if recurring_override is not None
-                 else store.recurring())
-    all_items = personal_recurring(ledger, all_items, as_of=today)
-    known_keys = {it.key for it in all_items}
-    all_items, history_warnings = history.patterns(tx, all_items, today)
     warnings.extend(history_warnings)
     items = [it for it in all_items if it.active and it.kind != "ignore"]
     loan_accounts = {a.id: a for a in accounts if a.type == AccountType.LOAN}
@@ -572,7 +599,7 @@ def run_forecast(store: Store, horizon_days: int, n_paths: int,
             pay = a.monthly_payment
             day = a.payment_day
         b0 = abs(a.balance)
-        if pay <= 0 and b0 > 0:
+        if pay <= 0 and b0 > 0 and not follow_goals:
             r = a.apr / 12.0
             pay = b0 * r / (1 - (1 + r) ** -60) if r > 0 else b0 / 60.0
             warnings.append(
@@ -584,7 +611,37 @@ def run_forecast(store: Store, horizon_days: int, n_paths: int,
             "payoff": None, "interest": 0.0, "events": [],
         })
 
-    if sim_loans:
+    goal_plan = None
+    if follow_goals:
+        # Keep this run's selected recurring-history inputs while applying the
+        # saved allowance, order and allocation policy from Goals.
+        required = tuple((f'loan:{l["acct"].id}', l['base']) for l in sim_loans)
+        goal_plan = _goal_payment_plan(store, required, int(np.ceil(H / 28)) + 2)
+        for l in sim_loans:
+            first = clamp_day(today.year, today.month, l['day'])
+            if first <= today:
+                next_month = add_months(today.replace(day=1), 1)
+                first = clamp_day(next_month.year, next_month.month, l['day'])
+            values = goal_plan.loan_payments.get(f'loan:{l["acct"].id}', [])
+            for month, planned in enumerate(values):
+                month_start = add_months(first.replace(day=1), month)
+                when = clamp_day(month_start.year, month_start.month, l['day'])
+                if when > end or l['bal'] <= _EPS:
+                    break
+                interest = l['bal'] * l['r']
+                l['bal'] += interest
+                l['interest'] += interest
+                pay = min(max(0.0, planned), l['bal'])
+                l['bal'] -= pay
+                base_flow[idx(when)] -= pay
+                l['events'].append((idx(when), l['bal']))
+                if l['bal'] <= _EPS:
+                    l['payoff'] = when
+        warnings.extend(goal_plan.warnings)
+        if scenario.extra_loan_payment:
+            warnings.append('The Goals funding plan supplies extra loan payments; '
+                            'the separate extra-loan control is not applied in this mode.')
+    elif sim_loans:
         freed = 0.0
         y, m = today.year, today.month
         for _ in range(int(np.ceil(H / 28)) + 2):
@@ -614,15 +671,15 @@ def run_forecast(store: Store, horizon_days: int, n_paths: int,
                         freed += l["base"]
             nxt = add_months(date(y, m, 1), 1)
             y, m = nxt.year, nxt.month
-        for l in sim_loans:
-            arr = np.full(n, abs(l["acct"].balance))
-            for i, b in sorted(l["events"]):
-                arr[i:] = b
-            loan_daily_total += arr
-            loan_outcomes.append(LoanOutcome(
-                account=l["acct"], payment=l["base"],
-                payoff=l["payoff"], interest_paid=l["interest"],
-            ))
+    for l in sim_loans:
+        arr = np.full(n, abs(l["acct"].balance))
+        for i, b in sorted(l["events"]):
+            arr[i:] = b
+        loan_daily_total += arr
+        loan_outcomes.append(LoanOutcome(
+            account=l["acct"], payment=l["base"],
+            payoff=l["payoff"], interest_paid=l["interest"],
+        ))
 
     # ---- 2b. what-if events --------------------------------------------
     # Dated impulses, applied to cash on the day they land. Stored events and
@@ -689,12 +746,12 @@ def run_forecast(store: Store, horizon_days: int, n_paths: int,
     # marking it 'ignore') quietly readmitted its history as variable spending,
     # so the control had almost no effect on the forecast.
     exclude = known_keys | {it.key for it in all_items}
-    W, irr_inc = weekly_category_matrix(
-        tx, exclude_keys=exclude,
-        max_weeks=78 if history.mode == "auto" else None,
-        start_date=history.start(today),
-        end_date=today if history.mode != "auto" else None,
-    )
+    W, irr_inc = store.cached(('forecast_weeks', today, history, frozenset(exclude)),
+        lambda: weekly_category_matrix(
+            tx, exclude_keys=exclude,
+            max_weeks=78 if history.mode == "auto" else None,
+            start_date=history.start(today),
+            end_date=today if history.mode != "auto" else None))
     n_weeks = int(np.ceil(H / 7))
     if len(W) >= 4:
         cats = list(W.columns)
@@ -759,8 +816,9 @@ def run_forecast(store: Store, horizon_days: int, n_paths: int,
     networth_det = cash_det + inv_det_daily - loan_daily_total
     networth_paths = cash_paths + inv_paths_daily - loan_daily_total[None, :]
 
-    networth_pct = {p: np.percentile(networth_paths, p, axis=0) for p in PCTS}
-    cash_pct = {p: np.percentile(cash_paths, p, axis=0) for p in PCTS}
+    # Partition each path matrix once for all requested percentiles.
+    networth_pct = dict(zip(PCTS, np.percentile(networth_paths, PCTS, axis=0)))
+    cash_pct = dict(zip(PCTS, np.percentile(cash_paths, PCTS, axis=0)))
 
     # --- shortfall risk -------------------------------------------------
     # A median line that stays positive can still hide a large fraction of
@@ -796,8 +854,8 @@ def run_forecast(store: Store, horizon_days: int, n_paths: int,
     goal_outcomes: list[GoalOutcome] = []
     for g in store.goals():
         # A purchase's earmarked savings are not a household balance threshold.
-        # Forecast does not execute the priority plan or assume transfers into
-        # goal pots; their contribution schedule belongs on Goals.
+        # Loan priorities can change household cash, but an earmark is not a
+        # household balance threshold. Its funding progress belongs on Goals.
         if g.kind == "savings":
             continue
         det_series, pct = ((cash_det, cash_pct) if g.kind == "cash"
@@ -824,6 +882,7 @@ def run_forecast(store: Store, horizon_days: int, n_paths: int,
         history_first=W.index[0].start_time.date() if len(W) else None,
         history_last=W.index[-1].end_time.date() if len(W) else None,
         recurring_refitted=history.refit_recurring,
+        goal_plan_budget=goal_plan.surplus if goal_plan is not None else None,
         monthly_income_reference=monthly_income_reference,
         monthly_spending_reference=monthly_spending_reference,
     )
@@ -904,7 +963,7 @@ def scheduled_flows(store: Store, start: date, end: date,
     for it in patterns:
         if not it.active or it.kind == "ignore":
             continue
-        if it.kind == "loan_payment" and it.linked_account_id not in loans:
+        if it.kind == "loan_payment" and loans and it.linked_account_id not in loans:
             continue                 # dropped by the projection too, as a double-count
         if it.kind == "income":
             amt = it.amount * scenario.income_multiplier
@@ -1023,6 +1082,7 @@ def sensitivity(store: Store, base_scenario: Scenario, horizon_days: int,
                                      base_scenario.extra_investing),
             snowball=base_scenario.snowball,
             events=list(base_scenario.events or []),
+            follow_goal_plan=base_scenario.follow_goal_plan,
         )
 
     baseline = end_value(clone())
@@ -1044,7 +1104,7 @@ def sensitivity(store: Store, base_scenario: Scenario, horizon_days: int,
     d_hi = end_value(clone(income_multiplier=inc * (1 + delta))) - baseline
     out.append(Sensitivity("Income", "income", d_lo, d_hi, abs(d_hi - d_lo)))
 
-    if any(a.type == AccountType.LOAN for a in store.accounts()):
+    if not base_scenario.follow_goal_plan and any(a.type == AccountType.LOAN for a in store.accounts()):
         base_pay = base_scenario.extra_loan_payment
         d_lo = end_value(clone(extra_loan_payment=max(
             0.0, base_pay - step_dollars))) - baseline

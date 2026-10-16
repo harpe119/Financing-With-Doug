@@ -28,6 +28,7 @@ import numpy as np
 import pandas as pd
 
 from .models import CADENCE_DAYS, CADENCE_LABEL, RecurringItem
+from .cache import cached_read
 from .recurrence import normalize_desc
 from .store import Store
 
@@ -213,6 +214,7 @@ def detect_change(item: RecurringItem, amounts: pd.Series,
     return ch
 
 
+@cached_read
 def bill_changes(store: Store, today: date | None = None,
                  include_income: bool = True) -> list[BillChange]:
     """Every recurring pattern whose amount has moved, worst news first.
@@ -224,6 +226,15 @@ def bill_changes(store: Store, today: date | None = None,
     tx = store.transactions()
     if tx.empty:
         return []
+    # Build the per-key histories once, rather than filtering and normalizing
+    # the entire ledger again for each recurring bill.
+    from .categorize import personal_transactions
+    personal = personal_transactions(tx)
+    personal = personal[personal.amount.gt(0) | personal.amount.lt(0)].copy()
+    personal['key'] = (personal.description.map(normalize_desc) + '|' +
+                       personal.amount.gt(0).map({True: '+', False: '-'}))
+    histories = {key: group.groupby(group.date.dt.date).amount.sum().sort_index().astype(float)
+                 for key, group in personal.groupby('key')}
     out: list[BillChange] = []
     for it in store.recurring():
         if not it.active or it.kind == "ignore":
@@ -231,7 +242,7 @@ def bill_changes(store: Store, today: date | None = None,
         if it.kind == "income" and not include_income:
             continue
         try:
-            ch = detect_change(it, _occurrence_amounts(tx, it.key), today)
+            ch = detect_change(it, histories.get(it.key, pd.Series(dtype=float)), today)
         except Exception:
             ch = None                     # one odd pattern must not kill the rest
         if ch is not None:

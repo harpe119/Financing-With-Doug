@@ -1505,6 +1505,8 @@ def main() -> None:
     from finfore.models import RecurringItem as _RI
 
     class _StubMain:
+        def refresh_header(self):
+            pass
         def status(self, *_a, **_k):
             pass
 
@@ -2997,6 +2999,16 @@ def main() -> None:
     from test_category_review import run_tests as run_category_review_tests
     if not run_category_review_tests().wasSuccessful():
         raise AssertionError('category review regressions failed')
+
+    print('calculation reuse and invalidation regressions')
+    from test_performance import run_tests as run_performance_tests
+    if not run_performance_tests().wasSuccessful():
+        raise AssertionError('calculation reuse regressions failed')
+
+    print('linked-page synchronization regressions')
+    from test_page_sync import run_tests as run_sync_tests
+    if not run_sync_tests().wasSuccessful():
+        raise AssertionError('linked-page synchronization regressions failed')
 
     print("\nall tests passed")
 

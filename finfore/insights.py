@@ -34,6 +34,7 @@ from .categorize import (INCOME_CATEGORIES, PERSONAL_EXCLUSIONS, categorize,
                          personal_transactions)
 from .models import RecurringItem
 from .util import fmt_money
+from .cache import cached_read
 
 # --- taxonomy ---------------------------------------------------------------
 ESSENTIAL = {"Housing", "Utilities", "Groceries", "Insurance", "Fuel",
@@ -322,6 +323,7 @@ def window_note(agg: "Aggregates | None" = None,
     return base
 
 
+@cached_read
 def essential_monthly(store) -> float:
     """Average monthly essential outflow, $/mo.
 

@@ -997,6 +997,7 @@ class WorkflowTests(unittest.TestCase):
         page._reset_scenario()
         page.run()
         self.assertTrue(page.cash_compare.isHidden())
+        page.follow_goals.setChecked(False)
         page.snowball.setChecked(False)
         page.run()
         self.assertTrue(page.cash_compare.isVisible())
@@ -1007,6 +1008,7 @@ class WorkflowTests(unittest.TestCase):
         load_demo(self.win.store, "balanced")
         self.win.show_page("Forecast")
         page = self.fc
+        page.show_analysis.setChecked(True)
         goal_items = page.cash_series._groups["goals"]
         self.assertTrue(all(item.label.format.startswith("Goal: ") for item in goal_items))
         self.assertIn("cash buffer", page.cash_series._groups["emergency"][0].label.format)
@@ -1357,11 +1359,46 @@ class WorkflowTests(unittest.TestCase):
         self.assertFalse(store.undo.can_undo)
         self.assertIn("could not be changed", self.fc.event_error.text())
 
+    def test_navigation_links_refresh_only_the_requested_subpage(self):
+        forecast = self.fc
+        progress = self.win.pages[7]
+        self.win.show_page('Accounts')
+        with patch.object(forecast, 'refresh') as projection_refresh, \
+             patch.object(progress, 'refresh') as progress_refresh:
+            self.win.show_page('Progress')
+            self.assertIs(self.win.current_page(), progress)
+            projection_refresh.assert_not_called()
+            progress_refresh.assert_called_once()
+            self.win.show_page('Projection')
+            self.assertIs(self.win.current_page(), forecast)
+            projection_refresh.assert_called_once()
+            progress_refresh.assert_called_once()
+
+    def test_forecast_only_calculates_analysis_when_requested(self):
+        from finfore.demo import load_demo
+        load_demo(self.win.store, "balanced")
+        page = self.fc
+        with patch.object(page, '_render_tornado', wraps=page._render_tornado) as analysis:
+            self.win.show_page('Forecast')
+            self.assertEqual(analysis.call_count, 0)
+            self.assertTrue(page._analysis_dirty)
+            page.show_analysis.setChecked(True)
+            self.assertEqual(analysis.call_count, 1)
+            page._apply_view()
+            self.assertEqual(analysis.call_count, 1)
+            page.show_analysis.setChecked(False)
+            page.run()
+            self.assertEqual(analysis.call_count, 1)
+            page.show_analysis.setChecked(True)
+            self.assertEqual(analysis.call_count, 2)
+            page._update_timer.stop()
+
     def test_forecast_analysis_failure_drops_old_statistics(self):
         from finfore.demo import load_demo
         load_demo(self.win.store, "balanced")
         self.win.show_page("Forecast")
         page = self.fc
+        page.show_analysis.setChecked(True)
         self.assertTrue(page._sens)
         with patch.object(page, "_render_tornado", side_effect=RuntimeError("failed")):
             page._run_analysis()

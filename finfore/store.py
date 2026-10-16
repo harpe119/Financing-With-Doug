@@ -25,6 +25,7 @@ from pathlib import Path
 import pandas as pd
 
 from .models import Account, AccountType, Goal, OneOffEvent, RecurringItem
+from .cache import ReadCache, cached_read
 
 
 def undoable(label: str):
@@ -266,6 +267,26 @@ class Store:
         self.con = sqlite3.connect(str(self.path))
         self.con.row_factory = sqlite3.Row
         self.con.execute("PRAGMA foreign_keys = ON")
+        self._read_cache = ReadCache()
+
+    def read_stamp(self):
+        """Identify the current data, even after direct SQL or another writer.
+
+        total_changes includes our writes; data_version includes commits from
+        other connections. Transaction state distinguishes a cached uncommitted
+        read from the state after rollback. Reopening resets the entire cache.
+        Date-sensitive analyses expire at midnight as well.
+        """
+        return (self.con.total_changes, self.con.in_transaction,
+                self.con.execute('PRAGMA data_version').fetchone()[0],
+                self.con.execute('PRAGMA schema_version').fetchone()[0], date.today())
+
+    def cached(self, key, build):
+        # A SAVEPOINT rollback does not change total_changes or transaction
+        # state. Never retain reads from an open transaction.
+        if self.con.in_transaction:
+            return build()
+        return self._read_cache.get(self.read_stamp(), key, build, self.read_stamp)
 
     def backup_to(self, path: str | Path) -> Path:
         """Save a consistent SQLite snapshot, atomically replacing the target.
@@ -351,15 +372,24 @@ class Store:
 
     @undoable("Edit account")
     def update_account(self, a: Account) -> None:
-        self.con.execute(
-            """UPDATE accounts SET name=?,type=?,balance=?,balance_date=?,apr=?,
-               annual_return=?,volatility=?,monthly_contribution=?,
-               monthly_payment=?,payment_day=? WHERE id=?""",
-            (a.name, a.type.value, a.balance, a.balance_date.isoformat(), a.apr,
-             a.annual_return, a.volatility, a.monthly_contribution,
-             a.monthly_payment, a.payment_day, a.id),
-        )
-        self.con.commit()
+        previous = self.account(a.id)
+        changed_balance = previous is not None and (
+            previous.balance != a.balance or previous.balance_date != a.balance_date)
+        with self.con:
+            self.con.execute(
+                """UPDATE accounts SET name=?,type=?,balance=?,balance_date=?,apr=?,
+                   annual_return=?,volatility=?,monthly_contribution=?,
+                   monthly_payment=?,payment_day=? WHERE id=?""",
+                (a.name, a.type.value, a.balance, a.balance_date.isoformat(), a.apr,
+                 a.annual_return, a.volatility, a.monthly_contribution,
+                 a.monthly_payment, a.payment_day, a.id),
+            )
+            if changed_balance:
+                # A same-day snapshot otherwise overrides this explicit edit
+                # in both cash reconstruction and investment/loan history.
+                # Editing terms alone must not replace a snapshot's value.
+                self.con.execute('UPDATE snapshots SET balance=? WHERE account_id=? AND date=?',
+                                 (a.balance, a.id, a.balance_date.isoformat()))
 
     @undoable("Delete account")
     def delete_account(self, account_id: int) -> None:
@@ -557,6 +587,7 @@ class Store:
             f"SELECT account_id, date, description, amount, import_hash FROM transactions "
             f"WHERE account_id IN ({marks})", self.con, params=ids)
 
+    @cached_read
     def transactions(self, account_id: int | None = None) -> pd.DataFrame:
         q = ("SELECT t.id, t.account_id, t.date, t.description, t.amount, t.category, "
              "COALESCE(b.amount, 0.0) AS business_reimbursement, "
