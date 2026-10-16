@@ -9,6 +9,7 @@ actually happens to most people's freed-up payments.
 from __future__ import annotations
 
 from datetime import date
+from html import escape
 
 import numpy as np
 from PyQt6.QtCore import QDate, Qt
@@ -27,6 +28,7 @@ from ..util import fmt_money
 from . import charts, theme
 from .account_dialog import _money_spin
 from .widgets import Card, FlowLayout, IntSpinBox, hsplit, hint, vsplit
+from .goal_funding import GoalFundingDialog
 
 _SERIES_COLORS = [theme.ACCENT, theme.BLUE, theme.AMBER, theme.PURPLE,
                   theme.RED, "#7FD4C1", "#C7D0DB", "#E08CB4"]
@@ -39,16 +41,28 @@ class GoalDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Edit goal" if goal else "Add goal")
         self.setMinimumWidth(360)
+        self._goal = goal
         form = QFormLayout(self)
         self.name = QLineEdit()
         self.name.setPlaceholderText("Emergency fund, new laptop, holiday…")
         self.amount = _money_spin(0, 1e9)
         self.kind = QComboBox()
-        self.kind.addItem("Net cash", "cash")
-        self.kind.addItem("Net worth", "networth")
+        self.kind.addItem("Savings for a purchase or reserve", "savings")
+        self.kind.addItem("Cash balance milestone", "cash")
+        self.kind.addItem("Net worth milestone", "networth")
+        self.saved = _money_spin(0, 1e9)
+        self.saved_label = QLabel("Already saved")
+        self.explanation = hint("")
+        self.explanation.setMinimumHeight(60)
+        self.error = hint("")
+        self.error.setStyleSheet(f"color: {theme.RED};")
         form.addRow("Name", self.name)
         form.addRow("Target", self.amount)
-        form.addRow("Measured against", self.kind)
+        form.addRow("Track progress by", self.kind)
+        form.addRow(self.saved_label, self.saved)
+        form.addRow(self.explanation)
+        form.addRow(self.error)
+        self.kind.currentIndexChanged.connect(self._sync_kind)
         bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok
                               | QDialogButtonBox.StandardButton.Cancel)
         bb.accepted.connect(self._ok)
@@ -59,20 +73,49 @@ class GoalDialog(QDialog):
             self.amount.setValue(goal.amount)
             i = self.kind.findData(goal.kind)
             self.kind.setCurrentIndex(max(0, i))
+            self.saved.setValue(goal.saved_amount)
+        self._sync_kind()
+
+    def _sync_kind(self) -> None:
+        savings = self.kind.currentData() == "savings"
+        self.saved.setVisible(savings)
+        self.saved_label.setVisible(savings)
+        self.explanation.setText(
+            "Enter only money already set aside for this goal. Use Goal activity "
+            "to record later contributions, purchases, or money released from a reserve."
+            if savings else
+            "Uses total net cash, including money set aside for savings goals. "
+            "Cash milestones share progress by priority; reordering can change it."
+            if self.kind.currentData() == "cash" else
+            "Uses total assets minus debts, shared by priority with other net "
+            "worth milestones. This can include investments and goal savings.")
 
     def _ok(self) -> None:
-        if not self.name.text().strip() or self.amount.value() <= 0:
+        if not self.name.text().strip():
+            self.error.setText("Give this goal a name.")
             self.name.setFocus()
+            return
+        if self.amount.value() <= 0:
+            self.error.setText("Enter a target greater than $0.")
+            self.amount.setFocus()
+            return
+        if self.kind.currentData() == "savings" and self.saved.value() > self.amount.value():
+            self.error.setText("Already saved exceeds the target. Raise the target or correct savings.")
+            self.saved.setFocus()
+            return
+        if (self.kind.currentData() == "savings" and self._goal and
+                self.saved.value() + self._goal.spent_amount > self.amount.value() + .005):
+            self.error.setText("Target must cover savings plus purchases already recorded.")
             return
         self.accept()
 
-    def values(self) -> tuple[str, float, str]:
+    def values(self) -> tuple[str, float, str, float]:
         return (self.name.text().strip(), self.amount.value(),
-                self.kind.currentData())
+                self.kind.currentData(), self.saved.value())
 
 
 class GoalsPage(QWidget):
-    COLS = ["#", "Target", "Kind", "Amount", "Progress", "Gets /mo", "Done by"]
+    COLS = ["#", "Target", "Kind", "Amount", "Progress", "Total /mo", "Done by"]
 
     def __init__(self, store: Store, main):
         super().__init__()
@@ -127,6 +170,10 @@ class GoalsPage(QWidget):
             hdr.setSectionResizeMode(c, QHeaderView.ResizeMode.ResizeToContents)
         self.table.doubleClicked.connect(lambda _: self._edit())
         ladder.body.addWidget(self.table, 1)
+        self.payment_note = hint("")
+        self.payment_note.setTextFormat(Qt.TextFormat.PlainText)
+        ladder.body.addWidget(self.payment_note)
+        self.table.itemSelectionChanged.connect(self._show_payment_breakdown)
 
         actions_host = QWidget()
         acts = FlowLayout(actions_host, spacing=6)
@@ -145,10 +192,14 @@ class GoalsPage(QWidget):
         self.ef_btn.clicked.connect(self._add_emergency)
         edit = QPushButton("Edit…")
         edit.clicked.connect(self._edit)
+        self.funding_btn = QPushButton("Goal activity…")
+        self.funding_btn.clicked.connect(self._funding)
+        plan_btn = QPushButton("Monthly spending plan")
+        plan_btn.clicked.connect(lambda: self.main.show_page("Plan"))
         rm = QPushButton("Delete")
         rm.setObjectName("danger")
         rm.clicked.connect(self._delete)
-        for b in (self.up, self.down, add, self.ef_btn, edit, rm):
+        for b in (self.up, self.down, add, self.ef_btn, self.funding_btn, plan_btn, edit, rm):
             acts.addWidget(b)
         action_policy = QSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
         action_policy.setHeightForWidth(True)
@@ -159,7 +210,7 @@ class GoalsPage(QWidget):
         ladder.body.addWidget(self.custom_note)
 
         # ---------------- projection ----------------
-        chart_card = Card("Goal projection — share of each target funded")
+        chart_card = Card("Projected goal progress")
         self.plot = charts.new_plot(money_left=False, legend=True)
         self.plot.setMinimumHeight(170)
         self.plot.getAxis("left").setLabel("funded")
@@ -213,9 +264,9 @@ class GoalsPage(QWidget):
         fscroll.setWidget(self.faster)
         faster_card.body.addWidget(fscroll, 1)
 
-        top = hsplit(ladder, chart_card, sizes=[500, 500])
-        lower = hsplit(cascade_card, faster_card, sizes=[500, 500])
-        outer = vsplit(top, lower, sizes=[400, 200])
+        details = vsplit(cascade_card, faster_card, sizes=[160, 260])
+        lower = hsplit(chart_card, details, sizes=[500, 500])
+        outer = vsplit(ladder, lower, sizes=[420, 430])
         for w in (ladder, chart_card, cascade_card, faster_card):
             w.setMinimumWidth(220)
             w.setMinimumHeight(110)
@@ -224,7 +275,9 @@ class GoalsPage(QWidget):
         # Preserve usable controls at the minimum window height. Shrinking a
         # four-panel page indefinitely was reducing buttons to a single letter
         # and date fields to a few pixels; scroll the page once it cannot fit.
-        outer.setMinimumHeight(660)
+        # Give the table the full page width: target names, payments and dates
+        # must remain readable together, including at the minimum window size.
+        outer.setMinimumHeight(900)
         content = QWidget()
         content_layout = QVBoxLayout(content)
         content_layout.setContentsMargins(0, 0, 0, 0)
@@ -282,6 +335,17 @@ class GoalsPage(QWidget):
         self._render_faster()
 
     def _show_surplus_calculation(self) -> None:
+        if self.store.get_setting("spending_plan", None) is not None:
+            from ..spending_plan import calculate_plan
+            plan = calculate_plan(self.store)
+            leftover = plan.remaining(self.surplus.value())
+            self.surplus_note.setText(
+                f"Monthly Plan: ${plan.amounts['income']:,.2f} income − "
+                f"${plan.expenses:,.2f} spending, reserves & investing = "
+                f"${plan.available:,.2f} available. This ladder uses ${self.surplus.value():,.2f}; "
+                f"${leftover:,.2f} remains unassigned. Regular loan payments are already budgeted. "
+                "Use Monthly spending plan to inspect or change the budget.")
+            return
         agg = monthly_aggregates(self.store.transactions())
         manual = self.store.get_setting("plan_surplus", None) is not None
         prefix = "Manual amount. Detected: " if manual else "Detected: "
@@ -294,6 +358,7 @@ class GoalsPage(QWidget):
                 f"Weighted across {agg.n_months} completed month"
                 f"{'s' if agg.n_months != 1 else ''}; recent months count more. "
                 "The current month, transfers and reimbursable business amounts are excluded.")
+        note += " Recorded loan payments are already in spending; spare money is extra on top."
         if agg.surplus < 0:
             note += " The detected amount available for goals is $0 because spending exceeds income."
         if manual:
@@ -312,6 +377,8 @@ class GoalsPage(QWidget):
         plan = self._plan
         allocs = plan.allocations
         custom_mode = self.policy.currentData() == "custom"
+        selected = self._selected_key()
+        self.table.horizontalHeaderItem(5).setText("Extra /mo" if custom_mode else "Total /mo")
         stored = self.store.plan_allocations()
         self._keys = [a.target.key for a in allocs]
         self._split_boxes = {}
@@ -322,8 +389,10 @@ class GoalsPage(QWidget):
             rank = QTableWidgetItem(str(r + 1))
             rank.setData(Qt.ItemDataRole.UserRole, t.key)
             name = QTableWidgetItem(t.name)
+            name.setToolTip(t.name)
             kind = QTableWidgetItem("Loan" if t.kind == LOAN else
                                     ("Goal · net worth" if t.goal_kind == "networth"
+                                     else "Savings" if t.goal_kind == "savings"
                                      else "Goal · cash"))
             amt = QTableWidgetItem(fmt_money(t.amount))
             amt.setTextAlignment(Qt.AlignmentFlag.AlignRight
@@ -332,9 +401,8 @@ class GoalsPage(QWidget):
                 "done ✓" if t.complete
                 else f"{t.fraction * 100:.0f}%  ·  {fmt_money(t.progress)}")
             per = QTableWidgetItem(
-                f"{fmt_money(a.monthly)}" if a.monthly > 0.005 else
-                (f"min {fmt_money(t.required)}" if t.kind == LOAN and t.required
-                 else "—"))
+                fmt_money(a.total_monthly) if a.total_monthly > 0.005 else "—")
+            per.setToolTip(self._payment_breakdown(a))
             per.setTextAlignment(Qt.AlignmentFlag.AlignRight
                                  | Qt.AlignmentFlag.AlignVCenter)
             if custom_mode and not t.complete:
@@ -353,6 +421,32 @@ class GoalsPage(QWidget):
             if per is None:
                 self.table.setCellWidget(r, 5, self._split_editor(t, stored))
         self._sync_custom_note()
+        if self._keys:
+            self.table.selectRow(self._keys.index(selected) if selected in self._keys else 0)
+        self._show_payment_breakdown()
+
+    @staticmethod
+    def _payment_breakdown(a) -> str:
+        if a.target.kind == LOAN:
+            return (f"{a.name}: {fmt_money(a.target.required)}/mo existing + "
+                    f"{fmt_money(a.monthly)}/mo extra = {fmt_money(a.total_monthly)}/mo total. "
+                    f"Existing payment: {a.target.payment_source}.")
+        return (f"{a.name}: {fmt_money(a.monthly)}/mo planned savings. "
+                "Record contributions, purchases or released savings using Goal activity."
+                if a.target.goal_kind == "savings" else
+                f"{a.name}: {fmt_money(a.monthly)}/mo toward this balance milestone.")
+
+    def _show_payment_breakdown(self) -> None:
+        a = self._plan.by_key(self._selected_key()) if self._plan else None
+        note = self._payment_breakdown(a) if a else ""
+        if a and a.target.goal_kind == "savings":
+            goal = next((g for g in self.store.goals() if g.id == a.target.goal_id), None)
+            if goal:
+                note += (f" Still saved: ${goal.saved_amount:,.2f}; purchases toward goal: "
+                         f"${goal.spent_amount:,.2f}. Progress includes both.")
+        self.payment_note.setText(note)
+        if hasattr(self, "funding_btn"):
+            self.funding_btn.setEnabled(bool(a and a.target.goal_kind == "savings"))
 
     def _split_editor(self, target, stored: dict) -> QWidget:
         """A live $/mo box for one rung, shown only under the custom policy."""
@@ -381,11 +475,16 @@ class GoalsPage(QWidget):
         self._sync_custom_note()
         for r, key in enumerate(self._keys):
             a = self._plan.by_key(key)
-            if a is None or key in self._split_boxes:
+            if a is None:
                 continue
-            item = self.table.item(r, 5)
+            item = self.table.item(r, 5) if key not in self._split_boxes else None
             if item is not None:
-                item.setText(fmt_money(a.monthly) if a.monthly > 0.005 else "—")
+                item.setText(fmt_money(a.total_monthly) if a.total_monthly > 0.005 else "—")
+                item.setToolTip(self._payment_breakdown(a))
+            self.table.item(r, 6).setText(
+                "already met" if a.target.complete else
+                a.eta.strftime("%b %Y") if a.eta else "beyond 30 yrs")
+        self._show_payment_breakdown()
 
     def _sync_custom_note(self) -> None:
         if self.policy.currentData() != "custom":
@@ -394,7 +493,7 @@ class GoalsPage(QWidget):
         total = sum(b.value() for b in self._split_boxes.values())
         if total <= 0:
             self.custom_note.setText(
-                "Set a monthly amount against each target in the Gets /mo "
+                "Set an extra monthly amount against each target in the Extra /mo "
                 "column. Everything at zero falls back to funding the top "
                 "target first.")
             return
@@ -433,10 +532,11 @@ class GoalsPage(QWidget):
         for k, a in enumerate(plan.allocations):
             ys = np.array(plan.progress[a.target.key][:last]) * 100.0
             colour = _SERIES_COLORS[k % len(_SERIES_COLORS)]
-            charts.line(p, x, ys, colour, 2.0, a.target.name,
+            charts.line(p, x, ys, colour, 2.0, escape(a.target.name),
                         dashed=(a.target.kind == LOAN))
             series.append(ys)
-        charts.soft_floor(p, 100.0, "100% · funded", theme.ACCENT, slot="zero")
+        floor = charts.soft_floor(p, 100.0, "100% · funded", theme.ACCENT, slot="zero")
+        floor.label.setPosition(0.6)
         charts.lock_view(p, float(x[0]), float(x[-1]), series,
                          include_y=[0.0, 100.0])
         done = plan.all_done
@@ -458,18 +558,18 @@ class GoalsPage(QWidget):
         for c in plan.cascades[:12]:
             colour = theme.AMBER if c.kind == LOAN else theme.ACCENT
             what = ("paid off" if c.kind == LOAN else "funded")
-            if c.destination and c.amount > 0.005:
+            if c.kind == LOAN and c.destination and c.amount > 0.005:
                 tail = (f" → <b>{fmt_money(c.amount)}/mo</b> rolls into "
-                        f"{c.destination}")
+                        f"{escape(c.destination)}")
             elif c.destination:
-                tail = f" → next up: {c.destination}"
+                tail = f" → next up: {escape(c.destination)}"
             else:
                 tail = " → ladder complete; that money is yours to redirect"
             rows.append(
                 f"<div style='margin-bottom:5px'>"
                 f"<span style='color:{theme.MUTED}'>"
                 f"{c.when.strftime('%b %Y')}</span>&nbsp; "
-                f"<span style='color:{colour}'>{c.source} {what}</span>"
+                f"<span style='color:{colour}'>{escape(c.source)} {what}</span>"
                 f"{tail}</div>")
         self.cascade.setText("".join(rows))
 
@@ -544,10 +644,10 @@ class GoalsPage(QWidget):
 
         head = (f"<hr style='border:none;border-top:1px solid {theme.BORDER}'>"
                 f"<div style='margin:6px 0'><b>By {dl.by.strftime('%b %Y')}</b> "
-                f"— {dl.target} needs "
+                f"— {dl.target}. Standalone pace: "
                 f"<span style='color:{theme.ACCENT}'>"
-                f"{fmt_money(dl.needed_monthly)}/mo</span> for {dl.months} "
-                f"month{'s' if dl.months != 1 else ''}.</div>")
+                f"{fmt_money(dl.needed_monthly)}/mo</span>, including this month. "
+                f"The extra budget below also accounts for higher priorities.</div>")
         if dl.already_met or (dl.feasible and not dl.cuts):
             return head + (f"<div style='color:{theme.ACCENT}'>{dl.note}</div>")
         if not dl.feasible:
@@ -587,6 +687,19 @@ class GoalsPage(QWidget):
             return None
         return self._keys[r]
 
+    def _funding(self) -> None:
+        key = self._selected_key()
+        if key and key.startswith("goal:"):
+            gid = int(key.split(":")[1])
+            goal = next((g for g in self.store.goals() if g.id == gid), None)
+            if goal and goal.kind == "savings":
+                GoalFundingDialog(self.store, gid, self).exec()
+                self._rerun()
+                self.main.refresh_header()
+                return
+        QMessageBox.information(self, "Select a savings goal",
+                                "Choose a purchase or reserve goal. Loan payments are recorded in your bank ledger.")
+
     def _move(self, delta: int) -> None:
         key = self._selected_key()
         if key is None:
@@ -607,9 +720,9 @@ class GoalsPage(QWidget):
         dlg = GoalDialog(self)
         if dlg.exec() != QDialog.DialogCode.Accepted:
             return
-        name, amount, kind = dlg.values()
+        name, amount, kind, saved = dlg.values()
         with self.store.undo_group(f"Add goal “{name}”"):
-            gid = self.store.add_goal(Goal(name, amount, kind))
+            gid = self.store.add_goal(Goal(name, amount, kind, saved_amount=saved))
             self.store.set_plan_order(self._keys + [f"goal:{gid}"])
         self._rerun()
         self.main.refresh_header()
@@ -625,6 +738,8 @@ class GoalsPage(QWidget):
         preview = hint("")
         form.addRow("Cover", months)
         form.addRow("", preview)
+        form.addRow(hint("This creates a savings goal. Use Edit afterward to enter "
+                         "money already set aside for emergencies."))
 
         def sync() -> None:
             amt = emergency_goal_amount(self.store, months.value())
@@ -650,7 +765,7 @@ class GoalsPage(QWidget):
             return
         with self.store.undo_group("Add emergency fund goal"):
             gid = self.store.add_goal(
-                Goal(f"Emergency fund ({months.value()} mo)", amt, "cash"))
+                Goal(f"Emergency fund ({months.value()} mo)", amt, "savings"))
             # An emergency fund is the one target mainstream guidance is
             # unanimous about putting first, so it goes to the top rather than
             # the bottom.
@@ -673,10 +788,19 @@ class GoalsPage(QWidget):
         if g is None:
             return
         dlg = GoalDialog(self, goal=g)
+        if self.store.goal_activity(gid):
+            dlg.saved.setEnabled(False)
+            dlg.kind.setEnabled(False)
+            dlg.explanation.setText("Savings are tracked in Goal activity. Record contributions, "
+                                    "purchases and releases there to preserve the funding history.")
         if dlg.exec() != QDialog.DialogCode.Accepted:
             return
-        name, amount, kind = dlg.values()
-        self.store.update_goal(gid, name=name, amount=amount, kind=kind)
+        name, amount, kind, saved = dlg.values()
+        try:
+            self.store.update_goal(gid, name=name, amount=amount, kind=kind, saved_amount=saved)
+        except ValueError as exc:
+            QMessageBox.warning(self, "Could not update goal", str(exc))
+            return
         self._rerun()
         self.main.refresh_header()
 

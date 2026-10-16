@@ -7,6 +7,7 @@ hue at a dashed "today" line.
 from __future__ import annotations
 
 from datetime import date
+from html import escape
 
 import numpy as np
 import pandas as pd
@@ -548,7 +549,7 @@ class _Readout(QObject):
             if i < y.size and np.isfinite(y[i]):
                 rows.append(
                     f"<div style='font-size:12px'><span style='color:{color}'>"
-                    f"&#9632;</span> {name} "
+                    f"&#9632;</span> {escape(str(name))} "
                     f"<b style='color:{theme.TEXT}'>{_precise(y[i])}</b></div>")
         self.text.setHtml("".join(rows))
         self.vline.setPos(float(self.x[i]))
@@ -562,6 +563,14 @@ class _Readout(QObject):
 
 def _precise(v: float) -> str:
     return f"-${abs(v):,.0f}" if v < 0 and round(abs(v)) else f"${abs(v):,.0f}"
+
+
+def detach_readout(plot):
+    """Detach hover data when a chart is cleared, including empty selections."""
+    old = getattr(plot, "_readout", None)
+    if old is not None:
+        old.detach()
+        plot._readout = None
 
 
 def attach_readout(plot: pg.PlotWidget, x, series, label=None,

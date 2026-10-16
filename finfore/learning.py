@@ -31,7 +31,7 @@ from typing import Protocol, runtime_checkable
 
 import pandas as pd
 
-from .categorize import BUSINESS_CATEGORY, categorize
+from .categorize import BUSINESS_CATEGORY, categorize, category_rule
 from .recurrence import normalize_desc
 
 
@@ -128,14 +128,41 @@ def predict_one(chain: list[CategoryModel], description: str,
 def apply_chain(df: pd.DataFrame, chain: list[CategoryModel]) -> pd.DataFrame:
     """Add/overwrite a 'category' column using the model chain."""
     out = df.copy()
-    out["category"] = [predict_one(chain, d, a)
-                       for d, a in zip(out["description"], out["amount"])]
+    decisions = [explain_category(chain, d, a)
+                 for d, a in zip(out["description"], out["amount"])]
+    for i, column in enumerate(("category", "category_source", "category_reason")):
+        out[column] = [decision[i] for decision in decisions]
     return out
+
+
+def explain_category(chain, description, amount) -> tuple[str, str, str]:
+    """Explain the layer actually used; similarity is never a probability."""
+    for model in chain:
+        if isinstance(model, NearestMerchant):
+            category, score, example = model.explain(description, amount)
+            if category:
+                return category, "similarity", (f'Similar to your correction for “{example}”. '
+                    f'Name overlap {score:.2f}; verify this transaction. This is not a probability.')
+            continue
+        if isinstance(model, KeywordModel):
+            category, keyword = category_rule(description, amount)
+            if keyword is None:
+                return category, "fallback", "No saved correction or keyword matched; this uses the amount's direction."
+            broad = keyword in {"AMAZON", "AMZN", "TARGET", "WALMART", "COSTCO", "SAM'S CLUB"}
+            return category, "broad_merchant" if broad else "keyword", (
+                f'Keyword “{keyword}”. ' + ('This retailer sells several kinds of items; check what you bought.'
+                                            if broad else 'Automatically assigned; not yet reviewed.'))
+        category = model.predict(description, amount)
+        if category:
+            if isinstance(model, LearnedRules):
+                return category, "saved_rule", "Your remembered category for this merchant and payment direction."
+            return category, "model", "Proposed by an additional categorization model; not yet reviewed."
+    return ("Other income" if amount > 0 else "Misc"), "fallback", "No categorization layer matched."
 
 
 def record_corrections(store, tx_rows: pd.DataFrame, new_category: str,
                        account_types: dict[int, str] | None = None,
-                       source: str = "manual") -> int:
+                       source: str = "manual", remember: bool = True) -> int:
     """Persist a batch of manual re-categorisations as training labels.
 
     ``tx_rows`` is a slice of the transactions frame (needs description,
@@ -157,12 +184,18 @@ def record_corrections(store, tx_rows: pd.DataFrame, new_category: str,
             "old_category": str(r.get("category", "")),
             "new_category": new_category,
             "source": source,
+            "remember": int(remember),
+            "transaction_id": int(r['id']) if 'id' in r else None,
+            "transaction_date": str(r['date'])[:10] if 'date' in r else None,
         })
     return store.add_category_feedback(records)
 
 
 def training_frame(store) -> pd.DataFrame:
-    """The labelled corpus in model-ready shape.
+    """Legacy merchant-feedback summary, not verified transaction ground truth.
+
+    New evaluation work should use category_review.reviewed_dataset, which
+    requires an explicit human review and retains transaction/label dates.
 
     Columns: description (raw text feature), norm_key (normalised text),
     amount, abs_amount, is_inflow, account_type, label. Deduplicated to the
@@ -211,40 +244,29 @@ def coverage(store) -> dict:
 
 
 ml_notes = """
-Path to an actual model
+Future evaluated models
 -----------------------
-The hard part of this problem is not the algorithm, it is that the label set is
-personal (one person's "Shopping" is another's "Groceries") and the sample is
-small — a few hundred corrections, not millions. That rules out anything deep
-and points at a classical text classifier.
+No statistical classifier or replacement forecaster is enabled here.
 
-Concretely, when `coverage(store)["ready"]` is True:
+Use category_review.reviewed_dataset() for transaction-level category labels.
+It retains transaction dates, human-review times and normalized merchant groups.
+The legacy training_frame() summarizes merchant feedback and must not be treated
+as evidence that an imported transaction has been checked by a person.
 
-  features : char n-gram TF-IDF (analyzer="char_wb", ngram_range=(3, 5)) over
-             the raw description, which handles merchant strings like
-             "SQ *BLUE BOTTLE 0042" far better than word tokens; plus
-             log1p(abs_amount) and is_inflow as numeric columns.
-  model    : LogisticRegression or LinearSVC in a sklearn Pipeline with
-             ColumnTransformer. Both are fast to fit on this size, calibrated
-             enough to threshold on, and — importantly — inspectable, so a
-             wrong prediction can be explained to the user.
-  abstain  : wrap in a class implementing CategoryModel that returns None when
-             max predict_proba < ~0.65, so low-confidence rows fall through to
-             the keyword rules instead of being confidently wrong.
-  eval     : GroupKFold grouped on norm_key. Random splits leak here — the same
-             merchant appearing in train and test inflates accuracy badly,
-             because exact-match memory would already have caught it.
-  baseline : LearnedRules + KeywordModel on the same folds. A model that does
-             not beat that is not worth shipping.
+Keep later-reviewed labels out of earlier evaluation cutoffs. A current export
+is not a reconstruction of previous category labels or account metadata.
+Inspect merchant groups for alternate names before using a merchant-held-out
+comparison. Compare candidates with the existing category chain on the same
+eligible observations; coverage counts alone do not establish accuracy.
 
-Insert it with `build_chain(store, extra=[TrainedModel.load(path)])`. Nothing
-else in the app needs to change: `apply_chain` and `predict_one` already treat
-the chain as opaque, and `pipeline.import_csv` builds the chain per import so a
-newly trained model takes effect on the next import with no other edits.
+A category classifier and a cash-flow forecaster solve different tasks. Forecast
+experiments also need observed outcomes and chronological baselines. Neither the
+review count nor a category model's score establishes forecast accuracy.
 
-Retraining is offline and explicit (a menu action), not automatic — silently
-changing historical categories under the user would be worse than being wrong
-consistently.
+CategoryModel.predict may abstain with None. Additional models can enter the
+existing chain, but their outputs retain automatic provenance and never become
+human-reviewed labels without an explicit review. Any future retraining and
+historical recategorization must be explicit user actions.
 """
 
 
@@ -355,6 +377,7 @@ class NearestMerchant:
         pairs: list[tuple[str, str]] = []
         signs = []
         if not fb.empty:
+            fb = fb[fb['remember'].eq(1)]
             fb = fb.drop_duplicates(subset=["norm_key"], keep="last")
             pairs = list(zip(fb["description"], fb["new_category"]))
             signs = [str(key).rsplit("|", 1)[-1] for key in fb["norm_key"]]
@@ -411,6 +434,7 @@ class MerchantCluster:
     suggestion: str | None       # what NearestMerchant would guess
     confidence: float            # similarity behind that guess
     tx_ids: list[int]
+    suggestion_source: str | None = None
 
     @property
     def priority(self) -> float:
@@ -451,7 +475,7 @@ def uncategorized_clusters(store, unknown_labels: set[str] | None = None,
     tx = store.transactions()
     if tx.empty:
         return []
-    tx = tx[tx["category"].isin(unknown_labels)]
+    tx = tx[tx["category"].isin(unknown_labels) & tx.category_reviewed.eq(0)]
     if tx.empty:
         return []
     tx = tx.copy()
@@ -487,12 +511,13 @@ def uncategorized_clusters(store, unknown_labels: set[str] | None = None,
             recent_total=recent, monthly=monthly,
             is_recurring=key in recurring_keys,
             suggestion=cat, confidence=sim,
-            tx_ids=[int(i) for i in grp["id"]]))
+            tx_ids=[int(i) for i in grp["id"]], suggestion_source=_src))
     out.sort(key=lambda c: -c.priority)
     return out[:limit]
 
 
-def label_cluster(store, cluster: MerchantCluster, category: str) -> int:
+def label_cluster(store, cluster: MerchantCluster, category: str,
+                  include_older: bool = True, remember: bool = True) -> int:
     """Label matching uncategorized entries across history and remember it.
 
     Returns the number of transactions relabelled. The correction is recorded
@@ -504,23 +529,15 @@ def label_cluster(store, cluster: MerchantCluster, category: str) -> int:
     tx = store.transactions()
     matching = [int(row.id) for row in tx.itertuples(index=False)
                 if row.category in {"Misc", "Other income", ""}
+                and not row.category_reviewed
+                and (include_older or row.id in cluster.tx_ids)
                 and feedback_key(row.description, row.amount) == cluster.norm_key]
     if not matching:
         return 0
-    is_inflow = cluster.norm_key.endswith("|+")
     # Relabelling and remembering the correction are one decision to the user,
     # so they are one step to undo.
     with store.undo_group(f"Label {cluster.display} as {category}"):
-        store.set_category(matching, category)
-        if category != BUSINESS_CATEGORY:
-            store.add_category_feedback([{
-                "norm_key": cluster.norm_key,
-                "description": cluster.display,
-                "amount": (1 if is_inflow else -1) * abs(cluster.total / max(cluster.n_tx, 1)),
-                "old_category": "Other income" if is_inflow else "Misc",
-                "new_category": category,
-                "source": "review-queue",
-            }])
+        store.review_transactions(matching, category, remember=remember)
     return len(matching)
 
 
@@ -535,19 +552,24 @@ def recategorize_all(store, extra: list[CategoryModel] | None = None,
     tx = store.transactions()
     if tx.empty:
         return 0
+    tx = tx[tx.category_reviewed.eq(0)]
     if only_unknown:
         tx = tx[tx["category"].isin({"Misc", "Other income", ""})]
         if tx.empty:
             return 0
     chain = full_chain(store, extra=extra)
-    updates: dict[int, str] = {}
+    updates: dict[str, dict] = {}
+    reasons = {}
     for _, r in tx.iterrows():
-        got = predict_one(chain, str(r["description"]), float(r["amount"]))
+        got, source, reason = explain_category(chain, str(r["description"]), float(r["amount"]))
         if got and got != r["category"]:
-            updates[int(r["id"])] = got
+            updates.setdefault(source, {})[int(r['id'])] = got
+            reasons[int(r['id'])] = reason
     if updates:
-        store.set_categories_bulk(updates)
-    return len(updates)
+        with store.undo_group('Update automatic categories'):
+            for source, values in updates.items():
+                store.set_categories_bulk(values, source=source, reasons=reasons)
+    return sum(len(values) for values in updates.values())
 
 
 def uncategorized_summary(store, months: int | None = None) -> dict:

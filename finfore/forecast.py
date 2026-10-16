@@ -514,11 +514,12 @@ def run_forecast(store: Store, horizon_days: int, n_paths: int,
     warnings.extend(history_warnings)
     items = [it for it in all_items if it.active and it.kind != "ignore"]
     loan_accounts = {a.id: a for a in accounts if a.type == AccountType.LOAN}
-    linked_payments: dict[int, RecurringItem] = {}
+    linked_payments: dict[int, list[RecurringItem]] = {}
     flow_items: list[RecurringItem] = []
     for it in items:
         if it.kind == "loan_payment" and it.linked_account_id in loan_accounts:
-            linked_payments[it.linked_account_id] = it
+            if it.amount < 0:
+                linked_payments.setdefault(it.linked_account_id, []).append(it)
         elif it.kind == "loan_payment" and loan_accounts:
             # An unlinked loan payment is almost certainly the same money the
             # amortization engine is already withdrawing for one of the loan
@@ -562,9 +563,10 @@ def run_forecast(store: Store, horizon_days: int, n_paths: int,
     loan_outcomes: list[LoanOutcome] = []
     sim_loans = []
     for a in sorted(loan_accounts.values(), key=lambda x: -x.apr):
-        li = linked_payments.get(a.id)
-        if li is not None:
-            pay = abs(li.monthly_equivalent)
+        linked = linked_payments.get(a.id, [])
+        if linked:
+            pay = sum(abs(it.monthly_equivalent) for it in linked)
+            li = linked[0]
             day = li.days_of_month[0] if li.days_of_month else li.last_date.day
         else:
             pay = a.monthly_payment
@@ -622,18 +624,17 @@ def run_forecast(store: Store, horizon_days: int, n_paths: int,
                 payoff=l["payoff"], interest_paid=l["interest"],
             ))
 
-    # ---- 2b. one-off events --------------------------------------------
+    # ---- 2b. what-if events --------------------------------------------
     # Dated impulses, applied to cash on the day they land. Stored events and
     # scenario-only events are merged so the page can preview an event before
     # committing it.
-    events = list(store.events(active_only=True)) + list(scenario.events or [])
-    applied_events = []
+    # Current saved hypotheticals were not known at an earlier backtest origin.
+    events = (list(store.events(active_only=True)) if as_of is None else [])
+    events += list(scenario.events or [])
+    from .events import event_occurrences
     for ev in events:
-        if not getattr(ev, "active", True):
-            continue
-        if today < ev.when <= end:
-            base_flow[idx(ev.when)] += float(ev.amount)
-            applied_events.append(ev)
+        for when in event_occurrences(ev, today + timedelta(days=1), end):
+            base_flow[idx(when)] += float(ev.amount)
 
     # ---- 3. investments -------------------------------------------------
     inv_accounts = [a for a in accounts if a.type == AccountType.INVESTMENT]
@@ -794,6 +795,11 @@ def run_forecast(store: Store, horizon_days: int, n_paths: int,
     # ---- 6. goals -------------------------------------------------------
     goal_outcomes: list[GoalOutcome] = []
     for g in store.goals():
+        # A purchase's earmarked savings are not a household balance threshold.
+        # Forecast does not execute the priority plan or assume transfers into
+        # goal pots; their contribution schedule belongs on Goals.
+        if g.kind == "savings":
+            continue
         det_series, pct = ((cash_det, cash_pct) if g.kind == "cash"
                            else (networth_det, networth_pct))
         if det_series[0] >= g.amount:
@@ -873,7 +879,7 @@ def scheduled_flows(store: Store, start: date, end: date,
     """Every dated flow the projection knows about in a window, by date.
 
     Deterministic only — recurring patterns, loan payments, investment
-    contributions and one-off events. Bootstrapped day-to-day spending is
+    contributions and what-if event occurrences. Bootstrapped day-to-day spending is
     deliberately absent: it has no date and no name, so it cannot be pointed at
     or moved, and listing "about $60 of groceries" beside a $1,795 rent payment
     would suggest the two are equally addressable.
@@ -929,9 +935,10 @@ def scheduled_flows(store: Store, start: date, end: date,
                                          -abs(a.monthly_contribution),
                                          "investment"))
 
+    from .events import event_occurrences
     for ev in list(store.events(active_only=True)) + list(scenario.events or []):
-        if getattr(ev, "active", True) and start <= ev.when <= end:
-            out.append(ScheduledFlow(ev.label, ev.when, float(ev.amount),
+        for when in event_occurrences(ev, start, end):
+            out.append(ScheduledFlow(ev.label, when, float(ev.amount),
                                      "event", event_id=getattr(ev, "id", None)))
 
     out.sort(key=lambda f: (f.when, f.amount))

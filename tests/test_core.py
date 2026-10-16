@@ -1992,7 +1992,7 @@ def main() -> None:
         .read_text(encoding="utf-8")
         for f in os.listdir(Path(__file__).resolve().parent.parent
                             / "finfore" / "ui") if f.endswith(".py"))
-    for _lbl in ("Add account", "Import CSV…", "Review uncategorized…",
+    for _lbl in ("Add account", "Import CSV…", "Review uncategorized merchants…",
                  "Add goal…", "Add emergency fund…", "Update from CSV…",
                  "Reconstruct history…", "Load demo dataset",
                  "Return to my own data", "Take a checkpoint now",
@@ -2464,9 +2464,12 @@ def main() -> None:
     print("the dashboard can give the history the whole page")
     _dash = _win.pages[0]
     _win.nav.setCurrentRow(0)
+    check("the supporting charts start folded so history leads",
+          not _dash.flow_card.expanded and not _dash.cat_card.expanded)
+    _dash.flow_card.set_expanded(True)
+    _dash.cat_card.set_expanded(True)
+    _dash._sync_split()
     _open = list(_dash.split.sizes())
-    check("the bottom charts start open",
-          _dash.flow_card.expanded and _dash.cat_card.expanded)
     _dash.flow_card.set_expanded(False)
     _dash.cat_card.set_expanded(False)
     _dash._sync_split()
@@ -2969,6 +2972,31 @@ def main() -> None:
     from test_personal_finances import run_tests as run_personal_tests
     if not run_personal_tests().wasSuccessful():
         raise AssertionError("personal finance regressions failed")
+
+    print("CSV overlap and account balance debugging regressions")
+    from test_account_debug import run_tests as run_account_debug_tests
+    if not run_account_debug_tests().wasSuccessful():
+        raise AssertionError("CSV overlap and account debugging regressions failed")
+
+    print("goal planning and existing payment regressions")
+    from test_goal_planning import run_tests as run_goal_tests
+    if not run_goal_tests().wasSuccessful():
+        raise AssertionError("goal planning regressions failed")
+
+    print("repeating what-if events and editing regressions")
+    from test_events import run_tests as run_event_tests
+    if not run_event_tests().wasSuccessful():
+        raise AssertionError("what-if event regressions failed")
+
+    print("monthly spending plan and goal funding regressions")
+    from test_spending_plan import run_tests as run_spending_plan_tests
+    if not run_spending_plan_tests().wasSuccessful():
+        raise AssertionError("spending plan and goal funding regressions failed")
+
+    print('category provenance, review and human-label dataset regressions')
+    from test_category_review import run_tests as run_category_review_tests
+    if not run_category_review_tests().wasSuccessful():
+        raise AssertionError('category review regressions failed')
 
     print("\nall tests passed")
 

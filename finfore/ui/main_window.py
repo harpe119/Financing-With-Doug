@@ -23,6 +23,7 @@ from .progress_page import ProgressPage
 from .recurring import RecurringPage
 from .transactions import TransactionsPage
 from .calendar_page import CalendarPage
+from .plan_page import PlanPage
 
 _METHODOLOGY = """
 <h3>How Doug models your money</h3>
@@ -147,7 +148,7 @@ class MainWindow(QMainWindow):
         self.nav.setObjectName("nav")
         self.nav.setFixedWidth(184)
         names = ("Dashboard", "Accounts", "Transactions", "Bills & payday",
-                 "Goals", "Forecast")
+                 "Plan", "Goals", "Forecast")
         for name in names:
             self.nav.addItem(name)
         self.stack = QStackedWidget()
@@ -168,6 +169,8 @@ class MainWindow(QMainWindow):
             CalendarPage(store, self),
         ]
         dashboard, accounts, transactions, recurring, insights, goals, forecast, progress, calendar = self.pages
+        plan = PlanPage(store, self)
+        self.pages.append(plan)
         self.dashboard_tabs = QTabWidget()
         self.dashboard_tabs.addTab(dashboard, "Overview")
         self.dashboard_tabs.addTab(insights, "Spending")
@@ -178,14 +181,14 @@ class MainWindow(QMainWindow):
         self.forecast_tabs.addTab(forecast, "Projection")
         self.forecast_tabs.addTab(progress, "Progress")
         self.sections = [self.dashboard_tabs, accounts, transactions,
-                         self.bills_tabs, goals, self.forecast_tabs]
+                         self.bills_tabs, plan, goals, self.forecast_tabs]
         self._destinations = {
             name: (i, None) for i, name in enumerate(names)
         }
         self._destinations.update({
             "Insights": (0, insights), "Spending": (0, insights),
             "Recurring": (3, recurring), "Calendar": (3, calendar),
-            "Progress": (5, progress), "Projection": (5, forecast),
+            "Progress": (6, progress), "Projection": (6, forecast),
         })
         for p in self.pages:
             p.setSizePolicy(QSizePolicy.Policy.Ignored,

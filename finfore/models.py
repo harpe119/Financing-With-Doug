@@ -100,13 +100,15 @@ class RecurringItem:
 class Goal:
     name: str
     amount: float
-    kind: str = "cash"        # 'cash' (net cash position) | 'networth'
+    kind: str = "cash"        # 'savings' (earmarked) | 'cash' | 'networth'
     id: int | None = None
+    saved_amount: float = 0.0  # user-recorded progress for savings goals only
+    spent_amount: float = 0.0  # purchases already made toward a savings goal
 
 
 @dataclass
 class OneOffEvent:
-    """A dated, one-time shock to cash.
+    """A dated what-if cash flow, optionally repeated on a fixed schedule.
 
     Trend projections answer "if nothing changes"; real life is punctuated by
     things that do change — a car, a medical bill, a bonus, a gap between jobs.
@@ -119,6 +121,8 @@ class OneOffEvent:
     amount: float             # negative = expense, positive = windfall
     active: bool = True
     id: int | None = None
+    repeat: str = "once"
+    until: date | None = None  # inclusive last permitted occurrence
 
     @property
     def is_expense(self) -> bool:

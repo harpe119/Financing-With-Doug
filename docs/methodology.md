@@ -191,8 +191,8 @@ $n$ would claim a precision the sample no longer has.
 
 **Uncertainty and goals.** Percentile bands (P10/P25/P50/P75/P90) are
 computed pointwise across paths at each date — they are marginal
-quantiles, not simultaneous confidence bands for whole trajectories. Goal
-arrival estimates report the deterministic crossing date plus an
+quantiles, not simultaneous confidence bands for whole trajectories. Cash and
+net worth milestone arrival estimates report the deterministic crossing date plus an
 optimistic–conservative range taken from the first crossings of the P90
 and P10 curves.
 
@@ -218,11 +218,58 @@ split across the incomplete rungs by policy: `focus` gives it all to the top
 rung, `weighted` splits by $1/\text{rank}$ normalised, `custom` uses the user's
 own amounts as a ratio. Whenever a rung completes, what it was consuming
 cascades to the next one — a goal's allocation, or for a loan its entire
-minimum payment, which is what makes the snowball grow. Cash goals draw from
+minimum payment, which is what makes the snowball grow. Any unused part of a
+final payment or contribution is redistributed within the same month. Active,
+personal recurring payments linked to a loan supply its monthly payment; their
+monthly equivalents are summed and replace the account's configured payment.
+The account payment is the fallback when no such schedule exists. Missing or
+interest-only payments are reported explicitly.
+
+Savings goals record their own user-entered `saved_amount`, independent of
+priority and total checking balances. These amounts earmark existing cash;
+they do not create an asset or trigger transfers. The page warns when recorded
+savings exceed current net cash. Users update actual progress themselves;
+projected contributions do not silently become actual savings. Goal activity
+records contributions, account assignments, purchases and releases. Purchase
+activity reduces `saved_amount` and increases `spent_amount`; progress equals
+their sum, capped at the target. Releases reduce only saved progress, allowing
+reserves to be rebuilt. Existing saved totals remain unlocated opening savings.
+Once activity exists, direct edits to the saved total or goal kind are refused.
+
+Earmarks are conserved globally and by source account. New contributions cannot
+exceed current reconstructed checking/savings balances, net of credit balances
+and existing goal savings. Account-specific claims are also subtracted before
+accepting a contribution or assignment. Purchases and releases cannot overdraw
+the goal's selected funding bucket. This does not move money or create ledger
+rows. Linked transactions must have the appropriate sign, account and date;
+their cumulative allocation cannot exceed the original personal amount.
+Transaction hashes retain allocation evidence after row deletion. Account
+deletion makes its remaining earmarks unlocated. Undo restores the complete
+activity and goal state together.
+
+The monthly spending plan uses the same complete-month weighted evidence as
+spending analytics. Recorded debt payments are carved out of the floored
+essentials total. The detected debt line is the larger of this amount and
+current regular loan payments, rather than their sum. Investment contributions
+use Accounts settings; additional irregular reserves default to zero. Each
+line can be overridden. Remaining monthly money is income minus spending,
+reserves, investing and the goal/extra-debt allowance. Negative results remain
+visible. The allowance shares `plan_surplus` with Goals; the detected spare
+amount uses the saved plan when one exists. Saving a plan is one atomic,
+undoable action. It does not change the forecast scenario or schedule bank
+transfers. Historical purchases covered by a reserve may require a spending
+override; Doug does not automatically remove those transactions from analytics.
+
+Legacy cash goals draw from
 one shared balance and are filled in priority order, so a lower goal shows
 progress only once the ones above it are covered. The simulation is monthly and
 deterministic: this is a schedule to act on, and the Monte Carlo fan on the
 Forecast page already answers "what might happen".
+Cash and net worth milestones measure household totals, including earmarked
+money. They may overlap savings goals and are not additional pots of money.
+Only cash and net worth milestones are evaluated as balance crossings in
+Forecast. Earmarked purchase goals use the deterministic priority plan on Goals;
+the forecast does not model its savings transfers or their eventual purchase.
 
 The detected spare amount is `max(0, I − S)`, where income and personal
 spending are averaged across up to 24 recorded completed calendar months,
@@ -267,9 +314,26 @@ out of the alert list. Trailing occurrences at the same new level are collapsed
 into one finding, so a rise three months ago is reported once rather than three
 times, and anything older than ~13 months is history rather than news.
 
+**What-if events** (`events.py`). Each event stores a signed per-occurrence
+amount, first date, repeat interval (Once, Daily, Weekly, Every 2 weeks,
+Monthly, Every 3 months, Every 6 months, or Yearly), optional inclusive end date,
+and an active flag. The shared schedule generator supplies dated impulses to
+both the forecast and scheduled-flow/Calendar views. Fixed-day intervals are
+anchored at the first date. Calendar intervals always add months to that
+original anchor, clamping only that occurrence to the month's last day. A
+February clamp therefore does not shift later purchases to an earlier day.
+The first date is included, but the forecast applies only dates strictly after
+its starting balance date and within the horizon. Each impulse affects every
+cash path and net worth equally. These are additional planned flows, not learned
+spending, and are not scaled by category-spending or income sliders. Both
+comparison curves retain saved events. Current saved hypotheticals are excluded
+from historical refits; explicitly supplied scenario events remain explicit
+inputs. Existing databases migrate their events to Once. Editing updates the
+same event ID and retains its active flag, with financial Undo/Redo support.
+
 **Attribution for a squeeze** (`forecast.scheduled_flows` / `crunch_causes`).
 The projection replays every recurring flow, loan payment, contribution and
-one-off event by name to build its cash path, then discards the names. Keeping
+what-if event occurrence by name to build its cash path, then discards the names. Keeping
 them lets a dated warning answer *caused by what?*, and lets the answer be
 acted on: moving a payment is stored as the pair of offsetting `OneOffEvent`s
 it really is, which the engine already understands and the user can undo. The
@@ -335,8 +399,13 @@ categories at 5% yields a false positive every run, and printing that beside a
 real finding would undermine the one defensible number on the page.
 
 **Costing a deadline.** Naming a target month for a goal turns the question
-into an arithmetic one: the goal needs `remaining / months` per month, already
-receives some of that, and the gap has to come from somewhere. Doug answers
+into a budget calculation. Doug replays the full ladder and searches for the
+smallest extra monthly spare amount that finishes the selected goal by that
+month. This includes loan interest, existing payments, higher priorities,
+custom splits and payment rollovers. The current month is included as an
+installment. The standalone pace shown alongside is the remaining amount
+divided by installments, or the amortizing payment for an interest-bearing loan;
+it is not the extra household budget required by the ladder. Doug answers
 with the smallest set of *named* discretionary items that covers it — the
 frivolous recurring charges and category totals, largest first — because "find
 another $196/month" is not an instruction anyone can act on and "the dining
@@ -450,8 +519,27 @@ merchant similarity, keyword rules, and a sign-based fallback. No statistical
 classifier is trained or downloaded. Corrections are stored locally in
 `category_feedback` and keyed by normalized description and amount direction.
 Purchases and refunds therefore have separate correction histories. The most
-recent exact correction takes precedence. A transaction category and its saved
-correction are one undo action.
+recent remembered exact correction takes precedence. New feedback records retain
+the transaction ID, transaction date, account type, previous category, new
+category, decision timestamp and remember scope. One-off reviews remain label
+evidence but are excluded from both exact and similarity merchant rules.
+`Store.review_transactions()` commits category changes, human review state and
+feedback atomically. A failed feedback write rolls back the category change;
+Undo restores the whole decision. Confirmations can retain the current category.
+In Transactions, Mark reviewed always uses one-off scope. Category changes
+initially apply only to the selected entries; More contains an explicit option
+to remember subsequent changes for future imports. The default does not create
+a merchant rule merely because the user checked a historical entry.
+Conflicting remembered categories for one merchant/direction in a single batch
+are rejected; users can confirm them with one-off scope instead.
+
+Imported categories retain their actual source and explanation: keyword,
+sign fallback, broad retailer, remembered correction, similarity or additional
+model. Transfer pairing records its own evidence. These automatic assignments
+are not human reviews. Migration preserves previous categories and merchant
+feedback without fabricating review state or provenance. Confirmed transaction
+categories are protected from automatic recategorization and transfer pairing,
+including one-off decisions without a remembered merchant rule.
 
 Keyword matching normalizes punctuation, spacing, and accents, then uses word
 boundaries or explicitly listed abbreviation stems. This prevents `RENT` from
@@ -480,19 +568,37 @@ prove that two rows represent the same payment. Review the resulting labels.
 **Reviewing uncategorized entries.** The queue groups normalized merchants and
 directions, then ranks them by total dollars plus twice recent dollars, with a
 1.5 multiplier for recurring patterns. The default window matches the spending
-score's lookback and can be changed. Labeling a group updates matching unknown
-rows across history, including older rows outside the displayed window. Known
-categories are unchanged. Imports use the saved correction for future matching
+score's lookback and can be changed. The GUI previews affected transactions and
+defaults to the displayed period; older matching entries require an explicit
+choice. Known and reviewed categories are unchanged. Suggestions start
+unselected. A merchant batch is one atomic review operation; applying it does
+not enable remembering unless the user explicitly checks that option. The
+pending count includes the actual eligible rows and updates with period scope.
+Applying a batch does
+not silently propagate other categories. Imports use remembered corrections for future matching
 entries. Recurring detection uses the latest known ledger category rather than
 discarding it and guessing again from the description.
 
-`learning.training_frame()` exposes corrections for a future evaluated model.
-`learning.coverage()` uses roughly 200 labels across five or more categories as
-a starting point for testing, not proof that training will improve predictions.
-A candidate should be evaluated on held-out merchant groups against the current
-chain; a random transaction split can put the same merchant in both training
-and testing. Any trained model must support abstention and demonstrate a useful
-improvement before becoming a default. See `ml_notes` in `learning.py`.
+`category_review.reviewed_dataset()` exports current, explicitly human-reviewed
+transaction labels, rather than treating automatic predictions as correct
+examples. It retains transaction and review dates plus normalized merchant
+groups (purchases and refunds share a group). Business entries, deposits with a
+reimbursement split, unknown spending labels, nonfinite amounts, invalid dates
+and future transactions are excluded. A past `as_of` cutoff excludes later
+transactions and later reviews. This conservatively omits a transaction whose
+latest label was reviewed later; it does not reconstruct previous labels or
+past account metadata. The CSV export replaces its destination atomically and
+refuses the open database or an alias of that database.
+
+The older `learning.training_frame()` is a deduplicated merchant-feedback
+summary, not the transaction-level truth used by this export. Its coverage
+threshold is not a readiness or accuracy result. No statistical classifier or
+new forecasting model is enabled. These dates and groups provide a basis for
+later temporal and merchant-held-out evaluations against the existing category
+chain. Merchant groups use the current normalization and still need inspection
+for alternate names. Forecast evaluation also needs observed cash-flow outcomes
+and a separate chronological benchmark; reviewed category labels alone do not
+establish forecasting accuracy.
 
 **Dedup, and the one case a row hash cannot catch.** Each row is hashed on
 (account, date, description, amount, occurrence index), so legitimate same-day
@@ -533,3 +639,40 @@ history; it is a modeling tool, not financial advice.
 A natural next step is read-only aggregator support (e.g. SimpleFIN or
 Plaid) so imports refresh automatically; the ingestion pipeline was
 structured so such a source can drop in beside the CSV path.
+
+
+## CSV overlap and reconstructed account balances
+
+Import matching first reserves exact stored hashes, then compares remaining
+rows as a multiset of account, calendar date, signed amount rounded to cents,
+and description. Only Unicode canonical composition, case, and whitespace are
+normalized in descriptions; reference numbers and punctuation remain
+significant. The file's row position is not an identity. Occurrence counts
+preserve identical purchases within one export, and stored category corrections
+and reimbursement markers remain attached to the existing transaction IDs.
+Removed-row identities are also retained; older removals without those fields
+continue to use their original hashes.
+
+Without a bank transaction identifier, identical entries in separate partial
+exports cannot always be distinguished. Overlap matching treats the counts as
+observations of the same account/date/amount/description group. Meaningful
+wording or date changes are advisory duplicate-review cases, rather than
+permission to silently discard a financial record. Previously imported
+possible duplicates are not automatically deleted.
+
+The transaction balance view uses the original bank amounts, including transfers
+and reimbursable business. If cumulative flow through a row is C and cumulative
+flow through the balance anchor's calendar day is C0, the balance after that row
+is B0 + C - C0. B0 is an end-of-day entered balance or newer cash snapshot.
+Same-day rows use transaction ID order. Date, category, search, and pagination
+filters are applied after calculating balances. Displayed row balances are
+rounded to cents so floating-point residue cannot create a spurious negative
+balance. These are reconstructions, not independently verified bank balances;
+missing, duplicated, or incorrectly signed transactions and an incorrect anchor
+can all affect them.
+
+Separate Dashboard account lines reuse the cash and snapshot history routines.
+Loans are negative amounts owed and credit cards keep their signed balance.
+The chart's account selection changes neither household totals nor forecast
+inputs. Investment and loan values between dated snapshots remain interpolated,
+with the existing account prehistory preference applied before the first one.

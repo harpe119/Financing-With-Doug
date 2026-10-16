@@ -160,6 +160,10 @@ def _outlook(store: Store, rep: MonthReport) -> None:
         else:
             when = "not within the next year at this rate"
         rep.goals.append((out.goal.name, out.goal.amount, when))
+    for goal in store.goals():
+        if goal.kind == "savings":
+            rep.goals.append((goal.name, goal.amount,
+                f"{fmt_money(goal.saved_amount)} set aside; contribution schedule on Goals"))
 
 
 # ---------------------------------------------------------------------------

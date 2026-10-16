@@ -147,14 +147,20 @@ def _keyword_pattern(keyword: str) -> re.Pattern:
     return re.compile(r"(?<![A-Z])" + re.escape(normalized) + ending)
 
 
-def categorize(description: str, amount: float) -> str:
+def category_rule(description: str, amount: float) -> tuple[str, str | None]:
+    """Return the category and the keyword responsible, or a sign fallback."""
     d = _rule_text(description)
     for keywords, cat in RULES:
-        if any(_keyword_pattern(k).search(d) for k in keywords):
+        matched = next((k for k in keywords if _keyword_pattern(k).search(d)), None)
+        if matched is not None:
             if cat == "Interest & dividends" and amount < 0:
-                return "Debt payment" if _keyword_pattern("INTEREST").search(d) else "Misc"
-            return cat
-    return "Other income" if amount > 0 else "Misc"
+                return ("Debt payment" if _keyword_pattern("INTEREST").search(d) else "Misc", matched)
+            return cat, matched
+    return ("Other income" if amount > 0 else "Misc"), None
+
+
+def categorize(description: str, amount: float) -> str:
+    return category_rule(description, amount)[0]
 
 
 def apply_categories(df: pd.DataFrame) -> pd.DataFrame:

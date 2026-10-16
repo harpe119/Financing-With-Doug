@@ -6,6 +6,7 @@ from .forecast import auto_link_loans
 from .learning import apply_chain, feedback_key, full_chain
 from .ingest import (ImportConfig, guess_mapping, parse_transactions, read_raw,
                      sniff_delimiter)
+from .import_matching import unseen_transactions
 from .recurrence import detect
 from .store import Store
 
@@ -40,8 +41,11 @@ def import_with_config(store: Store, cfg: ImportConfig) -> tuple[int, int]:
     # Categorise through the model chain, so anything the user has already
     # corrected is labelled correctly on arrival instead of being re-guessed
     # by the keyword rules and needing the same fix again.
+    total = len(df)
+    df = unseen_transactions(store, df)
     df = apply_chain(df, full_chain(store))
-    result = store.add_transactions(df)
+    added, _skipped = store.add_transactions(df)
+    result = (added, total - added)
     store.save_import_mapping(cfg.account_id, _mapping_of(cfg))
     return result
 
@@ -88,6 +92,7 @@ def refresh_derived(store: Store, checkpoint: bool = True,
     # Exclude protected rows before pairing so neither leg of a rejected pair
     # is silently reclassified during the next import.
     protected = [
+        bool(row.category_reviewed) or
         learned.get(feedback_key(row.description, row.amount)) not in (None, "Transfer")
         for row in tx.itertuples(index=False)]
     eligible = tx.loc[[not value for value in protected]]
@@ -97,7 +102,9 @@ def refresh_derived(store: Store, checkpoint: bool = True,
         if is_transfer.loc[i] and row["category"] != "Transfer":
             updates[int(row["id"])] = "Transfer"
     if updates:
-        store.set_categories_bulk(updates)
+        store.set_categories_bulk(updates, source='transfer_pair', reasons={
+            key: 'Opposite amounts in different accounts within four days, with transfer/payment wording. Verify both legs.'
+            for key in updates})
         tx = store.transactions()
     items = detect(tx)
     store.merge_recurring(items)

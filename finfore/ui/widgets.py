@@ -618,7 +618,7 @@ class ChartKey(QWidget):
             row.setContentsMargins(0, 0, 0, 0)
             row.setSpacing(5)
             row.addWidget(Swatch(color, 190 if kind == "bar" else 255,
-                                 line=kind != "bar", dashed=kind == "dash"))
+                                 line=kind != "bar", dashed=("dot" if kind == "dot" else kind == "dash")))
             lbl = QLabel(label)
             lbl.setObjectName("hint")
             row.addWidget(lbl)

@@ -8,17 +8,19 @@ total in a few dozen clicks.
 """
 from __future__ import annotations
 
+import pandas as pd
+
 from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import (QComboBox, QDialog, QDialogButtonBox, QHBoxLayout,
+from PyQt6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox, QHBoxLayout,
                              QHeaderView, QLabel, QMessageBox, QPushButton,
                              QTableWidget, QTableWidgetItem, QVBoxLayout,
                              QWidget)
 
-from ..learning import (label_cluster, recategorize_all, scoring_window_months,
+from ..learning import (feedback_key, scoring_window_months,
                         uncategorized_clusters, uncategorized_summary)
 from ..store import Store
 from ..util import fmt_money
-from .widgets import hint
+from .widgets import FlowLayout, hint
 
 # Trailing windows the queue can be narrowed to. The default matches the span
 # the Insights habits score actually reads, because clearing the pile in order
@@ -30,8 +32,7 @@ from .widgets import hint
 # already carries half the score. Reading "24 months" and concluding the score
 # treats two years evenly is the obvious inference and the wrong one.
 _WINDOWS = [("Last 3 months", 3), ("Last 6 months", 6), ("Last 12 months", 12),
-            (f"Everything the score sees ({scoring_window_months()} months, "
-             f"weighted)", scoring_window_months()),
+            (f"Last {scoring_window_months()} months (weighted)", scoring_window_months()),
             ("Everything", None)]
 _DEFAULT_WINDOW = 3          # index of the scoring-window entry
 
@@ -56,32 +57,28 @@ class ReviewUncategorizedDialog(QDialog):
 
         lay = QVBoxLayout(self)
         self.summary = QLabel("")
+        self.summary.setWordWrap(True)
         self.summary.setStyleSheet("font-size: 15px; font-weight: 600;")
         lay.addWidget(self.summary)
         lay.addWidget(hint(
-            "Each row groups a merchant's purchases or incoming payments. "
-            "Labeling it updates matching uncategorized entries, including older "
-            "ones outside this window, and saves the category for future imports. "
-            "Known categories are left unchanged. The largest recent and recurring "
-            "amounts appear first. Suggestions require a clear same-direction "
-            "match to your earlier corrections; blank means no clear match."))
+            "Choose categories by merchant and inspect affected transactions below. "
+            "Suggestions stay unselected until you accept them. Existing reviewed "
+            "or known categories are preserved."))
 
-        wrow = QHBoxLayout()
-        wrow.addWidget(QLabel("Only merchants seen in the"))
+        wrow = FlowLayout(spacing=10)
+        wrow.addWidget(QLabel("Period"))
         self.window = QComboBox()
         for label, months in _WINDOWS:
             self.window.addItem(label, months)
         self.window.setCurrentIndex(_DEFAULT_WINDOW)
+        self.window.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.window.setMinimumContentsLength(24)
         self.window.setToolTip(
-            "The habits score looks back 24 months but weights each month by "
-            "0.5^(age/3) — so the last 3 months are half the score, the last "
-            "6 are three quarters, and anything past a year is about 6% of it. "
-            "Labelling a merchant you last saw two years ago is real work that "
-            "moves almost nothing. Labels you do apply still cover every "
-            "matching row, however old.")
+            "The habits score uses the last 24 months, giving recent months more weight. "
+            "Review covers unknown entries in the selected period. "
+            "Include older matching entries extends that scope.")
         self.window.currentIndexChanged.connect(self._reload)
         wrow.addWidget(self.window)
-        wrow.addStretch(1)
         self.hidden_note = hint("")
         wrow.addWidget(self.hidden_note)
         lay.addLayout(wrow)
@@ -90,7 +87,9 @@ class ReviewUncategorizedDialog(QDialog):
         self.table.setHorizontalHeaderLabels(self.COLS)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        self.table.setAlternatingRowColors(True)
+        self.table.setTabKeyNavigation(False)
+        self.table.setAlternatingRowColors(False)
+        self.table.setShowGrid(False)
         vh = self.table.verticalHeader()
         vh.setVisible(False)
         # Merchant names are long and the Category cell holds a live combo box;
@@ -102,21 +101,46 @@ class ReviewUncategorizedDialog(QDialog):
         for c in range(1, len(self.COLS)):
             hdr.setSectionResizeMode(c, QHeaderView.ResizeMode.ResizeToContents)
         lay.addWidget(self.table, 1)
+        self.table.itemSelectionChanged.connect(self._preview)
+        self.scope = QWidget()
+        scope_row = FlowLayout(self.scope, spacing=12)
+        self.remember = QCheckBox('Remember for future imports')
+        self.remember.setToolTip('Check to reuse these merchant categories on future imports. Business labels stay per transaction.')
+        self.include_older = QCheckBox('Include older matching entries')
+        self.include_older.toggled.connect(self._preview)
+        self.include_older.toggled.connect(self._update_pending)
+        scope_row.addWidget(self.remember)
+        scope_row.addWidget(self.include_older)
+        lay.addWidget(self.scope)
+        self.preview_note = hint('Select a merchant to inspect its transactions.')
+        self.preview_note.setTextFormat(Qt.TextFormat.PlainText)
+        lay.addWidget(self.preview_note)
+        self.preview = QTableWidget(0, 5)
+        self.preview.setHorizontalHeaderLabels(['Date', 'Account', 'Description', 'Amount', 'Category'])
+        self.preview.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.preview.verticalHeader().hide()
+        self.preview.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        self.preview.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        self.preview.setFixedHeight(115)
+        lay.addWidget(self.preview)
 
         row = QHBoxLayout()
         accept_all = QPushButton("Accept all suggestions")
         accept_all.setToolTip("Select suggested categories. Apply selections saves them.")
         accept_all.clicked.connect(self._accept_suggested)
         row.addWidget(accept_all)
-        row.addStretch(1)
         self.status = hint("")
-        row.addWidget(self.status)
+        row.addWidget(self.status, 1)
         lay.addLayout(row)
+        self.pending_note = hint('Choose categories to prepare a review.')
+        lay.addWidget(self.pending_note)
 
         btns = QDialogButtonBox()
         apply_btn = btns.addButton("Apply selections",
                                    QDialogButtonBox.ButtonRole.AcceptRole)
         apply_btn.setObjectName("primary")
+        self.apply_btn = apply_btn
+        self.apply_btn.setEnabled(False)
         btns.addButton("Close", QDialogButtonBox.ButtonRole.RejectRole)
         btns.accepted.connect(self._apply)
         btns.rejected.connect(self.accept)
@@ -126,6 +150,16 @@ class ReviewUncategorizedDialog(QDialog):
 
     # ---------------------------------------------------------------
     def _reload(self) -> None:
+        try:
+            self._reload_inner()
+        except Exception as exc:
+            self._clusters, self._boxes = [], []
+            self.table.setRowCount(0)
+            self.preview.setRowCount(0)
+            self.summary.setText('Could not load transaction review.')
+            self.preview_note.setText(f'Close this window and retry. {exc}')
+
+    def _reload_inner(self) -> None:
         months = self.window.currentData()
         self._clusters = uncategorized_clusters(self.store, limit=MAX_ROWS,
                                                 months=months)
@@ -138,10 +172,11 @@ class ReviewUncategorizedDialog(QDialog):
             # like the button failed.
             head = (f"{s['merchants']} unlabelled merchants"
                     + (f" (showing the top {shown})" if more else ""))
+            concentration = (f" — the top 10 merchants are {s['top10_share'] * 100:.0f}% of it"
+                             if s['merchants'] > 10 else '')
             self.summary.setText(
                 f"{head} · {s['transactions']} transactions · "
-                f"{fmt_money(s['total'])} total — the top 10 merchants alone "
-                f"are {s['top10_share'] * 100:.0f}% of it")
+                f"{fmt_money(s['total'])} total" + concentration)
         elif months:
             self.summary.setText("Nothing uncategorized in this window.")
         else:
@@ -169,17 +204,77 @@ class ReviewUncategorizedDialog(QDialog):
                                     "this pays off every month")
                 self.table.setItem(r, col, item)
             box = QComboBox()
+            box.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
+            box.setAccessibleName(f'Category for merchant {c.display}')
             box.addItem("— leave uncategorized —", "")
             box.addItems(self.categories)
             if c.suggestion:
-                i = box.findText(c.suggestion)
-                if i >= 0:
-                    box.setCurrentIndex(i)
-                    box.setToolTip(f"Based on a same-direction merchant correction. "
-                                   f"Name similarity: {c.confidence:.2f}; this is not a probability.")
+                box.setToolTip(f'Suggestion: {c.suggestion}, based on “{c.suggestion_source}”. '
+                               'Choose it explicitly after checking the entries.')
             self.table.setCellWidget(r, 5, box)
             self._boxes.append(box)
+            box.currentIndexChanged.connect(self._update_pending)
         self.status.setText("")
+        self._preview()
+        self._update_pending()
+
+    def _update_pending(self, *_):
+        if not hasattr(self, 'pending_note'):
+            return
+        try:
+            tx = self.store.transactions()
+            selected = [(c, b) for c, b in zip(self._clusters, self._boxes) if b.currentIndex() > 0]
+            count = sum(len(self._matching_rows(c, tx)) for c, _ in selected)
+            merchants = f'{len(selected)} merchant' + ('s' if len(selected) != 1 else '')
+            transactions = f'{count} transaction' + ('s' if count != 1 else '')
+            self.pending_note.setText(f'{merchants} · {transactions} ready to review.'
+                if selected else 'Choose a category, or select suggested categories, before saving.')
+            self.apply_btn.setText(f'Review {transactions}' if count else 'Apply selections')
+            self.apply_btn.setEnabled(count > 0)
+        except Exception:
+            self.pending_note.setText('Could not check the pending entries. Close and reopen review.')
+            self.apply_btn.setEnabled(False)
+
+    def _matching_rows(self, cluster, tx):
+        keys = [feedback_key(d, a) for d, a in zip(tx.description, tx.amount)]
+        mask = (pd.Series(keys, index=tx.index).eq(cluster.norm_key) &
+                tx.category.isin({'Misc', 'Other income', ''}) & tx.category_reviewed.eq(0))
+        if not self.include_older.isChecked():
+            mask &= tx.id.isin(cluster.tx_ids)
+        return tx[mask]
+
+    def _preview(self, *_):
+        try:
+            self._preview_inner()
+        except Exception as exc:
+            self.preview.setRowCount(0)
+            self.preview_note.setText(f'Could not inspect these transactions. Close and reopen review. {exc}')
+
+    def _preview_inner(self):
+        if not hasattr(self, 'preview'):
+            return
+        row = self.table.currentRow()
+        self.preview.setRowCount(0)
+        if not 0 <= row < len(self._clusters):
+            self.preview_note.setText('Select a merchant to inspect its transactions.')
+            return
+        cluster = self._clusters[row]
+        rows = self._matching_rows(cluster, self.store.transactions()).sort_values(['date','id'], ascending=False)
+        note = f'{len(rows)} transaction{"s" if len(rows) != 1 else ""} would be updated for this merchant.'
+        if cluster.suggestion:
+            note += f' Suggested {cluster.suggestion}, based on your correction for “{cluster.suggestion_source}”.'
+        self.preview_note.setText(note)
+        self.preview.setRowCount(min(100, len(rows)))
+        accounts = {a.id: a.name for a in self.store.accounts()}
+        for i, entry in enumerate(rows.head(100).itertuples()):
+            values = [entry.date.strftime('%Y-%m-%d') if pd.notna(entry.date) else 'Undated',
+                accounts.get(entry.account_id, '?'), entry.description, f'${entry.amount:,.2f}', entry.category]
+            for j, value in enumerate(values):
+                item = QTableWidgetItem(value)
+                item.setToolTip(value)
+                self.preview.setItem(i, j, item)
+        if len(rows) > 100:
+            self.preview_note.setText(note + ' Preview shows the newest 100.')
 
     def _accept_suggested(self) -> None:
         n = 0
@@ -187,10 +282,13 @@ class ReviewUncategorizedDialog(QDialog):
             if c.suggestion:
                 i = box.findText(c.suggestion)
                 if i >= 0:
+                    blocked = box.blockSignals(True)
                     box.setCurrentIndex(i)
+                    box.blockSignals(blocked)
                     n += 1
         self.status.setText(f"{n} suggestion{'s' if n != 1 else ''} selected — "
-                            f"press Apply to commit.")
+                            f"review the pending count before saving.")
+        self._update_pending()
 
     def _apply(self) -> None:
         picks = [(c, b.currentText()) for c, b in zip(self._clusters, self._boxes)
@@ -199,33 +297,18 @@ class ReviewUncategorizedDialog(QDialog):
             QMessageBox.information(self, "Nothing selected",
                                     "Choose a category for at least one merchant.")
             return
-        moved = 0
-        # The whole batch is one press of Apply, so it is one press of Ctrl-Z —
-        # including the rows that were relabelled by propagation rather than by
-        # hand, which are the ones hardest to put back manually.
-        with self.store.undo_group(
-                f"Label {len(picks)} merchant{'s' if len(picks) != 1 else ''}"):
-            for cluster, cat in picks:
-                moved += label_cluster(self.store, cluster, cat)
-            propagated = recategorize_all(self.store)
+        try:
+            tx = self.store.transactions()
+            choices = {}
+            for cluster, category in picks:
+                rows = self._matching_rows(cluster, tx)
+                choices.update({int(i): category for i in rows.id})
+            if not choices:
+                raise ValueError('These entries have changed or were already reviewed. Reload the review window.')
+            result = self.store.review_transactions(list(choices), choices, remember=self.remember.isChecked())
+        except Exception as exc:
+            QMessageBox.warning(self, 'Categories were not applied', str(exc))
+            return
         self._reload()
-        left = uncategorized_summary(self.store,
-                                     months=self.window.currentData())
-        tail = (f"{propagated} further transactions were matched automatically "
-                f"from similar merchant names."
-                if propagated else
-                "No further transactions matched automatically yet — the more "
-                "merchants you label, the more this will catch on its own.")
-        # Always report what is left. Silence here reads as "all done", which
-        # is wrong whenever the queue was longer than one screenful.
-        if left["merchants"]:
-            tail += (f"\n\n{left['merchants']} merchant"
-                     f"{'s' if left['merchants'] != 1 else ''} still "
-                     f"unlabelled in this window "
-                     f"({fmt_money(left['total'])}).")
-        else:
-            tail += "\n\nNothing left uncategorized in this window."
-        QMessageBox.information(
-            self, "Categories applied",
-            f"Labelled {moved} transaction{'s' if moved != 1 else ''} across "
-            f"{len(picks)} merchant{'s' if len(picks) != 1 else ''}.\n\n" + tail)
+        self.status.setText(f"Reviewed {result['reviewed']} transactions. "
+            + ('Remembered for future imports.' if result['remembered'] else 'Future import rules unchanged.'))

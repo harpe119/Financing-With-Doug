@@ -320,17 +320,87 @@ def _double_postings(sub: pd.DataFrame) -> tuple[int, float]:
     return n, total
 
 
-def networth_history(store: Store) -> pd.DataFrame:
+def transaction_balances(store: Store, tx: pd.DataFrame | None = None) -> pd.DataFrame:
+    """Reconstructed cash-account balance immediately before/after every row.
+
+    Compute from the complete, unfiltered *bank* ledger. The entered balance
+    (or a newer cash snapshot) is an end-of-day anchor. Rows on the same day
+    use import ID order, which is not necessarily the bank's posting order.
+    """
+    tx = store.transactions() if tx is None else tx
+    columns = ["before", "after", "anchor_date", "anchor_balance"]
+    records = {}
+    for account in store.accounts():
+        if not account.type.is_cashlike or tx.empty:
+            continue
+        rows = tx[tx.account_id == account.id].dropna(subset=["date"]).copy()
+        if rows.empty:
+            continue
+        rows["day"] = pd.to_datetime(rows.date).dt.normalize()
+        rows = rows.sort_values(["day", "id"], kind="stable")
+        anchor_date, anchor_balance = cash_anchor(store, account)
+        cumulative = rows.amount.cumsum()
+        flow_at_anchor = float(rows.loc[rows.day <= anchor_date, "amount"].sum())
+        after = (anchor_balance + cumulative - flow_at_anchor).round(2)
+        for row, value in zip(rows.itertuples(index=False), after):
+            records[int(row.id)] = [round(float(value - row.amount), 2), float(value),
+                                    anchor_date.date(), float(anchor_balance)]
+    result = pd.DataFrame.from_dict(records, orient="index", columns=columns)
+    result.index.name = "id"
+    return result
+
+
+def account_balance_history(store: Store, account_ids=None) -> pd.DataFrame:
+    """Signed balance per selected account: assets positive, money owed negative.
+
+    Cash uses bank transactions and a dated balance. Investments/loans use
+    dated snapshots with the same interpolation and prehistory as the overview.
+    """
+    accounts = [a for a in store.accounts() if account_ids is None or a.id in account_ids]
+    tx = store.transactions()
+    ids = {a.id for a in accounts}
+    tx = tx[tx.account_id.isin(ids)]
+    today = pd.Timestamp(date.today())
+    starts = [pd.Timestamp(a.balance_date) for a in accounts]
+    if not tx.empty:
+        starts.append(tx.date.min().normalize())
+    for account in accounts:
+        snapshots = store.snapshots(account.id)
+        if not snapshots.empty:
+            starts.append(snapshots.date.min().normalize())
+    start = min([today, *starts]) if starts else today - pd.Timedelta(days=90)
+    index = pd.date_range(start, today, freq="D")
+    balances = {}
+    for account in accounts:
+        if account.type.is_cashlike:
+            line = cash_history(tx, account, index, anchor=cash_anchor(store, account))
+        else:
+            line = snapshot_history(store, account, index)
+            if account.type == AccountType.LOAN:
+                line = -line.abs()
+        balances[account.id] = line
+    return pd.DataFrame(balances, index=index)
+
+
+def networth_history(store: Store, account_ids=None) -> pd.DataFrame:
     """Daily frame with columns cash, investments, debt, networth over the
     span of the transaction ledger (falling back to the last 90 days)."""
     tx = store.transactions()
-    accounts = store.accounts()
+    accounts = [a for a in store.accounts() if account_ids is None or a.id in account_ids]
+    if account_ids is not None:
+        tx = tx[tx.account_id.isin({a.id for a in accounts})]
     today = pd.Timestamp(date.today())
     if tx.empty:
         start = today - pd.Timedelta(days=90)
     else:
         start = tx["date"].min().normalize()
-    index = pd.date_range(start, today, freq="D")
+    if account_ids is not None:
+        for account in accounts:
+            start = min(start, pd.Timestamp(account.balance_date))
+            snapshots = store.snapshots(account.id)
+            if not snapshots.empty:
+                start = min(start, snapshots.date.min().normalize())
+    index = pd.date_range(min(start, today), today, freq="D")
     cash = pd.Series(0.0, index=index)
     invest = pd.Series(0.0, index=index)
     debt = pd.Series(0.0, index=index)

@@ -24,6 +24,7 @@ from ..forecast import (MATERIAL_MIN, STARTER_BUFFER, SUSTAINED_DAYS, T_DOF,
 from ..insights import emergency_fund_target, essential_monthly
 from ..history import category_spending, networth_history
 from ..forecast_history import ForecastHistory, SETTING as HISTORY_SETTING
+from ..events import EVENT_REPEATS
 from ..models import OneOffEvent, Scenario
 from ..store import Store
 from ..util import fmt_money
@@ -182,7 +183,7 @@ class SliderRow(QWidget):
         self.slider.setAccessibleDescription(description)
         self.slider.setToolTip(description +
             " Uses this forecast's scheduled flows and weighted spending weeks. "
-            "Loan-account payments, investing and one-off events are separate.")
+            "Loan-account payments, investing and what-if events are separate.")
         self._fit_height()
 
     def _fit_height(self) -> None:
@@ -215,6 +216,7 @@ class SliderRow(QWidget):
         stacked = self.width() < label_width + 100 + self.pct.minimumWidth() + 16
         if stacked == self._stacked:
             self._fit_height()
+            self.layout().activate()
             return
         self._stacked = stacked
         lay = self.layout()
@@ -238,10 +240,22 @@ class SliderRow(QWidget):
             lay.setColumnStretch(1, 1)
         self.updateGeometry()
         self._fit_height()
+        # Commit the new grid before returning from the resize. On Windows,
+        # nested scroll layouts can otherwise retain the previous horizontal
+        # slider geometry even though the row has switched to stacked mode.
+        lay.activate()
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         self._arrange()
+
+    def minimumSizeHint(self):
+        # The horizontal layout's natural label width must not prevent the
+        # row from receiving a narrower size and switching to stacked mode.
+        # Otherwise the scroll area can get stuck wider than its viewport.
+        size = super().minimumSizeHint()
+        size.setWidth(0)
+        return size
 
     def value(self) -> float:
         return self.slider.value() / 100.0
@@ -258,7 +272,7 @@ CAUSE_MAX_DAYS = 60
 _SOURCE_LABEL = {
     "recurring": "recurring bill",
     "loan": "loan payment",
-    "event": "planned one-off",
+    "event": "planned what-if",
     "investment": "investment contribution",
 }
 
@@ -463,6 +477,7 @@ class ForecastPage(QWidget):
         self._running = False
         self._refresh_needed = False
         self._events_ready = False
+        self._editing_event: tuple[Store, OneOffEvent] | None = None
         self._comparison_tip_seen = prefs.app_settings().value(
             _COMPARISON_TIP_SETTING, False, type=bool)
         self._update_timer = QTimer(self)
@@ -664,17 +679,52 @@ class ForecastPage(QWidget):
         self.e_name.setAccessibleName("Event name")
         self.e_amount.setAccessibleName("Event amount")
         self.e_when.setAccessibleName("Event date")
+        self.e_repeat = QComboBox()
+        # Match the history selector: do not cache the widest item's size on
+        # first show, before fonts or the control-column width have settled.
+        self.e_repeat.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.e_repeat.setMinimumContentsLength(10)
+        for key, label in EVENT_REPEATS.items():
+            self.e_repeat.addItem(label, key)
+        self.e_repeat.setAccessibleName("Event repeat interval")
+        self.e_repeat.setToolTip(
+            "The amount applies to each occurrence. Month-based repeats keep the "
+            "original day, using the last day in shorter months.")
+        self.e_when_label = QLabel("Date")
+        self.e_until_enabled = QCheckBox("End date")
+        self.e_until_enabled.setAccessibleName("Set an end date for this event")
+        self.e_until = QDateEdit(QDate.currentDate().addYears(1))
+        self.e_until.setCalendarPopup(True)
+        self.e_until.setDisplayFormat("d MMM yyyy")
+        self.e_until.setAccessibleName("Event end date, inclusive")
+        self.e_until_enabled.toggled.connect(self.e_until.setEnabled)
+        self.e_until.setEnabled(False)
+        self.e_repeat.currentIndexChanged.connect(self._sync_event_repeat)
         event_form.addRow("Name", self.e_name)
         event_form.addRow("Amount", self.e_amount)
-        event_form.addRow("Date", self.e_when)
+        event_form.addRow("Repeat", self.e_repeat)
+        event_form.addRow(self.e_when_label, self.e_when)
+        event_form.addRow(self.e_until_enabled, self.e_until)
         ev.body.addLayout(event_form)
-        erow = QHBoxLayout()
-        erow.addStretch(1)
+        self.event_edit_note = hint("")
+        self.event_edit_note.setTextFormat(Qt.TextFormat.PlainText)
+        self.event_edit_note.hide()
+        ev.body.addWidget(self.event_edit_note)
+        event_actions = QWidget()
+        erow = FlowLayout(event_actions, spacing=6)
         add_ev = QPushButton("Add event")
         add_ev.clicked.connect(self._add_event)
         erow.addWidget(add_ev)
         self.add_event_btn = add_ev
-        ev.body.addLayout(erow)
+        self.cancel_event_btn = QPushButton("Cancel edit")
+        self.cancel_event_btn.clicked.connect(self._cancel_event_edit)
+        self.cancel_event_btn.hide()
+        erow.addWidget(self.cancel_event_btn)
+        action_policy = QSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
+        action_policy.setHeightForWidth(True)
+        event_actions.setSizePolicy(action_policy)
+        ev.body.addWidget(event_actions)
         self.event_error = hint("")
         self.event_error.setTextFormat(Qt.TextFormat.PlainText)
         self.event_error.setStyleSheet(f"color: {theme.RED};")
@@ -682,7 +732,9 @@ class ForecastPage(QWidget):
         ev.body.addWidget(self.event_error)
         ev.body.addWidget(hint(
             "Use a negative amount for a cost and a positive amount for income. "
-            "The event changes the forecast on its selected date."))
+            "Repeating events apply that amount each time, in addition to your "
+            "existing spending. They do not create ledger transactions."))
+        self._sync_event_repeat()
         cv.addWidget(ev)
         self.event_card = ev
 
@@ -820,7 +872,7 @@ class ForecastPage(QWidget):
         self.summary.setTextFormat(Qt.TextFormat.PlainText)
         self.summary.setToolTip(
             "Scheduled cash flow excludes variable spending, loan-account payments, "
-            "investment contributions and one-off events.")
+            "investment contributions and all saved what-if events, including repeats.")
         details.addWidget(self.summary)
         # Supporting text can grow with the number of accounts. Let it scroll
         # with the charts so opening details never consumes the whole window.
@@ -1253,7 +1305,7 @@ class ForecastPage(QWidget):
             col = QVBoxLayout()
             col.setSpacing(1)
             title = QLabel(f"Goal: {g.name} — {fmt_money(g.amount)}"
-                           f"  ·  {'cash' if g.kind == 'cash' else 'net worth'}")
+                           f"  ·  {dict(cash='cash', networth='net worth', savings='savings').get(g.kind, g.kind)}")
             title.setWordWrap(True)
             title.setTextFormat(Qt.TextFormat.PlainText)
             eta = hint("Refresh the forecast for an estimate.")
@@ -1265,8 +1317,13 @@ class ForecastPage(QWidget):
             col.addWidget(eta)
             rl.addLayout(col, 1)
             self.goal_box.addWidget(roww)
-            self._goal_labels[g.id] = eta
-        if not self._goal_labels:
+            if g.kind == "savings":
+                eta.setText(f"{fmt_money(g.saved_amount)} set aside. See Goals for "
+                            "planned contributions and completion dates.")
+                eta.setToolTip("This forecast does not transfer money into savings goals.")
+            else:
+                self._goal_labels[g.id] = eta
+        if not self.store.goals():
             self.goal_box.addWidget(hint("No goals yet — create one on the Goals page."))
 
     def _reset_scenario(self) -> None:
@@ -1341,9 +1398,7 @@ class ForecastPage(QWidget):
         self.page_error.hide()
         self.retry_btn.hide()
         self.event_error.hide()
-        self.e_name.clear()
-        self.e_amount.setValue(0)
-        self.e_when.setMinimumDate(QDate.currentDate().addDays(1))
+        self._cancel_event_edit()
         self.e_when.setDate(QDate.currentDate().addMonths(6))
         self._events_ready = False
         self._refresh_needed = True
@@ -1429,13 +1484,22 @@ class ForecastPage(QWidget):
             col_layout.setSpacing(2)
             lbl = _EventNameLabel(e.label)
             lbl.setStyleSheet(f"color: {col if e.active else theme.MUTED};")
-            details = QLabel(f"{fmt_money(e.amount, signed=True)} · "
-                             f"{e.when.strftime('%d %b %Y')}")
+            schedule = (f"Once · {e.when:%d %b %Y}" if e.repeat == "once" else
+                        f"{EVENT_REPEATS.get(e.repeat, e.repeat)} from {e.when:%d %b %Y}")
+            if e.until is not None:
+                schedule += f" through {e.until:%d %b %Y}"
+            details = QLabel(f"{'−' if e.is_expense else '+'}${abs(e.amount):,.2f} · {schedule}")
             details.setTextFormat(Qt.TextFormat.PlainText)
             details.setObjectName("hint")
             details.setWordWrap(True)
             col_layout.addWidget(lbl)
             col_layout.addWidget(details)
+            edit = QPushButton("Edit")
+            edit.setObjectName("small")
+            edit.setToolTip(f"Edit event: {e.label}")
+            edit.setAccessibleName(f"Edit event: {e.label}")
+            edit.clicked.connect(lambda _c, event=e, source=store:
+                                 self._edit_event(event.id, source, event))
             rm = QPushButton("✕")
             rm.setObjectName("small")
             rm.setFixedWidth(26)
@@ -1445,7 +1509,11 @@ class ForecastPage(QWidget):
                                self._remove_event(event.id, source, event))
             rl.addWidget(chk)
             rl.addLayout(col_layout, 1)
-            rl.addWidget(rm)
+            actions = QVBoxLayout()
+            actions.setSpacing(4)
+            actions.addWidget(edit, 0, Qt.AlignmentFlag.AlignRight)
+            actions.addWidget(rm, 0, Qt.AlignmentFlag.AlignRight)
+            rl.addLayout(actions)
             self.event_box.addWidget(roww)
         if not evs:
             self.event_box.addWidget(hint("None yet — add one below."))
@@ -1475,6 +1543,59 @@ class ForecastPage(QWidget):
         if self.run_btn.isEnabled():
             self.run()
 
+    def _sync_event_repeat(self) -> None:
+        repeating = self.e_repeat.currentData() != "once"
+        self.e_when_label.setText("Starts on" if repeating else "Date")
+        self.e_until_enabled.setVisible(repeating)
+        self.e_until.setVisible(repeating)
+
+    def _cancel_event_edit(self) -> None:
+        self._editing_event = None
+        self.e_name.clear()
+        self.e_amount.setValue(0)
+        self.e_repeat.setCurrentIndex(0)
+        self.e_until_enabled.setChecked(False)
+        self.e_when.setMinimumDate(QDate.currentDate().addDays(1))
+        self.add_event_btn.setText("Add event")
+        self.cancel_event_btn.hide()
+        self.event_edit_note.hide()
+        self.event_error.hide()
+
+    def _edit_event(self, event_id, source=None, expected=None) -> None:
+        try:
+            if not self._event_current(event_id, source, expected):
+                return
+            event = next(e for e in self.store.events() if e.id == event_id)
+        except Exception as error:
+            self._event_problem("The event could not be loaded. Select Refresh forecast and try Edit again.", error)
+            return
+        self._editing_event = (self.store, event)
+        self.e_name.setText(event.label)
+        self.e_amount.setValue(event.amount)
+        # QDateTimeEdit rejects minima before year 100, silently keeping the
+        # previous future-only limit. That would move an old schedule anchor.
+        self.e_when.setMinimumDate(QDate(100, 1, 1))
+        self.e_when.setDate(QDate(event.when.year, event.when.month, event.when.day))
+        self.e_repeat.setCurrentIndex(max(0, self.e_repeat.findData(event.repeat)))
+        until = (QDate(event.until.year, event.until.month, event.until.day)
+                 if event.until is not None else self.e_when.date().addYears(1))
+        self.e_until.setDate(until if until.isValid() else self.e_when.date())
+        self.e_until_enabled.setChecked(event.until is not None)
+        self.add_event_btn.setText("Save changes")
+        self.cancel_event_btn.show()
+        self.event_edit_note.setText("Editing saved event")
+        self.event_edit_note.setToolTip(event.label)
+        self.event_edit_note.show()
+        self.event_error.hide()
+        self.e_name.setFocus()
+        self.e_name.selectAll()
+        self.event_card.set_expanded(True)
+        QTimer.singleShot(0, self._reveal_event_editor)
+
+    def _reveal_event_editor(self) -> None:
+        if self._editing_event is not None and self._editing_event[0] is self.store:
+            self.control_scroll.ensureWidgetVisible(self.e_name, 0, 16)
+
     def _add_event(self) -> None:
         if not self._events_ready:
             return
@@ -1499,18 +1620,38 @@ class ForecastPage(QWidget):
             return
         qd = self.e_when.date()
         when = date(qd.year(), qd.month(), qd.day())
-        if when <= date.today():
+        repeat = self.e_repeat.currentData()
+        editing = self._editing_event
+        # Retain a past schedule anchor while editing an established series.
+        # Unchanged past one-offs may also have their name/amount corrected.
+        needs_future = (editing is None or
+                        (repeat == "once" and when != editing[1].when))
+        if needs_future and when <= date.today():
             self._event_problem("Choose a future date for this event.", field=self.e_when)
             return
+        until = None
+        if repeat != "once" and self.e_until_enabled.isChecked():
+            qd = self.e_until.date()
+            until = date(qd.year(), qd.month(), qd.day())
+            if until < when:
+                self._event_problem("Choose an end date on or after the start date.", field=self.e_until)
+                return
         try:
-            self.store.add_event(OneOffEvent(name, when, amt))
+            if editing is None:
+                self.store.add_event(OneOffEvent(name, when, amt, repeat=repeat, until=until))
+            else:
+                source, expected = editing
+                if not self._event_current(expected.id, source, expected):
+                    self._event_problem("This event changed or was removed while you were editing. "
+                                        "Your entries are kept. Cancel edit, then reopen Edit to load it again.")
+                    return
+                self.store.update_event(expected.id, label=name, when=when, amount=amt,
+                                        repeat=repeat, until=until)
         except Exception as error:
             self._event_problem("The event could not be saved. Your entries are still here. "
-                                "Check that this ledger is writable, then try Add event again.", error)
+                                "Check that this ledger is writable, then try saving again.", error)
             return
-        self.event_error.hide()
-        self.e_name.clear()
-        self.e_amount.setValue(0)
+        self._cancel_event_edit()
         self._after_event_write()
 
     def _toggle_event(self, event_id: int, on: bool, source=None, expected=None) -> None:

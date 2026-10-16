@@ -692,9 +692,10 @@ class DuplicateDialog(QDialog):
 
     COLS = ["Remove", "Account", "Date", "Amount", "Keeping", "Removing", "Match"]
 
-    def __init__(self, store: Store, parent=None):
+    def __init__(self, store: Store, parent=None, account_id=None):
         super().__init__(parent)
         self.store = store
+        self.account_id = account_id
         self.setWindowTitle("Possible duplicate rows")
         self.setMinimumSize(920, 520)
         self._rows: list = []          # (checkbox, pair, report)
@@ -704,7 +705,7 @@ class DuplicateDialog(QDialog):
             "Banks sometimes export one transaction twice — commonly around a "
             "system change, where the same event appears in both an old and a "
             "new format. The import can't collapse those on its own, because "
-            "the wording differs and two genuine identical purchases on one day "
+            "the wording or posting date differs meaningfully and two genuine identical purchases on one day "
             "must be kept.<br><br>Ticked rows are the ones whose removal moves "
             "an impossible opening balance back toward zero. Everything else is "
             "listed but left alone — two identical transfers on the same day "
@@ -747,7 +748,7 @@ class DuplicateDialog(QDialog):
 
     def _reload(self) -> None:
         from ..dedup import suggest
-        self._reports = suggest(self.store)
+        self._reports = suggest(self.store, self.account_id)
         self._rows = []
         total = sum(len(r.pairs) for r in self._reports)
         self.table.setRowCount(total)

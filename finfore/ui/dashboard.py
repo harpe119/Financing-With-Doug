@@ -6,8 +6,8 @@ from datetime import date, timedelta
 import numpy as np
 import pandas as pd
 from PyQt6.QtCore import QEvent, Qt
-from PyQt6.QtWidgets import (QButtonGroup, QFrame, QGridLayout, QHBoxLayout,
-                             QLabel,
+from PyQt6.QtWidgets import (QButtonGroup, QComboBox, QFrame, QGridLayout, QHBoxLayout,
+                             QLabel, QMenu,
                              QPushButton, QScrollArea, QSizePolicy,
                              QVBoxLayout, QWidget)
 
@@ -16,13 +16,13 @@ from ..calendar import upcoming_schedule
 from ..data_quality import BALANCE_REMINDER_DAYS
 from ..forecast import run_forecast
 from ..history import (acknowledge, category_spending, headline_stats,
-                       monthly_cashflow, networth_history, unacknowledged)
+                       monthly_cashflow, networth_history, account_balance_history, unacknowledged)
 from ..insights import emergency_fund_target, essential_monthly
 from ..store import Store
 from ..util import fmt_money
 from . import charts, theme
 from .widgets import (Card, ChartKey, CollapsibleCard, LegendToggles,
-                      SeriesRegistry, StatCard, hint, hsplit, info_button,
+                      SeriesRegistry, StatCard, FlowLayout, hint, hsplit, info_button,
                       vsplit)
 
 # How far ahead the "where is this heading" line looks. Ninety days is far
@@ -35,7 +35,7 @@ LOOKAHEAD_PATHS = 300
 # rather than squeezing a chart under these.
 # Below this page width the "kept from income" card drops to its own row.
 STATS_WIDE_MIN = 880
-HIST_PLOT_MIN = 150
+HIST_PLOT_MIN = 320
 BOTTOM_PLOT_MIN = 110
 
 # Net worth history windows: label, days (None = the whole ledger).
@@ -76,6 +76,9 @@ class DashboardPage(QWidget):
         self.main = main
         self._issues: list = []      # what the warning strip is currently about
         self._range_days: float | None = 365.0
+        self._selected_account_ids = None
+        self._history_mode = "totals"
+        self._chart_h = None
         self._h = None               # the net worth frame the chart shows
         self._cats = None            # every category the chart could show
         self._cat_fit = 0            # …and how many of them fit right now
@@ -202,7 +205,10 @@ class DashboardPage(QWidget):
         # furniture too. Acknowledging is recorded against the numbers as they
         # stand, so it silences this discrepancy rather than this account.
         self.warn_row = QWidget()
-        wrl = QHBoxLayout(self.warn_row)
+        warning_layout = QVBoxLayout(self.warn_row)
+        warning_layout.setContentsMargins(0, 0, 0, 0)
+        warning_layout.setSpacing(8)
+        wrl = QHBoxLayout()
         wrl.setContentsMargins(0, 0, 0, 0)
         wrl.setSpacing(8)
         self.warn = QLabel("")
@@ -210,22 +216,55 @@ class DashboardPage(QWidget):
         self.warn.setWordWrap(True)
         self.warn.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse)
-        wrl.addWidget(self.warn, 1)
+        self.warn.hide()
+        self.warn_summary = QLabel("")
+        self.warn_summary.setObjectName("ledgerWarning")
+        self.warn_summary.setWordWrap(True)
+        self.warn_summary.setTextFormat(Qt.TextFormat.PlainText)
+        wrl.addWidget(self.warn_summary, 1)
+        self.warn_details = QPushButton("Details")
+        self.warn_details.setCheckable(True)
+        self.warn_details.setAccessibleName("Show history reconciliation details")
+        self.warn_details.toggled.connect(self.warn.setVisible)
+        wrl.addWidget(self.warn_details, 0, Qt.AlignmentFlag.AlignTop)
         self.warn_ack = QPushButton("Got it")
         self.warn_ack.setToolTip(
             "Stop showing this. It comes back if the numbers change, and "
             "Accounts → Check my balances always has the full detail.")
         self.warn_ack.clicked.connect(self._ack_warning)
         wrl.addWidget(self.warn_ack, 0, Qt.AlignmentFlag.AlignTop)
+        warning_layout.addLayout(wrl)
+        warning_layout.addWidget(self.warn)
         self.warn_row.setVisible(False)
         lay.addWidget(self.warn_row)
 
         # --- net worth history ----------------------------------------------
         hist_card = Card("Net worth history")
-        head = QHBoxLayout()
-        head.setSpacing(6)
+        self.hist_card = hist_card
+        hist_card.body.removeWidget(hist_card.title)
+        heading = QHBoxLayout()
+        heading.setSpacing(12)
+        heading.addWidget(hist_card.title)
         self.data_chip = hint("")
-        head.addWidget(self.data_chip, 1)
+        self.data_chip.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        heading.addWidget(self.data_chip, 1)
+        hist_card.body.addLayout(heading)
+        self.history_controls = QWidget()
+        selection = FlowLayout(self.history_controls, spacing=8)
+        selection.addWidget(QLabel("Chart view"))
+        self.history_view = QComboBox()
+        self.history_view.addItem("Combined totals", "totals")
+        self.history_view.addItem("Separate accounts", "accounts")
+        self.history_view.setAccessibleName("Dashboard history chart view")
+        self.history_view.setToolTip("Plot combined totals or a separate balance line for each selected account.")
+        self.history_view.currentIndexChanged.connect(self._history_mode_changed)
+        selection.addWidget(self.history_view)
+        self.history_accounts_btn = QPushButton("All accounts")
+        self.history_accounts_btn.setObjectName("small")
+        self.history_accounts_menu = QMenu(self.history_accounts_btn)
+        self.history_accounts_btn.setMenu(self.history_accounts_menu)
+        self.history_account_actions = {}
+        selection.addWidget(self.history_accounts_btn)
         self.range_group = QButtonGroup(self)
         self.range_group.setExclusive(True)
         self.range_btns: list[QPushButton] = []
@@ -238,7 +277,7 @@ class DashboardPage(QWidget):
             b.clicked.connect(lambda _c=False, d=days: self._set_range(d))
             self.range_group.addButton(b)
             self.range_btns.append(b)
-            head.addWidget(b)
+            selection.addWidget(b)
         self.expand_btn = QPushButton("Expand")
         self.expand_btn.setObjectName("range")
         self.expand_btn.setCheckable(True)
@@ -246,11 +285,20 @@ class DashboardPage(QWidget):
             "Give the net worth chart the whole page, for a taller, clearer "
             "view of its ups and downs")
         self.expand_btn.clicked.connect(self._set_expanded)
-        head.addSpacing(10)
-        head.addWidget(self.expand_btn)
-        hist_card.body.addLayout(head)
+        selection.addWidget(self.expand_btn)
+        control_policy = QSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
+        control_policy.setHeightForWidth(True)
+        self.history_controls.setSizePolicy(control_policy)
+        hist_card.body.addWidget(self.history_controls)
         self.plot_hist = charts.new_plot()
         self.plot_hist.setAccessibleName("Net worth history chart")
+        self.hist_empty = QLabel("Choose accounts above to display their balance history.", self.plot_hist.viewport())
+        self.hist_empty.setObjectName("hint")
+        self.hist_empty.setWordWrap(True)
+        self.hist_empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.hist_empty.setStyleSheet(f"background: {theme.BG};")
+        self.hist_empty.hide()
+        self.plot_hist.viewport().installEventFilter(self)
         self.hist_series = SeriesRegistry()
         self.hist_legend = LegendToggles(
             [("networth", "net worth", theme.ACCENT, "line"),
@@ -264,6 +312,11 @@ class DashboardPage(QWidget):
         self.plot_hist.setMinimumHeight(HIST_PLOT_MIN)
         hist_card.body.addWidget(self.plot_hist, 1)
         hist_card.body.addWidget(self.hist_legend)
+        self.account_legend = QWidget()
+        self.account_legend_box = QVBoxLayout(self.account_legend)
+        self.account_legend_box.setContentsMargins(0, 0, 0, 0)
+        self.account_legend.hide()
+        hist_card.body.addWidget(self.account_legend)
         self.hist_note = hint("")
         hist_card.body.addWidget(self.hist_note)
 
@@ -273,7 +326,7 @@ class DashboardPage(QWidget):
         # it *all* of the page — two cards will not shrink past their own
         # minimum height. Folding them to their title strips will, and the
         # chevron is the same control the Forecast page's scenario cards use.
-        flow_card = CollapsibleCard("Monthly cash flow", expanded=True)
+        flow_card = CollapsibleCard("Monthly cash flow", expanded=False)
         self.plot_flow = charts.new_plot()
         self.plot_flow.setAccessibleName("Monthly cash flow chart")
         self.plot_flow.setMinimumHeight(BOTTOM_PLOT_MIN)
@@ -282,7 +335,7 @@ class DashboardPage(QWidget):
                                            ("Spending", theme.RED, "bar")]))
         self.flow_summary = ""
         cat_card = CollapsibleCard("Spending by category · last 90 days",
-                                   expanded=True)
+                                   expanded=False)
         self.plot_cat = charts.new_plot(date_axis=False, money_left=False,
                                         money_bottom=True)
         self.plot_cat.setAccessibleName("Spending by category chart")
@@ -310,9 +363,17 @@ class DashboardPage(QWidget):
         for c in (hist_card, flow_card, cat_card):
             c.setSizePolicy(QSizePolicy.Policy.Expanding,
                             QSizePolicy.Policy.Expanding)
-        self.split = vsplit(hist_card, bottom, sizes=[430, 300])
+        self.split = vsplit(hist_card, bottom, sizes=[600, 48])
         self.split.setVisible(False)
+        # History leads; balances and the forecast are supporting information.
+        # The two reference charts remain available through their disclosures.
+        lay.removeWidget(self.stats_w)
+        lay.removeWidget(self.verdict_band)
         lay.addWidget(self.split, 2)
+        lay.addWidget(self.stats_w)
+        lay.addWidget(self.verdict_band)
+        self.scroll.viewport().installEventFilter(self)
+        self.hist_card.installEventFilter(self)
 
     # ---------------------------------------------------------------
     def _place_kept(self, narrow: bool) -> None:
@@ -337,6 +398,21 @@ class DashboardPage(QWidget):
     def resizeEvent(self, ev) -> None:
         super().resizeEvent(ev)
         self._place_kept(self.width() < STATS_WIDE_MIN)
+        self._fit_history_height()
+
+    def _fit_history_height(self) -> None:
+        """Keep history readable instead of letting secondary content crush it."""
+        width = max(0, self.scroll.viewport().width() - 36)
+        height = max(HIST_PLOT_MIN, min(460, round(width * .38)))
+        if self.plot_hist.minimumHeight() != height:
+            self.plot_hist.setMinimumHeight(height)
+        # QSplitter asks for minimumSizeHint at the card's *minimum width*,
+        # where the toolbar/key wrap into several rows. Use their height at
+        # the actual page width; otherwise the chart grows past a short screen.
+        chrome = max(0, self.hist_card.heightForWidth(width))
+        required = height + chrome
+        if self.hist_card.minimumHeight() != required:
+            self.hist_card.setMinimumHeight(required)
 
     # ---------------------------------------------------------------
     def _build_welcome(self) -> QWidget:
@@ -471,6 +547,209 @@ class DashboardPage(QWidget):
             self.split.setSizes([max(1, total - strip), strip])
         else:
             self.split.setSizes([int(total * 0.58), int(total * 0.42)])
+
+    def _selected_chart_accounts(self):
+        return [a for a in self.store.accounts()
+                if self._selected_account_ids is None or a.id in self._selected_account_ids]
+
+    def reset_for_store(self):
+        self._selected_account_ids = None
+        self._history_mode = "totals"
+        self._chart_h = self._h = None
+        self._hist_data = {}
+        self._hist_floors = {}
+
+    def _load_chart_selection(self):
+        settings = self.store.get_setting("dashboard_history_view", {})
+        if not isinstance(settings, dict):
+            settings = {}
+        self._history_mode = settings.get("mode", "totals")
+        if self._history_mode not in ("totals", "accounts"):
+            self._history_mode = "totals"
+        ids = settings.get("account_ids")
+        self._selected_account_ids = {i for i in ids if isinstance(i, int)} if isinstance(ids, list) else None
+        self.history_view.blockSignals(True)
+        self.history_view.setCurrentIndex(self.history_view.findData(self._history_mode))
+        self.history_view.blockSignals(False)
+        menu = self.history_accounts_menu
+        menu.clear()
+        menu.addAction("All accounts", lambda: self._set_chart_accounts(None))
+        menu.addAction("Clear selection", lambda: self._set_chart_accounts(set()))
+        menu.addSeparator()
+        self.history_account_actions = {}
+        for account in self.store.accounts():
+            action = menu.addAction(account.name.replace("&", "&&"))
+            action.setCheckable(True)
+            action.setChecked(self._selected_account_ids is None or account.id in self._selected_account_ids)
+            action.toggled.connect(lambda on, aid=account.id: self._toggle_chart_account(aid, on))
+            self.history_account_actions[account.id] = action
+        self._update_account_button()
+
+    def _update_account_button(self):
+        selected = self._selected_chart_accounts()
+        total = len(self.store.accounts())
+        self.history_accounts_btn.setText("All accounts" if self._selected_account_ids is None
+                                         else f"{len(selected)} of {total} accounts")
+        names = ", ".join(a.name for a in selected) or "No accounts selected"
+        self.history_accounts_btn.setToolTip(f"Select the accounts shown in this chart. {names}")
+        self.hist_card.title.setText("ACCOUNT BALANCE HISTORY" if self._history_mode == "accounts" else "NET WORTH HISTORY")
+        self.plot_hist.setAccessibleName("Account balance history chart" if self._history_mode == "accounts"
+                                        else "Net worth history chart")
+
+    def _history_mode_changed(self):
+        self._history_mode = self.history_view.currentData()
+        self._save_chart_selection()
+
+    def _toggle_chart_account(self, account_id, on):
+        ids = {a.id for a in self.store.accounts()} if self._selected_account_ids is None else set(self._selected_account_ids)
+        if on:
+            ids.add(account_id)
+        else:
+            ids.discard(account_id)
+        self._set_chart_accounts(ids)
+
+    def _set_chart_accounts(self, ids):
+        self._selected_account_ids = ids
+        for aid, action in self.history_account_actions.items():
+            action.blockSignals(True)
+            action.setChecked(ids is None or aid in ids)
+            action.blockSignals(False)
+        self._save_chart_selection()
+
+    def _save_chart_selection(self):
+        # A chart filter is a view preference, not a financial edit to undo.
+        with self.store.undo_suspended():
+            self.store.set_setting("dashboard_history_view", {
+                "mode": self._history_mode,
+                "account_ids": sorted(self._selected_account_ids) if self._selected_account_ids is not None else None})
+        self._update_account_button()
+        self._render_history(self.store.transactions(), bool(self.store.accounts()))
+
+    def _render_history(self, tx, has_data):
+        h = networth_history(self.store, self._selected_account_ids) if self._selected_account_ids is not None else self._h
+        self._chart_h = h
+        accounts = self._selected_chart_accounts()
+        if self._selected_account_ids is not None:
+            tx = tx[tx.account_id.isin({a.id for a in accounts})]
+        p = self.plot_hist
+        self.hist_empty.setGeometry(p.viewport().rect())
+        self.hist_empty.setVisible(not accounts)
+        if not accounts:
+            self.hist_empty.raise_()
+        p.clear()
+        charts.unlock_view(p)
+        if p.plotItem.legend:
+            p.plotItem.legend.clear()
+        self.hist_series.reset()
+        self._hist_data = {}
+        self._hist_floors = {}
+        charts.detach_readout(p)
+        p.getViewBox()._window_ctx = None
+        if self._history_mode == "accounts":
+            self._render_account_lines(accounts, tx)
+            self._update_hist_note()
+            self._apply_expanded()
+            return
+        self.account_legend.hide()
+        self.hist_legend.setVisible(bool(accounts))
+        last_tx = tx["date"].max() if not tx.empty else pd.NaT
+        self._render_data_chip(last_tx)
+        if len(h) > 1 and has_data and accounts:
+            reg = self.hist_series
+            reg.reset()
+            ef = emergency_fund_target(self.store, 3)
+            reg.add("zero", charts.zero_floor(p))
+            reg.add("starter", charts.soft_floor(
+                p, 1000.0, "$1.0k · starter buffer", theme.AMBER,
+                slot="starter"))
+            if ef > 1050.0:
+                reg.add("emergency", charts.soft_floor(
+                    p, ef, f"{charts._short(ef)} · 3-month emergency fund",
+                    theme.ACCENT, slot="emergency"))
+            x = charts.to_ts(h.index)
+            # Hue alone is not enough to tell three thin lines apart (blue and
+            # violet collapse together for some colour-blind readers), so the
+            # series differ in stroke as well: solid, dashed, dotted.
+            reg.add("networth", charts.line(p, x, h["networth"].values,
+                                            theme.ACCENT, 2.6, "Net worth"))
+            reg.add("cash", charts.line(p, x, h["cash"].values, theme.BLUE,
+                                        1.7, "Cash"))
+            series = [("Net worth", theme.ACCENT, h["networth"].values),
+                      ("Cash", theme.BLUE, h["cash"].values)]
+            if np.any(h["investments"].values > 0):
+                reg.add("invest", charts.line(p, x, h["investments"].values,
+                                              theme.PURPLE, 1.7, "Investments",
+                                              dashed=True))
+                series.append(("Investments", theme.PURPLE,
+                               h["investments"].values))
+            if np.any(h["debt"].values > 0):
+                reg.add("debt", charts.line(p, x, -h["debt"].values, theme.RED,
+                                            2.0, "What you owe", dashed="dot"))
+                series.append(("You owe", theme.RED, h["debt"].values))
+            if pd.notna(last_tx) and (pd.Timestamp.today().normalize()
+                                      - last_tx).days > 7:
+                reg.add("dataend", charts.data_end_line(p, last_tx.date()))
+            reg.apply()
+            # Opens on the chosen window (a year by default) — where the detail
+            # people came for lives — and zooms out to the whole ledger.
+            self._hist_data = {"networth": h["networth"].values,
+                               "cash": h["cash"].values,
+                               "invest": h["investments"].values,
+                               "debt": -h["debt"].values}
+            self._hist_floors = {"zero": 0.0, "starter": 1000.0,
+                                 "emergency": ef}
+            y_series, include_y = self._hist_frame()
+            charts.lock_view(
+                p, float(x[0]), float(x[-1]), y_series, include_y=include_y,
+                initial_days=self._range_days, x_data=x)
+            charts.attach_readout(p, x, series)
+        self._update_hist_note()
+        self._apply_expanded()
+
+
+    def _render_account_lines(self, accounts, tx):
+        p = self.plot_hist
+        self.hist_legend.hide()
+        while self.account_legend_box.count():
+            item = self.account_legend_box.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        frame = account_balance_history(self.store, {a.id for a in accounts})
+        self._account_history = frame
+        self._chart_h = None
+        self._render_data_chip(tx.date.max() if not tx.empty else pd.NaT)
+        if not accounts or frame.empty:
+            self.account_legend.hide()
+            return
+        self.account_legend.show()
+        x = charts.to_ts(frame.index)
+        entries, series = [], []
+        colors = {"checking": theme.BLUE, "savings": theme.ACCENT,
+                  "investment": theme.PURPLE, "credit": theme.RED, "loan": theme.RED}
+        for account in accounts:
+            color = colors.get(account.type.value, theme.BLUE)
+            dashed = (False, True, "dot")[account.id % 3]
+            if account.type.value in ("credit", "loan"):
+                dashed = "dot"
+            values = frame[account.id].to_numpy(dtype=float)
+            key = f"account:{account.id}"
+            curve = charts.line(p, x, values, color, 2.1, dashed=dashed)
+            if len(x) == 1:
+                curve.setSymbol("o")
+                curve.setSymbolBrush(color)
+            self.hist_series.add(key, curve)
+            self._hist_data[key] = values
+            entries.append((account.name, color, "dot" if dashed == "dot" else "dash" if dashed else "line"))
+            series.append((account.name, color, values))
+        legend = ChartKey(entries)
+        for label in legend.findChildren(QLabel):
+            label.setTextFormat(Qt.TextFormat.PlainText)
+        self.account_legend_box.addWidget(legend)
+        self.hist_series.add("zero", charts.zero_floor(p))
+        self._hist_floors = {"zero": 0.0}
+        charts.lock_view(p, float(x[0]), float(x[-1]), list(self._hist_data.values()),
+                         include_y=[0.0], initial_days=self._range_days, x_data=x)
+        charts.attach_readout(p, x, series)
 
     def _hist_frame(self):
         """The series and reference lines the vertical range should fit.
@@ -618,6 +897,10 @@ class DashboardPage(QWidget):
             "numbers change. The full detail stays on Accounts → Check my "
             "balances.</div>")
         self.warn.setText("".join(rows))
+        count = len(issues)
+        self.warn_summary.setText(
+            f"History needs review: {count} account{'s do' if count != 1 else ' does'} "
+            "not reconcile with the imported transactions.")
         self.warn_row.setVisible(True)
 
     # ---------------------------------------------------------------
@@ -709,7 +992,17 @@ class DashboardPage(QWidget):
 
     def _update_hist_note(self) -> None:
         """A sentence for the net worth chart, for anyone who cannot read it."""
-        h = self._h
+        if not self._selected_chart_accounts():
+            self.hist_note.setText("Select one or more accounts to show their balance history.")
+            self.plot_hist.setAccessibleDescription(self.hist_note.text())
+            return
+        if self._history_mode == "accounts":
+            text = ("Each line is one selected account. Investments and loans use dated balance snapshots; "
+                    "cash accounts use the bank ledger. Money owed is below $0. Overview totals include all accounts.")
+            self.hist_note.setText(text)
+            self.plot_hist.setAccessibleDescription(text)
+            return
+        h = self._chart_h
         if h is None or len(h) < 2:
             self.hist_note.setText("")
             self.plot_hist.setAccessibleDescription("")
@@ -725,7 +1018,8 @@ class DashboardPage(QWidget):
             start = float(nw.iloc[0])
         d = end - start
         word = "up" if d >= 0 else "down"
-        text = (f"Over {phrase}, net worth went {word} {fmt_money(abs(d))}: "
+        label = "net worth" if self._selected_account_ids is None else "selected accounts’ net worth"
+        text = (f"Over {phrase}, {label} went {word} {fmt_money(abs(d))}: "
                 f"from {fmt_money(start)} to {fmt_money(end)}.")
         self.hist_note.setText(text)
         self.plot_hist.setAccessibleDescription(text)
@@ -788,64 +1082,8 @@ class DashboardPage(QWidget):
         self._render_alerts()
         self._render_warnings()
 
-        # history
-        p = self.plot_hist
-        p.clear()
-        if p.plotItem.legend:
-            p.plotItem.legend.clear()
-        last_tx = tx["date"].max() if not tx.empty else pd.NaT
-        self._render_data_chip(last_tx)
-        if len(h) > 1 and has_data:
-            reg = self.hist_series
-            reg.reset()
-            ef = emergency_fund_target(store, 3)
-            reg.add("zero", charts.zero_floor(p))
-            reg.add("starter", charts.soft_floor(
-                p, 1000.0, "$1.0k · starter buffer", theme.AMBER,
-                slot="starter"))
-            if ef > 1050.0:
-                reg.add("emergency", charts.soft_floor(
-                    p, ef, f"{charts._short(ef)} · 3-month emergency fund",
-                    theme.ACCENT, slot="emergency"))
-            x = charts.to_ts(h.index)
-            # Hue alone is not enough to tell three thin lines apart (blue and
-            # violet collapse together for some colour-blind readers), so the
-            # series differ in stroke as well: solid, dashed, dotted.
-            reg.add("networth", charts.line(p, x, h["networth"].values,
-                                            theme.ACCENT, 2.6, "Net worth"))
-            reg.add("cash", charts.line(p, x, h["cash"].values, theme.BLUE,
-                                        1.7, "Cash"))
-            series = [("Net worth", theme.ACCENT, h["networth"].values),
-                      ("Cash", theme.BLUE, h["cash"].values)]
-            if np.any(h["investments"].values > 0):
-                reg.add("invest", charts.line(p, x, h["investments"].values,
-                                              theme.PURPLE, 1.7, "Investments",
-                                              dashed=True))
-                series.append(("Investments", theme.PURPLE,
-                               h["investments"].values))
-            if np.any(h["debt"].values > 0):
-                reg.add("debt", charts.line(p, x, -h["debt"].values, theme.RED,
-                                            2.0, "What you owe", dashed="dot"))
-                series.append(("You owe", theme.RED, h["debt"].values))
-            if pd.notna(last_tx) and (pd.Timestamp.today().normalize()
-                                      - last_tx).days > 7:
-                reg.add("dataend", charts.data_end_line(p, last_tx.date()))
-            reg.apply()
-            # Opens on the chosen window (a year by default) — where the detail
-            # people came for lives — and zooms out to the whole ledger.
-            self._hist_data = {"networth": h["networth"].values,
-                               "cash": h["cash"].values,
-                               "invest": h["investments"].values,
-                               "debt": -h["debt"].values}
-            self._hist_floors = {"zero": 0.0, "starter": 1000.0,
-                                 "emergency": ef}
-            y_series, include_y = self._hist_frame()
-            charts.lock_view(
-                p, float(x[0]), float(x[-1]), y_series, include_y=include_y,
-                initial_days=self._range_days, x_data=x)
-            charts.attach_readout(p, x, series)
-        self._update_hist_note()
-        self._apply_expanded()
+        self._load_chart_selection()
+        self._render_history(tx, has_data)
 
         # monthly cash flow — zero is the break-even line between the bars
         p = self.plot_flow
@@ -921,7 +1159,13 @@ class DashboardPage(QWidget):
         return int(min(n, max(3, (self.plot_cat.height() - 36) // 17)))
 
     def eventFilter(self, obj, ev) -> bool:
-        if (obj is self.plot_cat and ev.type() == QEvent.Type.Resize
+        if obj is self.scroll.viewport() and ev.type() == QEvent.Type.Resize:
+            self._fit_history_height()
+        if obj is getattr(self, "hist_card", None) and ev.type() == QEvent.Type.LayoutRequest:
+            self._fit_history_height()
+        if obj is self.plot_hist.viewport() and ev.type() == QEvent.Type.Resize:
+            self.hist_empty.setGeometry(self.plot_hist.viewport().rect())
+        if (obj is getattr(self, "plot_cat", None) and ev.type() == QEvent.Type.Resize
                 and self._cats is not None and len(self._cats)):
             fit = self._bars_that_fit(len(self._cats))
             if fit != self._cat_fit:

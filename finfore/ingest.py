@@ -241,7 +241,7 @@ def parse_transactions(cfg: ImportConfig) -> pd.DataFrame:
     n0 = len(df)
     df = df.dropna(subset=["date", "amount"])
     df = df[df["amount"] != 0.0]
-    df = df.sort_values("date").reset_index(drop=True)
+    df = df.sort_values("date", kind="stable").reset_index(drop=True)
     if df.empty:
         raise ValueError(
             f"Parsed 0 usable rows out of {n0}. Check the column mapping, "
@@ -340,7 +340,8 @@ def make_hashes(df: pd.DataFrame) -> list[str]:
     (account, date, description, amount) keeps legitimate duplicates distinct
     while making file re-imports idempotent."""
     occ = df.groupby(
-        [df["account_id"], df["date"], df["description"], df["amount"].round(2)]
+        [df["account_id"], pd.to_datetime(df["date"]).dt.normalize(),
+         df["description"], df["amount"].round(2)]
     ).cumcount()
     out = []
     for (aid, d, desc, amt), k in zip(

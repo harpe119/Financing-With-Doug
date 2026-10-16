@@ -6,6 +6,70 @@ intended to hand to someone else. The running version is shown in the app
 header and under **Help → About**, so a downloaded copy always identifies
 itself.
 
+## Unreleased — goal planning, CSV overlap and account balance debugging
+
+- Simplify Transactions around search, filters and the review queue. Move
+  diagnostics/export/help into Tools, show review state beside descriptions,
+  wrap long descriptions and retain readable columns through horizontal scrolling.
+- Restore keyboard traversal out of the ledger and focus after category edits.
+  Require an explicit category choice; closed selectors and scrolling do not save.
+  Mark reviewed confirms only selected entries; remembering category changes is opt-in.
+- Clear the negative-balance filter with the other filters. Open help separately
+  to avoid small-window overlap, and show merchant-review counts before saving.
+
+- Record category provenance and explicit human review state. Add review
+  filters, source explanations, confirmations and one-off versus remembered
+  corrections, with atomic feedback writes and protection from later automatic
+  reclassification. Preserve legacy labels without inventing verification.
+- Preview merchant-review transactions, require explicit suggestion acceptance,
+  and make changes outside the selected period opt-in. Apply only chosen rows.
+- Export a local dataset of current human-reviewed transaction labels with
+  transaction/review dates and merchant groups for later evaluated ML work.
+  Exclude unverified predictions, business reimbursements and future records.
+
+- Add a monthly Plan page with editable income/spending assumptions, regular
+  debt and investment commitments, extra reserves, a shared Goals allowance,
+  transaction evidence, and an explicit unassigned/over-budget result.
+- Record goal contributions, account assignments, purchases and released
+  savings with an activity history and monthly actual contributions. Prevent
+  new earmarks exceeding available cash or reusing an imported transaction;
+  preserve progress after goal purchases and support atomic Undo/Redo.
+
+- Make net worth history the Dashboard's leading view, with a protected chart
+  height and consolidated controls. Fold supporting charts by default and move
+  balances and cash outlook below history. Keep reconciliation notices compact,
+  with full evidence available through Details.
+
+- Add repeat intervals and optional end dates to Forecast what-if purchases or
+  income. Apply each occurrence consistently to cash paths, net worth, Calendar
+  and shortfall attribution, with anchored month-end and leap-year handling.
+- Add Edit, Save changes and Cancel edit for saved events. Preserve IDs and
+  on/off state, support Undo/Redo, retain failed-save entries, and guard against
+  overwriting changed events or writing through rows from another ledger.
+
+- Add purchase/reserve savings goals with editable money already set aside;
+  preserve existing cash and net worth milestones and their progress rules.
+- Include active linked recurring loan payments in Goals, with the account
+  payment as fallback. Show existing payment plus extra allocation and total;
+  retain recorded payments within spending when detecting spare income.
+- Reallocate unused final payments and contributions within the same month.
+  Cost deadlines by replaying loan interest, priorities and payment rollovers.
+  Keep purchase schedules on Goals rather than treating total cash as saved.
+
+- Match overlapping imports by transaction content and occurrence counts as
+  well as stored hashes. Preserve existing corrections and reimbursements;
+  retain removed-row identities across description case and whitespace changes.
+- Fix same-day timestamp hashing so identical purchases at different times do
+  not share a hash. Keep input order stable within tied dates.
+- Add optional running account balances, exact amounts, negative-balance
+  filtering, oldest-first ordering, and account-scoped duplicate review to
+  Transactions. Calculate balances before applying table filters.
+- Add separate account lines and saved account selection to Dashboard history.
+  Keep chart filtering separate from household totals and the financial Undo
+  stack; clear stale curves and hover data for empty selections.
+- Add independent overlap, migration, balance-anchor, snapshot, and desktop
+  workflow regressions.
+
 ## 1.20.0 — forecast explanations, history controls, and spending evidence
 
 - Bundle silent Manim Forecast and Progress videos, generated from seeded,

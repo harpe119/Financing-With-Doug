@@ -408,9 +408,205 @@ class WorkflowTests(unittest.TestCase):
             self.assertIn("100.0000%", housing.child(0).toolTip(0))
             dialog.close()
 
-    def test_six_sections_and_nested_pages_refresh(self):
+    def test_transaction_running_balances_keep_hidden_rows_in_calculation(self):
+        aid = self.win.store.add_account(Account("Checking", AccountType.CHECKING,
+                                                500, date(2026, 9, 3)))
+        self.win.store.add_transactions(pd.DataFrame([
+            dict(account_id=aid, date=date(2026, 9, 1), description="Early purchase", amount=-250,
+                 category="Shopping", import_hash="debug-purchase"),
+            dict(account_id=aid, date=date(2026, 9, 1), description="Paycheck", amount=1000,
+                 category="Income", import_hash="debug-pay"),
+            dict(account_id=aid, date=date(2026, 9, 2), description="Business flight", amount=-100,
+                 category="Business (reimbursable)", import_hash="debug-business"),
+            dict(account_id=aid, date=date(2026, 9, 3), description="Transfer", amount=-350,
+                 category="Transfer", import_hash="debug-transfer"),
+        ]))
+        self.win.show_page("Transactions")
+        page = self.win.current_page()
+        self.assertTrue(page.table.isColumnHidden(5))
+        page.f_since.setCurrentIndex(page.f_since.findData(None))
+        page.show_balances.setChecked(True)
+        self.assertFalse(page.table.isColumnHidden(5))
+        page.search.setText("Early purchase")
+        self.assertEqual(page.table.rowCount(), 1)
+        self.assertEqual(page.table.item(0, 5).data(Qt.ItemDataRole.UserRole), -50)
+        self.assertIn("Before: $200.00", page.table.item(0, 5).toolTip())
+        self.assertIn("below $0", page.table.item(0, 5).toolTip())
+        page.search.clear()
+        page.negative_only.setChecked(True)
+        self.assertEqual(page.table.rowCount(), 1)
+        self.assertEqual(page.table.item(0, 2).text(), "Early purchase")
+        page.negative_only.setChecked(False)
+        page.balance_order.setCurrentIndex(page.balance_order.findData("oldest"))
+        self.assertEqual(page.table.item(0, 2).text(), "Early purchase")
+        self.assertEqual(page.table.item(3, 5).data(Qt.ItemDataRole.UserRole), 500)
+        page.show_balances.setChecked(False)
+        self.assertTrue(page.table.isColumnHidden(5))
+        self.assertFalse(page.negative_only.isVisibleTo(page))
+
+    def test_dashboard_selected_account_lines_preserve_household_totals(self):
+        checking = self.win.store.add_account(Account("Checking", AccountType.CHECKING, 1000, date.today()))
+        invest = self.win.store.add_account(Account("401k", AccountType.INVESTMENT, 20000, date.today()))
+        savings = self.win.store.add_account(Account("Savings", AccountType.SAVINGS, 5000, date.today()))
+        self.win.store.add_snapshot(invest, date.today()-timedelta(days=30), 19000)
+        self.win.show_page("Dashboard")
+        page = self.win.current_page()
+        page.refresh()
+        before = page.card_nw.value.text()
+        self.win.store.undo.clear()
+        page.history_view.setCurrentIndex(page.history_view.findData("accounts"))
+        page.history_account_actions[savings].setChecked(False)
+        self.assertEqual(set(page._hist_data), {f"account:{checking}", f"account:{invest}"})
+        self.assertEqual(set(page._account_history.columns), {checking, invest})
+        self.assertEqual(page.card_nw.value.text(), before)
+        self.assertFalse(self.win.store.undo.can_undo)
+        self.assertEqual(page._hist_data[f"account:{checking}"][-1], 1000)
+        self.assertEqual(page._hist_data[f"account:{invest}"][-1], 20000)
+        self.assertEqual([item[0] for item in page.plot_hist._readout.series], ["Checking", "401k"])
+        page.refresh()
+        self.assertEqual(page._selected_account_ids, {checking, invest})
+        self.assertEqual(page._history_mode, "accounts")
+        page.history_view.setCurrentIndex(page.history_view.findData("totals"))
+        self.assertEqual(page._hist_data["networth"][-1], 21000)
+        self.assertEqual(page.card_nw.value.text(), before)
+        page._set_chart_accounts(set())
+        self.assertFalse(page._hist_data)
+        self.assertIsNone(page.plot_hist._readout)
+        self.assertIn("Select one or more", page.hist_note.text())
+        self.assertTrue(page.hist_empty.isVisibleTo(page))
+        page._set_chart_accounts(None)
+        self.assertEqual(page._hist_data["networth"][-1], 26000)
+
+    def test_transactions_duplicate_review_respects_selected_account(self):
+        self.add_account()
+        self.win.show_page("Transactions")
+        page = self.win.current_page()
+        page.f_account.setCurrentIndex(page.f_account.findData(1))
+        with patch("finfore.ui.accounts.DuplicateDialog") as dialog:
+            dialog.return_value.exec.return_value = 0
+            page.duplicates_btn.trigger()
+            dialog.assert_called_once_with(self.win.store, page, account_id=1)
+
+    def test_dashboard_chart_selection_is_scoped_to_each_database(self):
+        self.add_account()
+        page = self.win.pages[0]
+        page.refresh()
+        page.history_view.setCurrentIndex(page.history_view.findData("accounts"))
+        page._set_chart_accounts(set())
+        other = Store(self.root / "other.db")
+        other.add_account(Account("Other checking", AccountType.CHECKING, 800, date.today()))
+        self.win._switch_store(other, None)
+        page = self.win.pages[0]
+        page.refresh()
+        self.assertEqual(page._history_mode, "totals")
+        self.assertIsNone(page._selected_account_ids)
+        self.assertFalse(page.hist_empty.isVisibleTo(page))
+        self.assertEqual(page._hist_data["networth"][-1], 800)
+
+    def test_account_debug_options_fit_minimum_window(self):
+        from finfore.ui import theme
+        previous = self.app.styleSheet()
+        theme.apply(self.app)
+        self.addCleanup(self.app.setStyleSheet, previous)
+        self.add_account()
+        self.win.resize(980, 620)
+        self.win.show_page("Transactions")
+        page = self.win.current_page()
+        page.show_balances.setChecked(True)
+        QTest.qWait(50)
+        self.assertTrue(page.show_balances.isChecked())
+        self.assertIn(page.duplicates_btn, page.tools_menu.actions())
+        for widget in (page.negative_only, page.balance_order):
+            self.assertTrue(widget.isVisibleTo(page))
+            self.assertGreaterEqual(widget.height(), widget.sizeHint().height())
+            self.assertLessEqual(widget.mapTo(page, QPoint(widget.width(), 0)).x(), page.width())
+        self.assertGreater(page.table.height(), 160)
+        self.assertGreaterEqual(page.table.columnWidth(2), 250)
+        self.win.show_page("Dashboard")
+        dash = self.win.current_page()
+        QTest.qWait(50)
+        for widget in (dash.history_view, dash.history_accounts_btn):
+            self.assertGreaterEqual(widget.height(), widget.sizeHint().height())
+            self.assertLessEqual(widget.mapTo(dash.hist_card, QPoint(widget.width(), 0)).x(), dash.hist_card.width())
+
+    def test_spending_plan_budget_is_shared_with_goals_and_undoable(self):
+        self.add_account()
+        self.win.store.add_goal(Goal("Vacation", 2000, "savings"))
+        self.win.show_page("Plan")
+        page = self.win.current_page()
+        self.assertIn("No complete months", page.source.text())
+        self.assertEqual(page.verdict.text(), "Monthly plan not ready")
+        self.assertEqual(page.table.item(0, 1).text(), "—")
+        self.assertFalse(page.save_btn.isEnabled())
+        for key in ("debt", "frivolous", "giving", "unknown"):
+            page.checks[key].setChecked(True)
+        page.checks["income"].setChecked(True)
+        page.boxes["income"].setValue(4000)
+        page.checks["essential"].setChecked(True)
+        page.boxes["essential"].setValue(2000)
+        page.goal_budget.setValue(600)
+        self.assertIn("1,400.00", page.verdict.text())
+        self.assertIn("Unsaved", page.state.text())
+        self.win.show_page("Accounts")
+        self.win.show_page("Plan")
+        self.assertEqual(page.boxes["income"].value(), 4000)
+        page.save_btn.click()
+        self.win.show_page("Goals")
+        goals = self.win.current_page()
+        self.assertEqual(goals.surplus.value(), 600)
+        self.assertIn("Monthly Plan", goals.surplus_note.text())
+        self.assertIn("2,000.00 available", goals.surplus_note.text())
+        self.win.show_page("Plan")
+        self.win.undo()
+        self.assertIsNone(self.win.store.get_setting("spending_plan"))
+        self.assertEqual(page.boxes["income"].value(), 0)
+        self.win.redo()
+        self.assertEqual(page.boxes["income"].value(), 4000)
+
+    def test_goal_activity_records_actual_funding_without_bank_writes(self):
+        from finfore.ui.goal_funding import GoalFundingDialog
+        self.add_account()
+        gid = self.win.store.add_goal(Goal("Computer", 2000, "savings"))
+        self.win.show_page("Plan")
+        page = self.win.current_page()
+        self.assertTrue(page.activity_btn.isEnabled())
+        dlg = GoalFundingDialog(self.win.store, gid, self.win)
+        dlg.account.setCurrentIndex(dlg.account.findData(1))
+        dlg.amount.setValue(100000)
+        dlg._record()
+        self.assertIn("exceeds the goal target", dlg.error.text())
+        self.assertEqual(dlg.amount.value(), 100000)
+        dlg.amount.setValue(250)
+        dlg._record()
+        self.assertEqual(dlg.table.rowCount(), 1)
+        self.assertNotIn("E06C5B", dlg.error.styleSheet())
+        self.assertEqual(self.win.store.goals()[0].saved_amount, 250)
+        self.assertEqual(len(self.win.store.transactions()), 0)
+        dlg.close()
+        page.refresh()
+        self.assertEqual(page.goal_table.item(0, 2).text(), "$250.00")
+        self.assertEqual(page.goal_table.item(0, 3).text(), "$250.00")
+        self.win.undo()
+        self.assertEqual(page.goal_table.item(0, 2).text(), "$0.00")
+
+    def test_plan_minimum_size_and_database_switch_clear_drafts(self):
+        self.win.resize(980, 620)
+        self.win.show_page("Plan")
+        page = self.win.current_page()
+        self.app.processEvents()
+        self.assertLessEqual(page.scroll.widget().width(), page.scroll.viewport().width())
+        self.assertTrue(page.save_btn.isVisibleTo(self.win))
+        page.checks["income"].setChecked(True)
+        page.boxes["income"].setValue(1234)
+        other = Store(self.root / "other-plan.db")
+        self.win._switch_store(other, None)
+        self.assertIs(page.store, other)
+        self.assertEqual(page.boxes["income"].value(), 0)
+        self.assertFalse(page._dirty)
+
+    def test_sections_and_nested_pages_refresh(self):
         self.assertEqual([self.win.nav.item(i).text() for i in range(self.win.nav.count())],
-                         ["Dashboard", "Accounts", "Transactions", "Bills & payday", "Goals", "Forecast"])
+                         ["Dashboard", "Accounts", "Transactions", "Bills & payday", "Plan", "Goals", "Forecast"])
         for name, page_type, parent in (("Spending", "InsightsPage", "Dashboard"),
                 ("Recurring", "RecurringPage", "Bills & payday"),
                 ("Progress", "ProgressPage", "Forecast"),
@@ -430,8 +626,17 @@ class WorkflowTests(unittest.TestCase):
         self.win.resize(980, 620)
         self.win.show_page("Forecast")
         self.win._toggle_mode()
-        # The wrapped chart sizing runs on a zero-delay layout timer.
-        QTest.qWait(50)
+        # Nested splitter sizing takes several queued layout passes on Windows.
+        # Wait for the actual geometry, rather than assuming 50 ms is enough
+        # while the full suite is running. A persistent overlap still fails.
+        for _ in range(40):
+            QTest.qWait(25)
+            chart_bottom = self.fc.plot_cash.mapTo(
+                self.fc.cash_card, QPoint(0, self.fc.plot_cash.height())).y()
+            legend_top = self.fc.cash_legend.mapTo(self.fc.cash_card, QPoint(0, 0)).y()
+            if (self.fc.chart_split.height() >= self.fc.chart_split.minimumHeight()
+                    and legend_top >= chart_bottom):
+                break
         self.assertGreaterEqual(self.fc.chart_split.height(), self.fc.chart_split.minimumHeight())
         for button in (self.fc.video_btn, self.fc.reset_btn):
             self.assertGreaterEqual(button.width(), button.sizeHint().width(), button.text())
@@ -645,7 +850,10 @@ class WorkflowTests(unittest.TestCase):
         QTest.qWait(50)
         scroll = page.event_card.parentWidget().parentWidget().parentWidget()
         viewport = scroll.viewport()
-        self.assertEqual(scroll.horizontalScrollBar().maximum(), 0)
+        self.assertEqual(scroll.horizontalScrollBar().maximum(), 0,
+            f"viewport={viewport.width()}, contents={scroll.widget().width()}, "
+            f"event minimum={page.event_card.minimumSizeHint().width()}, "
+            f"repeat minimum={page.e_repeat.minimumSizeHint().width()}")
         for widget in (page.overlay, page.paths, page.ef_months, page.history_pick,
                        page.history_since, page.history_refit, page.snowball,
                        page.extra_loan, page.extra_invest, page.e_name, page.e_amount,
@@ -857,6 +1065,160 @@ class WorkflowTests(unittest.TestCase):
             page._add_event()
         self.assertIn("future date", page.event_error.text())
         self.assertEqual(page.store.events(), [])
+
+    def test_forecast_creates_repeating_purchase_with_optional_end(self):
+        self.add_account()
+        self.win.show_page("Forecast")
+        page = self.fc
+        page.event_card.set_expanded(True)
+        page.e_name.setText("Regular purchase")
+        page.e_amount.setValue(-123.45)
+        page.e_repeat.setCurrentIndex(page.e_repeat.findData("weekly"))
+        page.e_when.setDate(QDate.currentDate().addDays(1))
+        page.e_until_enabled.setChecked(True)
+        page.e_until.setDate(QDate.currentDate())
+        page._add_event()
+        self.assertIn("end date", page.event_error.text())
+        self.assertEqual(page.store.events(), [])
+        page.e_until.setDate(QDate.currentDate().addDays(15))
+        page._add_event()
+        event = page.store.events()[0]
+        self.assertEqual(event.repeat, "weekly")
+        self.assertEqual(event.until, date.today()+timedelta(days=15))
+        self.assertEqual(event.amount, -123.45)
+        details = page.event_box.itemAt(0).widget().findChildren(QLabel)[1]
+        self.assertIn("$123.45", details.text())
+        self.assertIn("Weekly", details.text())
+        self.assertIn("through", details.text())
+        self.assertEqual(page.e_repeat.currentData(), "once")
+
+    def test_forecast_edits_an_event_in_place_and_retains_its_disabled_state(self):
+        self.add_account()
+        store = self.win.store
+        original = OneOffEvent("Computer", date.today()+timedelta(days=5), -2000, active=False)
+        eid = store.add_event(original)
+        self.win.show_page("Forecast")
+        page = self.fc
+        row = page.event_box.itemAt(0).widget()
+        next(b for b in row.findChildren(QPushButton) if b.text() == "Edit").click()
+        self.assertEqual(page.e_name.text(), "Computer")
+        self.assertEqual(page.add_event_btn.text(), "Save changes")
+        page.e_name.setText("Computer installments")
+        page.e_amount.setValue(-200)
+        page.e_repeat.setCurrentIndex(page.e_repeat.findData("monthly"))
+        page.e_when.setDate(QDate.currentDate().addDays(10))
+        page._add_event()
+        self.assertEqual(len(store.events()), 1)
+        event = store.events()[0]
+        self.assertEqual((event.id, event.label, event.repeat, event.amount),
+                         (eid, "Computer installments", "monthly", -200))
+        self.assertFalse(event.active)
+        self.assertIsNone(page._editing_event)
+        self.assertEqual(page.add_event_btn.text(), "Add event")
+        self.assertTrue(page.cancel_event_btn.isHidden())
+        store.undo.undo()
+        self.assertEqual(store.events(), [original])
+
+    def test_forecast_cancel_edit_and_editing_an_existing_past_start(self):
+        self.add_account()
+        store = self.win.store
+        e = OneOffEvent("Subscription", date.today()-timedelta(days=60), -30, repeat="monthly")
+        eid = store.add_event(e)
+        self.win.show_page("Forecast")
+        page = self.fc
+        page._edit_event(eid, store, e)
+        page.e_amount.setValue(-45)
+        page.cancel_event_btn.click()
+        self.assertEqual(store.events(), [e])
+        page._edit_event(eid, store, e)
+        page.e_amount.setValue(-40)
+        page._add_event()
+        event = store.events()[0]
+        self.assertEqual(event.when, e.when)
+        self.assertEqual(event.repeat, "monthly")
+        self.assertEqual(event.amount, -40)
+        self.assertFalse(page.event_error.isVisible())
+
+    def test_forecast_event_edit_failure_keeps_entries_and_retry_updates_once(self):
+        self.add_account()
+        store = self.win.store
+        e = OneOffEvent("Membership", date.today()+timedelta(days=2), -20)
+        eid = store.add_event(e)
+        self.win.show_page("Forecast")
+        page = self.fc
+        page._edit_event(eid, store, e)
+        page.e_name.setText("New membership")
+        page.e_amount.setValue(-50)
+        page.e_repeat.setCurrentIndex(page.e_repeat.findData("quarterly"))
+        with patch.object(store, "update_event", side_effect=sqlite3.OperationalError("readonly")):
+            page._add_event()
+        self.assertEqual(page.e_name.text(), "New membership")
+        self.assertEqual(page.e_repeat.currentData(), "quarterly")
+        self.assertEqual(page.add_event_btn.text(), "Save changes")
+        self.assertEqual(store.events(), [e])
+        self.assertIn("entries are still here", page.event_error.text())
+        page._add_event()
+        self.assertEqual(len(store.events()), 1)
+        self.assertEqual(store.events()[0].label, "New membership")
+        self.assertEqual(store.events()[0].repeat, "quarterly")
+
+    def test_forecast_stale_edit_does_not_overwrite_a_newer_event(self):
+        self.add_account()
+        store = self.win.store
+        e = OneOffEvent("Membership", date.today()+timedelta(days=2), -20)
+        eid = store.add_event(e)
+        self.win.show_page("Forecast")
+        page = self.fc
+        page._edit_event(eid, store, e)
+        page.e_name.setText("Unsaved change")
+        store.update_event(eid, amount=-30)
+        page._add_event()
+        self.assertEqual(store.events()[0].label, "Membership")
+        self.assertEqual(store.events()[0].amount, -30)
+        self.assertEqual(page.e_name.text(), "Unsaved change")
+        self.assertIn("changed or was removed", page.event_error.text())
+        page._remove_event(eid, store, e)  # old row snapshot is stale too
+        self.assertEqual(len(store.events()), 1)
+
+    def test_forecast_switching_databases_discards_event_editor_state(self):
+        self.add_account()
+        store = self.win.store
+        e = OneOffEvent("Membership", date.today()+timedelta(days=2), -20, repeat="annual")
+        eid = store.add_event(e)
+        self.win.show_page("Forecast")
+        page = self.fc
+        page._edit_event(eid, store, e)
+        other = Store(self.root/"other-events.db")
+        self.win._switch_store(other, demo_key=None)
+        self.assertIsNone(page._editing_event)
+        self.assertEqual(page.e_name.text(), "")
+        self.assertEqual(page.e_repeat.currentData(), "once")
+        self.assertEqual(page.add_event_btn.text(), "Add event")
+        page._edit_event(eid, store, e)
+        self.assertIsNone(page._editing_event)
+        self.assertEqual(other.events(), [])
+
+    def test_forecast_repeating_event_editor_fits_a_narrow_control_column(self):
+        self.add_account()
+        store = self.win.store
+        e = OneOffEvent("Regular purchase", date.today()+timedelta(days=1),
+                        -123.45, repeat="monthly", until=date.today()+timedelta(days=365))
+        eid = store.add_event(e)
+        self.win.show_page("Forecast")
+        page = self.fc
+        self.win.resize(980, 620)
+        page.forecast_split.setSizes([240,900])
+        page._edit_event(eid, store, e)
+        QTest.qWait(80)
+        viewport = page.control_scroll.viewport()
+        self.assertEqual(page.control_scroll.horizontalScrollBar().maximum(), 0)
+        for control in (page.e_name, page.e_repeat, page.e_when, page.e_until,
+                        page.add_event_btn, page.cancel_event_btn):
+            x = control.mapTo(viewport, QPoint(0,0)).x()
+            self.assertGreaterEqual(x, 0)
+            self.assertLessEqual(x+control.width(), viewport.width())
+        for button in (page.add_event_btn, page.cancel_event_btn):
+            self.assertGreaterEqual(button.width(), button.sizeHint().width())
 
     def test_forecast_failure_clears_old_answer_and_retry_recovers(self):
         from finfore.ui import forecast_page
@@ -1204,6 +1566,179 @@ class WorkflowTests(unittest.TestCase):
         self.fc.run()
         self.assertFalse(unassigned().needs_review)
 
+    def test_review_filter_one_off_scope_confirmation_and_undo(self):
+        page = self.transaction_hardening_fixture()
+        page.f_review.setCurrentIndex(page.f_review.findData('attention'))
+        self.assertGreater(page.table.rowCount(), 0)
+        page.remember_category.setChecked(False)
+        page.table.selectRow(0)
+        txid = page._selected_ids()[0]
+        page.confirm_btn.click()
+        self.assertTrue(self.win.store.transactions().set_index('id').loc[txid].category_reviewed)
+        self.assertEqual(self.win.store.learned_categories(), {})
+        page.f_review.setCurrentIndex(page.f_review.findData('reviewed'))
+        self.assertEqual(page.table.rowCount(), 1)
+        page.show_sources.setChecked(True)
+        self.assertEqual(page.table.item(0,6).text(), 'Reviewed by you')
+        self.win.undo()
+        self.assertEqual(page.table.rowCount(), 0)
+        page._clear_filters()
+        self.assertEqual(page.f_review.currentData(), 'all')
+
+    def test_transaction_confirmation_does_not_teach_rules_and_attention_opens_full_queue(self):
+        page = self.transaction_hardening_fixture()
+        self.assertFalse(page.remember_category.isChecked())
+        page.remember_category.setChecked(True)
+        page.table.selectRow(0)
+        txid = page._selected_ids()[0]
+        page.confirm_btn.click()
+        self.assertEqual(self.win.store.learned_categories(), {})
+        self.assertIn('Future import rules unchanged', page.learned_lbl.text())
+        self.assertIn('Reviewed', page.table.item(0, 2).data(Qt.ItemDataRole.AccessibleTextRole))
+        page._recategorize([txid], 'Dining')
+        self.assertIn('Dining', self.win.store.learned_categories().values())
+        page.f_account.setCurrentIndex(page.f_account.findData(1))
+        page.search.setText('does not exist')
+        page.attention_btn.click()
+        self.assertEqual(page.f_review.currentData(), 'attention')
+        self.assertEqual(page.search.text(), '')
+        self.assertIsNone(page.f_since.currentData())
+        self.assertEqual(page.table.rowCount(), 2)
+
+    def test_transaction_clear_filters_resets_negative_only_without_changing_balances(self):
+        page = self.transaction_hardening_fixture()
+        page.show_balances.setChecked(True)
+        before = page._balances.copy()
+        page.negative_only.setChecked(True)
+        self.assertEqual(page.table.rowCount(), 0)
+        page.empty_action.click()
+        self.assertFalse(page.negative_only.isChecked())
+        self.assertEqual(page.table.rowCount(), 3)
+        self.assertTrue(page.show_balances.isChecked())
+        pd.testing.assert_frame_equal(page._balances, before)
+
+    def test_transaction_keyboard_leaves_table_and_only_commits_an_explicit_category(self):
+        page = self.transaction_hardening_fixture()
+        page.table.selectRow(0)
+        page.table.setCurrentCell(0, 2)
+        page.table.setFocus()
+        QTest.keyClick(page.table, Qt.Key.Key_Tab)
+        focus = self.app.focusWidget()
+        self.assertIsNotNone(focus)
+        self.assertIsNot(focus, page.table)
+        self.assertFalse(page.table.isAncestorOf(focus))
+        page.table.setFocus()
+        QTest.keyClick(page.table, Qt.Key.Key_Tab, Qt.KeyboardModifier.ShiftModifier)
+        focus = self.app.focusWidget()
+        self.assertIsNotNone(focus)
+        self.assertFalse(focus is page.table or page.table.isAncestorOf(focus))
+        page.table.setFocus()
+        QTest.keyClick(page.table, Qt.Key.Key_Return)
+        box = page.table.cellWidget(0, page.CAT_COL)
+        self.assertTrue(box.view().isVisible())
+        QTest.keyClick(box.view(), Qt.Key.Key_Escape)
+        self.assertTrue(self.win.store.category_feedback().empty)
+        box.setFocus()
+        QTest.keyClick(box, Qt.Key.Key_Down)
+        self.assertTrue(box.view().isVisible())
+        self.assertTrue(self.win.store.category_feedback().empty)
+        QTest.keyClick(box.view(), Qt.Key.Key_Home)
+        for _ in range(box.findText('Dining')):
+            QTest.keyClick(box.view(), Qt.Key.Key_Down)
+        QTest.keyClick(box.view(), Qt.Key.Key_Return)
+        QTest.qWait(30)
+        self.assertEqual(self.win.store.transactions().sort_values('date').iloc[-1].category, 'Dining')
+        self.assertEqual(len(self.win.store.category_feedback()), 1)
+        self.assertEqual(self.win.store.learned_categories(), {})
+        self.assertIs(self.app.focusWidget(), page.table)
+
+    def test_transaction_diagnostics_preserve_description_and_help_does_not_resize_page(self):
+        from finfore.ui import theme
+        from finfore.ui.widgets import InfoDialog
+        previous = self.app.styleSheet()
+        theme.apply(self.app)
+        self.addCleanup(self.app.setStyleSheet, previous)
+        page = self.transaction_hardening_fixture()
+        self.win.store.add_transactions(pd.DataFrame([
+            dict(account_id=1, date=date.today()-timedelta(days=i), description=f'Extra merchant {i}',
+                 amount=-10, category='Misc', import_hash=f'scroll-fit-{i}') for i in range(30)]))
+        page.refresh()
+        self.win.resize(980, 620)
+        QTest.qWait(50)
+        self.assertEqual(page.table.horizontalScrollBar().maximum(), 0)
+        self.assertLessEqual(sum(page.table.columnWidth(c) for c in range(7)
+            if not page.table.isColumnHidden(c)), page.table.viewport().width())
+        page.show_balances.setChecked(True)
+        page.show_sources.setChecked(True)
+        page.f_since.setCurrentIndex(page.f_since.findData('custom'))
+        QTest.qWait(50)
+        self.assertGreaterEqual(page.table.columnWidth(2), 250)
+        self.assertGreater(page.table.height(), 170)
+        self.assertLessEqual(page.filter_host.geometry().bottom(), page.balance_controls.geometry().top())
+        before = page.table.geometry()
+        with patch.object(InfoDialog, 'exec', return_value=0) as dialog:
+            page.category_help_btn.trigger()
+            dialog.assert_called_once()
+        self.assertEqual(page.table.geometry(), before)
+        page.table.selectRow(0)
+        QTest.qWait(30)
+        self.assertGreaterEqual(page.scope_note.width(), page.bulk_actions.width() - 2)
+
+    def test_reviewed_export_excludes_automatic_rows_and_protects_database(self):
+        page = self.transaction_hardening_fixture()
+        txid = int(page._df.iloc[0].id)
+        self.win.store.review_transactions([txid], remember=False)
+        target = self.root / 'reviewed.csv'
+        with patch('finfore.ui.transactions.QFileDialog.getSaveFileName', return_value=(str(target),'CSV')):
+            page._export_reviewed()
+        frame = pd.read_csv(target)
+        self.assertEqual(list(frame.transaction_id), [txid])
+        self.assertEqual(list(frame.label_source), ['human_review'])
+        with patch('finfore.ui.transactions.QFileDialog.getSaveFileName', return_value=(str(self.win.store.path),'CSV')), \
+                patch.object(page, '_show_action_error') as error:
+            page._export_reviewed()
+        error.assert_called_once()
+        self.assertEqual(len(self.win.store.transactions()), 3)
+
+    def test_merchant_review_preview_scope_and_suggestions_need_explicit_acceptance(self):
+        from finfore.learning import record_corrections
+        from finfore.ui.review_dialog import ReviewUncategorizedDialog
+        self.add_account()
+        self.win.store.add_transactions(pd.DataFrame([
+            dict(account_id=1,date=date.today()-timedelta(days=age),description=desc,amount=-30,
+                 category=cat,import_hash=f'preview-{i}')
+            for i,(age,desc,cat) in enumerate([(1,'SQ *BLUE BOTTLE 042','Misc'),
+                (900,'SQ *BLUE BOTTLE 042','Misc'),(1,'MYSTERY VENDOR','Misc')])]))
+        record_corrections(self.win.store, pd.DataFrame([dict(account_id=1,
+            description='BLUE BOTTLE COFFEE',amount=-10,category='Misc')]), 'Dining')
+        dialog = ReviewUncategorizedDialog(self.win.store, ['Dining','Shopping'], self.win)
+        self.assertFalse(dialog.apply_btn.isEnabled())
+        i = next(i for i,c in enumerate(dialog._clusters) if c.suggestion)
+        self.assertEqual(dialog._boxes[i].currentIndex(), 0)
+        dialog.table.selectRow(i)
+        self.assertEqual(dialog.preview.rowCount(), 1)
+        dialog.include_older.setChecked(True)
+        self.assertEqual(dialog.preview.rowCount(), 2)
+        dialog.include_older.setChecked(False)
+        dialog.remember.setChecked(False)
+        dialog._accept_suggested()
+        dialog.resize(900, 700)
+        dialog.show()
+        QTest.qWait(30)
+        self.assertGreater(dialog.status.width(), 400)
+        self.assertTrue(dialog.apply_btn.isEnabled())
+        self.assertIn('1 transaction ready', dialog.pending_note.text())
+        dialog.include_older.setChecked(True)
+        self.assertIn('2 transactions ready', dialog.pending_note.text())
+        dialog.include_older.setChecked(False)
+        dialog._apply()
+        self.assertFalse(dialog.apply_btn.isEnabled())
+        tx = self.win.store.transactions()
+        self.assertEqual(int(tx.category.eq('Dining').sum()), 1)
+        self.assertEqual(int(tx.category_reviewed.sum()), 1)
+        self.assertEqual(tx.sort_values('date').iloc[0].category, 'Misc')
+        dialog.close()
+
     def test_one_undo_reverts_category_and_learned_correction(self):
         self.add_account()
         self.win.store.add_transactions(pd.DataFrame([dict(
@@ -1316,7 +1851,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertFalse(dash.verdict_band.isVisible())
         self.assertFalse(dash.stats_w.isVisible())
         self.assertFalse(dash.split.widget(1).isVisible())
-        self.assertGreater(dash.plot_hist.height(), small * 1.5)
+        self.assertGreater(dash.plot_hist.height(), small + 32)
         dash.refresh()                      # a tab switch must not undo it
         self.assertFalse(dash.stats_w.isVisible())
         dash.expand_btn.click()
@@ -1577,6 +2112,50 @@ class WorkflowTests(unittest.TestCase):
         QTest.qWait(50)
         self.assertFalse(dash._stats_narrow)
 
+    def test_dashboard_history_leads_and_keeps_its_height_with_secondary_charts_open(self):
+        from finfore.demo import load_demo
+        load_demo(self.win.store, "balanced")
+        self.win.show_page("Dashboard")
+        dash = self.win.pages[0]
+        dash.refresh()
+        for width, height in ((1280,900),(980,620)):
+            self.win.resize(width,height)
+            QTest.qWait(60)
+            self.assertFalse(dash.flow_card.expanded)
+            self.assertFalse(dash.cat_card.expanded)
+            self.assertGreaterEqual(dash.plot_hist.height(),320)
+            self.assertLess(dash.hist_card.mapTo(dash.body,QPoint(0,0)).y(),
+                            dash.stats_w.mapTo(dash.body,QPoint(0,0)).y())
+            self.assertLess(dash.hist_card.mapTo(dash.body,QPoint(0,0)).y(),
+                            dash.verdict_band.mapTo(dash.body,QPoint(0,0)).y())
+            self.assertEqual(dash.scroll.horizontalScrollBar().maximum(),0)
+            dash.flow_card.set_expanded(True)
+            dash.cat_card.set_expanded(True)
+            dash._sync_split()
+            QTest.qWait(40)
+            self.assertGreaterEqual(dash.plot_hist.height(),320)
+            self.assertTrue(dash.plot_flow.isVisibleTo(dash))
+            dash.flow_card.set_expanded(False)
+            dash.cat_card.set_expanded(False)
+            dash._sync_split()
+
+    def test_dashboard_warning_stays_visible_with_details_available_on_demand(self):
+        from types import SimpleNamespace
+        from finfore.ui import dashboard
+        self.add_account()
+        issue = SimpleNamespace(account="Checking", net_flow=5000, since=date.today(),
+                                entered=100, opening=-4900, duplicates=0)
+        dash = self.win.pages[0]
+        with patch.object(dashboard,"unacknowledged",return_value=[issue]):
+            dash._render_warnings()
+        self.assertFalse(dash.warn_row.isHidden())
+        self.assertIn("does not reconcile",dash.warn_summary.text())
+        self.assertTrue(dash.warn.isHidden())
+        dash.warn_details.click()
+        self.assertFalse(dash.warn.isHidden())
+        self.assertIn("Checking",dash.warn.text())
+        self.assertIn("$4,900",dash.warn.text())
+
     def test_buttons_show_keyboard_focus(self):
         from finfore.demo import load_demo
         load_demo(self.win.store, "balanced")
@@ -1740,14 +2319,15 @@ class WorkflowTests(unittest.TestCase):
         page.table.clearSelection()
         self.assertTrue(page.bulk_actions.isHidden())
         self.assertFalse(page.apply_category_btn.isEnabled())
-        page.category_help_btn.click()
-        self.assertFalse(page.category_help.isHidden())
+        from finfore.ui.widgets import InfoDialog
+        before = page.table.height()
+        with patch.object(InfoDialog, 'exec', return_value=0) as help_dialog:
+            page.category_help_btn.trigger()
+            help_dialog.assert_called_once()
         page.search.setText("no matching merchant")
         self.assertEqual(page.table.rowCount(), 0)
         self.assertTrue(page.bulk_actions.isHidden())
-        self.assertFalse(page.category_help.isHidden())
-        page.category_help_btn.click()
-        self.assertTrue(page.category_help.isHidden())
+        self.assertGreaterEqual(page.table.height(), before)
 
     def test_paycheck_reimbursement_dialog_keeps_bank_deposit_and_supports_undo(self):
         from finfore.ui.transactions import BusinessReimbursementDialog
@@ -1844,6 +2424,8 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(page._selected_ids(), [])
         page.table.selectRow(1)
         page.table.cellWidget(1, page.CAT_COL).setCurrentText("Dining")
+        page.table.cellWidget(1, page.CAT_COL).textActivated.emit('Dining')
+        QTest.qWait(20)
         self.assertEqual(page._selected_ids(), [])
         self.assertTrue(page.bulk_actions.isHidden())
         page.table.selectAll()
@@ -1853,25 +2435,27 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(page.table.rowCount(), 0)
         self.assertEqual(page._empty_mode, "filtered")
 
-    def test_transaction_partial_save_failure_shows_saved_category_and_enables_undo(self):
+    def test_transaction_feedback_failure_rolls_back_category_and_review_state(self):
         page = self.transaction_hardening_fixture()
         self.win.store.undo.clear()
         self.win.refresh_header()
         page.table.selectRow(0)
-        with patch("finfore.ui.transactions.record_corrections", side_effect=RuntimeError("feedback write failed")), \
+        with patch.object(self.win.store, "_write_category_feedback", side_effect=RuntimeError("feedback write failed")), \
                 patch.object(page, "_show_action_error") as error:
             page.table.cellWidget(0, page.CAT_COL).setCurrentText("Dining")
+            page.table.cellWidget(0, page.CAT_COL).textActivated.emit('Dining')
+            QTest.qWait(20)
         error.assert_called_once()
-        self.assertEqual(page.table.cellWidget(0, page.CAT_COL).currentText(), "Dining")
-        self.assertTrue(self.win.a_undo.isEnabled())
-        self.win.undo()
+        self.assertFalse(self.win.a_undo.isEnabled())
         self.assertEqual(page.table.cellWidget(0, page.CAT_COL).currentText(), "Groceries")
 
     def test_transaction_failed_inline_save_restores_actual_category(self):
         page = self.transaction_hardening_fixture()
-        with patch.object(self.win.store, "set_category", side_effect=PermissionError("read only")), \
+        with patch.object(self.win.store, "review_transactions", side_effect=PermissionError("read only")), \
                 patch.object(page, "_show_action_error") as error:
             page.table.cellWidget(0, page.CAT_COL).setCurrentText("Dining")
+            page.table.cellWidget(0, page.CAT_COL).textActivated.emit('Dining')
+            QTest.qWait(20)
         error.assert_called_once()
         self.assertEqual(page.table.cellWidget(0, page.CAT_COL).currentText(), "Groceries")
         self.assertTrue(self.win.store.category_feedback().empty)
@@ -1938,12 +2522,13 @@ class WorkflowTests(unittest.TestCase):
     def test_transaction_context_menus_release_native_objects(self):
         from PyQt6.QtWidgets import QMenu
         page = self.transaction_hardening_fixture()
+        permanent_menus = set(page.findChildren(QMenu))
         page.table.selectRow(0)
         with patch.object(QMenu, "exec", return_value=None):
             for _ in range(5):
                 page._context_menu(page.table.visualItemRect(page.table.item(0, 0)).center())
         QTest.qWait(30)
-        self.assertEqual(page.findChildren(QMenu), [])
+        self.assertEqual(set(page.findChildren(QMenu)), permanent_menus)
 
     def test_transaction_preferences_and_mid_render_failures_recover_without_blocked_controls(self):
         page = self.transaction_hardening_fixture()
@@ -2047,6 +2632,54 @@ class WorkflowTests(unittest.TestCase):
         self.assertGreaterEqual(goals.by_date.height(), goals.by_date.sizeHint().height())
         for button in goals.findChildren(QPushButton):
             self.assertGreaterEqual(button.width(), button.sizeHint().width(), button.text())
+
+    def test_goal_dialog_records_separate_purchase_savings_and_validates_amounts(self):
+        from finfore.ui.goals_page import GoalDialog
+        dlg = GoalDialog(self.win)
+        self.assertEqual(dlg.kind.currentData(), "savings")
+        dlg._ok()
+        self.assertIn("name", dlg.error.text())
+        dlg.name.setText("Vacation")
+        dlg._ok()
+        self.assertIn("greater than", dlg.error.text())
+        dlg.amount.setValue(2000)
+        dlg.saved.setValue(500)
+        self.assertEqual(dlg.values(), ("Vacation", 2000, "savings", 500))
+        dlg.saved.setValue(2001)
+        dlg._ok()
+        self.assertIn("exceeds", dlg.error.text())
+        legacy = GoalDialog(self.win, Goal("Cash milestone", 5000, "cash"))
+        self.assertEqual(legacy.kind.currentData(), "cash")
+        self.assertTrue(legacy.saved.isHidden())
+        dlg.close()
+        legacy.close()
+
+    def test_goals_show_existing_and_extra_payments_and_update_custom_dates(self):
+        store = self.win.store
+        aid = store.add_account(Account("Car", AccountType.LOAN, 10000,
+            date.today(), monthly_payment=300))
+        store.set_setting("plan_surplus", 200)
+        store.add_goal(Goal("Vacation", 2000, "savings"))
+        store.set_plan_order([f"loan:{aid}"])
+        self.win.show_page("Goals")
+        page = self.win.current_page()
+        self.assertEqual(page.table.item(0, 5).text(), "$500")
+        self.assertIn("$300/mo existing + $200/mo extra = $500/mo total", page.payment_note.text())
+        page.policy.setCurrentIndex(page.policy.findData("custom"))
+        first_eta = page.table.item(0, 6).text()
+        page._split_boxes[f"goal:{store.goals()[0].id}"].setValue(100)
+        self.assertNotEqual(page.table.item(0, 6).text(), first_eta)
+        self.assertIn("$300/mo existing + $0.00/mo extra", page.payment_note.text())
+        self.assertEqual(page.table.horizontalHeaderItem(5).text(), "Extra /mo")
+
+    def test_forecast_directs_purchase_goals_to_the_plan_without_wrong_balance_eta(self):
+        self.add_account()
+        self.win.store.add_goal(Goal("Vacation", 2000, "savings", saved_amount=500))
+        self.win.show_page("Forecast")
+        self.assertEqual(self.fc._goal_labels, {})
+        text = " ".join(label.text() for label in self.fc.findChildren(QLabel))
+        self.assertIn("$500 set aside", text)
+        self.assertNotIn("No goals yet", text)
 
 
 def run_tests():

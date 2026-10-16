@@ -134,12 +134,26 @@ CREATE TABLE IF NOT EXISTS goals (
     id INTEGER PRIMARY KEY,
     name TEXT NOT NULL,
     amount REAL NOT NULL,
-    kind TEXT NOT NULL DEFAULT 'cash'
+    kind TEXT NOT NULL DEFAULT 'cash',
+    saved_amount REAL NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS goal_activity (
+    id INTEGER PRIMARY KEY,
+    goal_id INTEGER NOT NULL REFERENCES goals(id) ON DELETE CASCADE,
+    when_date TEXT NOT NULL,
+    action TEXT NOT NULL,
+    amount REAL NOT NULL,
+    account_id INTEGER REFERENCES accounts(id) ON DELETE SET NULL,
+    transaction_id INTEGER REFERENCES transactions(id) ON DELETE SET NULL,
+    transaction_hash TEXT,
+    note TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_goal_activity_goal ON goal_activity(goal_id);
+CREATE INDEX IF NOT EXISTS idx_goal_activity_hash ON goal_activity(transaction_hash);
 -- Rows the user has deliberately removed as double-postings. Without this a
 -- later "Update from CSV" would import them straight back: the row hash is
 -- what makes imports idempotent, so deleting the row alone just frees the hash
@@ -148,7 +162,10 @@ CREATE TABLE IF NOT EXISTS suppressed (
     import_hash TEXT PRIMARY KEY,
     account_id INTEGER,
     note TEXT NOT NULL DEFAULT '',
-    removed_on TEXT NOT NULL
+    removed_on TEXT NOT NULL,
+    date TEXT,
+    description TEXT,
+    amount REAL
 );
 -- One row per import: the state of things, and the projection being made at
 -- that moment. The forecast is stored rather than recomputed because a
@@ -186,7 +203,9 @@ CREATE TABLE IF NOT EXISTS events (
     label TEXT NOT NULL,
     when_date TEXT NOT NULL,
     amount REAL NOT NULL,
-    active INTEGER NOT NULL DEFAULT 1
+    active INTEGER NOT NULL DEFAULT 1,
+    repeat TEXT NOT NULL DEFAULT 'once',
+    until_date TEXT
 );
 CREATE TABLE IF NOT EXISTS category_feedback (
     id INTEGER PRIMARY KEY,
@@ -214,6 +233,33 @@ class Store:
         self.undo = None                  # set by enable_undo(); see undo.py
         self._connect()
         self.con.executescript(_SCHEMA)
+        for table, fields in {
+            'transactions': [('category_source', "TEXT NOT NULL DEFAULT 'legacy'"),
+                ('category_reason', "TEXT NOT NULL DEFAULT ''"),
+                ('category_reviewed', 'INTEGER NOT NULL DEFAULT 0'), ('category_reviewed_at', 'TEXT')],
+            'category_feedback': [('remember', 'INTEGER NOT NULL DEFAULT 1'),
+                ('transaction_id', 'INTEGER REFERENCES transactions(id) ON DELETE SET NULL'),
+                ('transaction_date', 'TEXT')],
+        }.items():
+            existing = {r['name'] for r in self.con.execute(f'PRAGMA table_info({table})')}
+            for name, kind in fields:
+                if name not in existing:
+                    self.con.execute(f'ALTER TABLE {table} ADD COLUMN {name} {kind}')
+        goal_columns = {r["name"] for r in self.con.execute("PRAGMA table_info(goals)")}
+        if "saved_amount" not in goal_columns:
+            self.con.execute("ALTER TABLE goals ADD COLUMN saved_amount REAL NOT NULL DEFAULT 0")
+        if "spent_amount" not in goal_columns:
+            self.con.execute("ALTER TABLE goals ADD COLUMN spent_amount REAL NOT NULL DEFAULT 0")
+        event_columns = {r["name"] for r in self.con.execute("PRAGMA table_info(events)")}
+        for name, kind in (("repeat", "TEXT NOT NULL DEFAULT 'once'"), ("until_date", "TEXT")):
+            if name not in event_columns:
+                self.con.execute(f"ALTER TABLE events ADD COLUMN {name} {kind}")
+        # Retain removed-row identities even if a later export changes case or
+        # spacing. Existing tombstones still work through their original hash.
+        columns = {r["name"] for r in self.con.execute("PRAGMA table_info(suppressed)")}
+        for name, kind in (("date", "TEXT"), ("description", "TEXT"), ("amount", "REAL")):
+            if name not in columns:
+                self.con.execute(f"ALTER TABLE suppressed ADD COLUMN {name} {kind}")
         self.con.commit()
 
     def _connect(self) -> None:
@@ -477,6 +523,7 @@ class Store:
         that formats it.
         """
         rows = []
+        provenance = {}
         for _, r in df.iterrows():
             d = pd.to_datetime(r["date"], errors="coerce")
             if pd.isna(d):
@@ -484,6 +531,8 @@ class Store:
             rows.append((int(r["account_id"]), d.date().isoformat(),
                          str(r["description"]), float(r["amount"]),
                          str(r.get("category", "Misc")), str(r["import_hash"])))
+            provenance[str(r['import_hash'])] = (
+                str(r.get('category_source', 'legacy')), str(r.get('category_reason', '')))
         blocked = self.suppressed_hashes()
         added = 0
         for row in rows:
@@ -494,12 +543,24 @@ class Store:
                    (account_id, date, description, amount, category, import_hash)
                    VALUES (?,?,?,?,?,?)""", row)
             added += cur.rowcount
+            if cur.rowcount:
+                self.con.execute('UPDATE transactions SET category_source=?,category_reason=? WHERE id=?',
+                                 (*provenance[row[5]], cur.lastrowid))
         self.con.commit()
         return added, len(df) - added
 
+    def import_identities(self, account_ids) -> pd.DataFrame:
+        """Raw row identities for overlap matching, without analytical changes."""
+        ids = [int(account_id) for account_id in account_ids]
+        marks = ",".join("?" for _ in ids)
+        return pd.read_sql_query(
+            f"SELECT account_id, date, description, amount, import_hash FROM transactions "
+            f"WHERE account_id IN ({marks})", self.con, params=ids)
+
     def transactions(self, account_id: int | None = None) -> pd.DataFrame:
         q = ("SELECT t.id, t.account_id, t.date, t.description, t.amount, t.category, "
-             "COALESCE(b.amount, 0.0) AS business_reimbursement "
+             "COALESCE(b.amount, 0.0) AS business_reimbursement, "
+             "t.category_source,t.category_reason,t.category_reviewed,t.category_reviewed_at "
              "FROM transactions t LEFT JOIN business_reimbursements b "
              "ON b.transaction_id=t.id")
         params: tuple = ()
@@ -514,7 +575,7 @@ class Store:
         # strings), which then blows up every consumer that calls .strftime().
         df["date"] = pd.to_datetime(df["date"], format="ISO8601", errors="coerce")
         return _numeric(df, id="int64", account_id="int64", amount="float64",
-                        business_reimbursement="float64")
+                        business_reimbursement="float64", category_reviewed='int64')
 
     @undoable("Set paycheck reimbursement")
     def set_business_reimbursement(self, transaction_id: int, amount: float) -> None:
@@ -562,18 +623,25 @@ class Store:
             return 0
         marks = ",".join("?" * len(tx_ids))
         rows = self.con.execute(
-            f"SELECT id, account_id, import_hash FROM transactions "
+            f"SELECT id, account_id, import_hash, date, description, amount FROM transactions "
             f"WHERE id IN ({marks})", tx_ids).fetchall()
         if suppress:
             stamp = date.today().isoformat()
             self.con.executemany(
                 "INSERT OR REPLACE INTO suppressed "
-                "(import_hash, account_id, note, removed_on) VALUES (?,?,?,?)",
-                [(r["import_hash"], r["account_id"], note, stamp) for r in rows])
+                "(import_hash, account_id, note, removed_on, date, description, amount) "
+                "VALUES (?,?,?,?,?,?,?)",
+                [(r["import_hash"], r["account_id"], note, stamp, r["date"],
+                  r["description"], r["amount"]) for r in rows])
         self.con.execute(
             f"DELETE FROM transactions WHERE id IN ({marks})", tx_ids)
         self.con.commit()
         return len(rows)
+
+    def suppressed_transactions(self) -> pd.DataFrame:
+        """Identities of deliberately removed rows, including legacy tombstones."""
+        return pd.read_sql_query(
+            "SELECT import_hash, account_id, date, description, amount FROM suppressed", self.con)
 
     @undoable("Restore removed rows")
     def unsuppress_all(self) -> int:
@@ -584,18 +652,26 @@ class Store:
         return int(n)
 
     @undoable("Recategorise transactions")
-    def set_category(self, tx_ids: list[int], category: str) -> None:
+    def set_category(self, tx_ids: list[int], category: str,
+                     source: str = 'manual', reason: str = '') -> None:
         self.con.executemany(
-            "UPDATE transactions SET category=? WHERE id=?",
-            [(category, i) for i in tx_ids],
+            "UPDATE transactions SET category=?,category_source=?,category_reason=?,"
+            "category_reviewed=?,category_reviewed_at=? WHERE id=?",
+            [(category, source, reason, int(source == 'manual'),
+              datetime.now().isoformat(timespec='microseconds') if source == 'manual' else None,
+              int(i)) for i in tx_ids],
         )
         self.con.commit()
 
     @undoable("Recategorise transactions")
-    def set_categories_bulk(self, ids_to_cat: dict[int, str]) -> None:
+    def set_categories_bulk(self, ids_to_cat: dict[int, str], source: str = 'manual',
+                            reasons: dict[int, str] | None = None) -> None:
         self.con.executemany(
-            "UPDATE transactions SET category=? WHERE id=?",
-            [(c, i) for i, c in ids_to_cat.items()],
+            "UPDATE transactions SET category=?,category_source=?,category_reason=?,"
+            "category_reviewed=?,category_reviewed_at=? WHERE id=?",
+            [(c, source, (reasons or {}).get(i, ''), int(source == 'manual'),
+              datetime.now().isoformat(timespec='microseconds') if source == 'manual' else None,
+              int(i)) for i, c in ids_to_cat.items()],
         )
         self.con.commit()
 
@@ -676,18 +752,23 @@ class Store:
         description, amount, new_category; old_category/account_type/source are
         optional. Append-only: corrections of corrections are kept so the
         label history stays auditable."""
-        now = datetime.now().isoformat(timespec="seconds")
+        self._write_category_feedback(records)
+        self.con.commit()
+        return len(records)
+
+    def _write_category_feedback(self, records: list[dict]) -> None:
+        """Write inside the caller's transaction so review and feedback commit together."""
+        now = datetime.now().isoformat(timespec="microseconds")
         rows = [(r["norm_key"], r["description"], float(r["amount"]),
                  r.get("account_type", ""), r.get("old_category", ""),
-                 r["new_category"], r.get("source", "manual"), now)
+                 r["new_category"], r.get("source", "manual"), now,
+                 int(r.get('remember', 1)), r.get('transaction_id'), r.get('transaction_date'))
                 for r in records]
         self.con.executemany(
             """INSERT INTO category_feedback
                (norm_key, description, amount, account_type, old_category,
-                new_category, source, created_at)
-               VALUES (?,?,?,?,?,?,?,?)""", rows)
-        self.con.commit()
-        return len(rows)
+                new_category, source, created_at,remember,transaction_id,transaction_date)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)""", rows)
 
     def category_feedback(self) -> pd.DataFrame:
         """The full labelled corpus, oldest first."""
@@ -703,8 +784,58 @@ class Store:
         rows = self.con.execute(
             """SELECT norm_key, new_category FROM category_feedback
                WHERE id IN (SELECT MAX(id) FROM category_feedback
-                            GROUP BY norm_key)""").fetchall()
+                            WHERE remember=1 GROUP BY norm_key)""").fetchall()
         return {r["norm_key"]: r["new_category"] for r in rows}
+
+    @undoable('Review transaction categories')
+    def review_transactions(self, tx_ids: list[int], category: str | dict[int, str] | None = None,
+                            remember: bool = True) -> dict:
+        from .categorize import BUSINESS_CATEGORY
+        from .learning import feedback_key
+        ids = {int(i) for i in tx_ids}
+        if not ids:
+            return dict(reviewed=0, changed=0, remembered=0)
+        rows = self.transactions()
+        rows = rows[rows.id.isin(ids)]
+        if set(rows.id) != ids:
+            raise ValueError('Some selected transactions no longer exist. Reload and select them again.')
+        choices = category.values() if isinstance(category, dict) else [category] if category is not None else []
+        if any(not isinstance(c, str) or not c.strip() or len(c) > 120 for c in choices):
+            raise ValueError('Choose a category between 1 and 120 characters.')
+        if isinstance(category, dict) and set(category) != ids:
+            raise ValueError('Category choices must match the selected transactions.')
+        types = {a.id: a.type.value for a in self.accounts()}
+        updates, feedback = [], []
+        changed = 0
+        stamp = datetime.now().isoformat(timespec='microseconds')
+        for row in rows.itertuples(index=False):
+            label = (category[int(row.id)].strip() if isinstance(category, dict) else
+                     category.strip() if category is not None else row.category)
+            changed += label != row.category
+            can_remember = remember and BUSINESS_CATEGORY not in (label, row.category)
+            reason = ('You confirmed this category.' if label == row.category else
+                      f'You changed the category from {row.category}.')
+            reason += ' Remembered for future imports.' if can_remember else ' Applies only to this transaction.'
+            updates.append((label, reason, stamp, int(row.id)))
+            if BUSINESS_CATEGORY not in (label, row.category):
+                feedback.append(dict(norm_key=feedback_key(row.description, row.amount),
+                    description=row.description, amount=row.amount, account_type=types.get(row.account_id, ''),
+                    old_category=row.category, new_category=label, source='manual' if category else 'confirmed',
+                    remember=int(can_remember), transaction_id=int(row.id),
+                    transaction_date=row.date.strftime('%Y-%m-%d') if pd.notna(row.date) else None))
+        labels = {}
+        for entry in feedback:
+            if entry['remember']:
+                labels.setdefault(entry['norm_key'], set()).add(entry['new_category'])
+        if any(len(values) > 1 for values in labels.values()):
+            raise ValueError('These transactions use different categories for the same merchant. '
+                             'Uncheck Remember to confirm one-off purchases, or review them separately.')
+        with self.con:
+            self.con.executemany('UPDATE transactions SET category=?,category_source=\'manual\','
+                'category_reason=?,category_reviewed=1,category_reviewed_at=? WHERE id=?', updates)
+            self._write_category_feedback(feedback)
+        return dict(reviewed=len(updates), changed=int(changed),
+                    remembered=sum(r['remember'] for r in feedback))
 
     @undoable("Clear what Doug learned")
     def clear_category_feedback(self) -> None:
@@ -712,7 +843,7 @@ class Store:
         self.con.commit()
 
     # ---------------- goals ----------------
-    # ---------------- one-off events ----------------
+    # ---------------- what-if events ----------------
     def events(self, active_only: bool = False) -> list[OneOffEvent]:
         q = "SELECT * FROM events"
         if active_only:
@@ -721,30 +852,43 @@ class Store:
         return [OneOffEvent(label=r["label"],
                             when=date.fromisoformat(r["when_date"]),
                             amount=r["amount"], active=bool(r["active"]),
-                            id=r["id"])
+                            id=r["id"], repeat=r["repeat"],
+                            until=date.fromisoformat(r["until_date"]) if r["until_date"] else None)
                 for r in self.con.execute(q).fetchall()]
 
-    @undoable("Add one-off event")
+    @undoable("Add what-if event")
     def add_event(self, e: OneOffEvent) -> int:
         return self.add_events([e])[0]
 
-    @undoable("Add one-off events")
+    @undoable("Add what-if events")
     def add_events(self, events: list[OneOffEvent]) -> list[int]:
         """Save related events together; a failed insert leaves none behind."""
+        from .events import validate_event
+        for event in events:
+            validate_event(event)
         ids = []
         with self.con:
             for e in events:
                 cur = self.con.execute(
-                    "INSERT INTO events (label, when_date, amount, active) VALUES (?,?,?,?)",
-                    (e.label, e.when.isoformat(), float(e.amount), int(e.active)))
+                    "INSERT INTO events (label, when_date, amount, active, repeat, until_date) "
+                    "VALUES (?,?,?,?,?,?)",
+                    (e.label, e.when.isoformat(), float(e.amount), int(e.active),
+                     e.repeat, e.until.isoformat() if e.until is not None else None))
                 ids.append(cur.lastrowid)
         for e, event_id in zip(events, ids):
             e.id = event_id
         return ids
 
-    @undoable("Edit one-off event")
+    @undoable("Edit what-if event")
     def update_event(self, event_id: int, **fields) -> None:
-        allowed = {"label", "amount", "active"}
+        from dataclasses import replace
+        from .events import validate_event
+        current = next((e for e in self.events() if e.id == event_id), None)
+        if current is None:
+            return
+        allowed = {"label", "amount", "active", "repeat"}
+        valid_fields = {k:v for k,v in fields.items() if k in allowed | {"when", "until"}}
+        validate_event(replace(current, **valid_fields))
         sets, vals = [], []
         for k, v in fields.items():
             if k not in allowed:
@@ -754,13 +898,16 @@ class Store:
         if "when" in fields:
             sets.append("when_date=?")
             vals.append(fields["when"].isoformat())
+        if "until" in fields:
+            sets.append("until_date=?")
+            vals.append(fields["until"].isoformat() if fields["until"] is not None else None)
         if not sets:
             return
         vals.append(event_id)
         with self.con:
             self.con.execute(f"UPDATE events SET {', '.join(sets)} WHERE id=?", vals)
 
-    @undoable("Delete one-off event")
+    @undoable("Delete what-if event")
     def delete_event(self, event_id: int) -> None:
         with self.con:
             self.con.execute("DELETE FROM events WHERE id=?", (event_id,))
@@ -768,8 +915,8 @@ class Store:
     @undoable("Add goal")
     def add_goal(self, g: Goal) -> int:
         cur = self.con.execute(
-            "INSERT INTO goals (name, amount, kind) VALUES (?,?,?)",
-            (g.name, g.amount, g.kind),
+            "INSERT INTO goals (name, amount, kind, saved_amount, spent_amount) VALUES (?,?,?,?,?)",
+            (g.name, g.amount, g.kind, g.saved_amount, g.spent_amount),
         )
         self.con.commit()
         g.id = cur.lastrowid
@@ -782,14 +929,19 @@ class Store:
 
     def goals(self) -> list[Goal]:
         rows = self.con.execute("SELECT * FROM goals ORDER BY amount").fetchall()
-        return [Goal(id=r["id"], name=r["name"], amount=r["amount"], kind=r["kind"])
+        return [Goal(id=r["id"], name=r["name"], amount=r["amount"], kind=r["kind"],
+                     saved_amount=r["saved_amount"], spent_amount=r["spent_amount"])
                 for r in rows]
 
     @undoable("Edit goal")
     def update_goal(self, goal_id: int, name: str | None = None,
-                    amount: float | None = None, kind: str | None = None) -> None:
+                    amount: float | None = None, kind: str | None = None,
+                    saved_amount: float | None = None) -> None:
+        from .funding import validate_goal_edit
+        validate_goal_edit(self, goal_id, amount, kind, saved_amount)
         sets, params = [], []
-        for col, val in (("name", name), ("amount", amount), ("kind", kind)):
+        for col, val in (("name", name), ("amount", amount), ("kind", kind),
+                         ("saved_amount", saved_amount)):
             if val is not None:
                 sets.append(f"{col}=?")
                 params.append(val)
@@ -798,6 +950,33 @@ class Store:
         params.append(goal_id)
         self.con.execute(f"UPDATE goals SET {', '.join(sets)} WHERE id=?", params)
         self.con.commit()
+
+    def goal_activity(self, goal_id: int | None = None) -> list[dict]:
+        sql = "SELECT * FROM goal_activity"
+        params = ()
+        if goal_id is not None:
+            sql += " WHERE goal_id=?"
+            params = (goal_id,)
+        return [dict(r) for r in self.con.execute(sql + " ORDER BY when_date DESC, id DESC", params)]
+
+    @undoable("Record goal activity")
+    def record_goal_activity(self, goal_id: int, action: str, amount: float,
+                             when: date, account_id: int | None = None,
+                             transaction_id: int | None = None, note: str = "") -> int:
+        from .funding import record_activity
+        return record_activity(self, goal_id, action, amount, when,
+                               account_id, transaction_id, note)
+
+    @undoable("Save spending plan")
+    def save_spending_plan(self, overrides: dict[str, float], goal_budget: float) -> None:
+        from .spending_plan import validate_overrides, money
+        values = validate_overrides(overrides)
+        budget = money(goal_budget)
+        with self.con:
+            self.con.executemany(
+                "INSERT INTO settings(key,value) VALUES (?,?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                [("spending_plan", json.dumps(values)), ("plan_surplus", json.dumps(budget))])
 
     # ---------------- goal / debt plan ----------------
     # Priority, policy and custom splits live in `settings` rather than in
@@ -904,7 +1083,7 @@ class Store:
 
     @undoable("Reset all data")
     def clear_all(self) -> None:
-        for t in ("snapshots", "business_reimbursements", "transactions", "recurring", "goals", "accounts",
+        for t in ("goal_activity", "snapshots", "business_reimbursements", "transactions", "recurring", "goals", "accounts",
                   "settings", "category_feedback", "events", "checkpoints",
                   "suppressed"):
             self.con.execute(f"DELETE FROM {t}")

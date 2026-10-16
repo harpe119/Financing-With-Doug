@@ -31,6 +31,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date
+import math
 
 from .history import headline_stats
 from .insights import emergency_fund_target, monthly_aggregates
@@ -62,9 +63,10 @@ class Target:
     progress: float               # saved so far, or repaid so far
     required: float = 0.0         # loan minimum payment; 0 for goals
     apr: float = 0.0
-    goal_kind: str = "cash"       # 'cash' | 'networth', goals only
+    goal_kind: str = "cash"       # 'savings' | 'cash' | 'networth', goals only
     account_id: int | None = None
     goal_id: int | None = None
+    payment_source: str = ""
 
     @property
     def remaining(self) -> float:
@@ -102,6 +104,11 @@ class Allocation:
     def name(self) -> str:
         return self.target.name
 
+    @property
+    def total_monthly(self) -> float:
+        """Existing loan payment plus the allocated extra money."""
+        return self.monthly + self.target.required
+
 
 @dataclass
 class Plan:
@@ -115,6 +122,7 @@ class Plan:
     progress: dict[str, list[float]] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
     horizon_months: int = PLAN_HORIZON_MONTHS
+    custom: dict[str, float] = field(default_factory=dict)
 
     @property
     def all_done(self) -> date | None:
@@ -131,11 +139,17 @@ class Plan:
 def surplus_monthly(store) -> float:
     """Spare income per month: what is left after everything already spent.
 
+    A saved monthly spending plan supplies its income minus budgeted spending,
+    reserves and investing. Without one, use the observed history below.
+
     Taken from recency-weighted completed-month income minus personal spending,
     floored at zero. Recorded loan payments are already inside ``spending`` and
     must not be subtracted twice. This is observed surplus: it does not prove
     that every future commitment was recorded or that cash is available today.
     """
+    if store.get_setting("spending_plan", None) is not None:
+        from .spending_plan import calculate_plan
+        return max(0.0, calculate_plan(store).available)
     agg = monthly_aggregates(store.transactions())
     return max(0.0, float(agg.surplus)) if agg else 0.0
 
@@ -159,17 +173,28 @@ def targets(store) -> list[Target]:
     covered. That is what having a priority *means*.
     """
     cash, networth = _pot(store)
+    from .recurrence import personal_recurring
+    linked: dict[int, float] = {}
+    for it in personal_recurring(store.transactions(), store.recurring()):
+        if (it.active and it.kind == "loan_payment" and it.amount < 0
+                and it.linked_account_id is not None):
+            linked[it.linked_account_id] = (linked.get(it.linked_account_id, 0.0)
+                                          + abs(it.monthly_equivalent))
     items: list[Target] = []
     for a in store.accounts():
         if a.type != AccountType.LOAN or abs(a.balance) <= _EPS:
             continue
         items.append(Target(key=f"loan:{a.id}", kind=LOAN, name=a.name,
                             amount=abs(a.balance), progress=0.0,
-                            required=max(0.0, a.monthly_payment), apr=a.apr,
+                            required=linked.get(a.id, max(0.0, a.monthly_payment)), apr=a.apr,
+                            payment_source=("Linked recurring payments" if a.id in linked
+                                            else "Accounts monthly payment"),
                             account_id=a.id))
     for g in store.goals():
         items.append(Target(key=f"goal:{g.id}", kind=GOAL, name=g.name,
-                            amount=float(g.amount), progress=0.0,
+                            amount=float(g.amount),
+                            progress=(max(0.0, min(g.amount, g.saved_amount + g.spent_amount))
+                                      if g.kind == "savings" else 0.0),
                             goal_kind=g.kind, goal_id=g.id))
 
     order = store.plan_order()
@@ -178,9 +203,11 @@ def targets(store) -> list[Target]:
     # top, where they would hijack the whole surplus before being noticed.
     items.sort(key=lambda t: (rank.get(t.key, len(rank) + 1), t.name))
 
+    # Balance milestones measure household totals, including earmarked money.
+    # Keep their legacy behavior; earmarks themselves are never auto-filled.
     remaining = {"cash": cash, "networth": networth}
     for t in items:
-        if t.kind != GOAL:
+        if t.kind != GOAL or t.goal_kind == "savings":
             continue
         pool = remaining.get(t.goal_kind, 0.0)
         t.progress = max(0.0, min(t.amount, pool))
@@ -230,9 +257,20 @@ def build_plan(store, policy: str | None = None,
                     horizon_months=horizon_months)
     if pool0 <= 0:
         warnings.append(
-            "No spare income detected, so nothing can be allocated. Loans still "
-            "retire on their existing payments; goals will not move until "
-            "income exceeds spending, or you set a spare amount by hand.")
+            "No spare income is available for extra contributions. Existing loan "
+            "payments continue; a payment freed after payoff can fund the next goal.")
+    for t in items:
+        if t.kind == LOAN and t.required <= 0:
+            warnings.append(f"{t.name}: no existing payment found. Set the monthly "
+                            "payment on Accounts, or link it in Bills & payday.")
+        elif t.kind == LOAN and t.required <= t.amount * t.apr / 12:
+            warnings.append(f"{t.name}: the existing payment does not cover monthly "
+                            "interest; payoff requires extra money.")
+    reserved = sum(g.saved_amount for g in store.goals() if g.kind == "savings")
+    cash, _ = _pot(store)
+    if reserved > max(0.0, cash) + _EPS:
+        warnings.append("Goal savings recorded exceed current net cash. Review "
+                        "Already saved amounts and account balances.")
 
     start = date.today().replace(day=1)
     state = {t.key: t for t in items}
@@ -268,15 +306,27 @@ def build_plan(store, policy: str | None = None,
             owed = t.amount - saved[t.key]
             owed += owed * (t.apr / 12.0)
             pay = min(t.required, owed)
+            pool += t.required - pay
             saved[t.key] = t.amount - (owed - pay)
 
         # --- discretionary pool, by policy ---
-        shares = _shares_for(live, policy, custom, pool)
+        shares: dict[str, float] = {}
+        # Money left after a target finishes is still available this month.
+        # Re-split it among unfinished targets rather than losing it at every
+        # hand-off (particularly visible for small purchase goals).
+        while pool > _EPS:
+            receiving = [t for t in live if t.amount - saved[t.key] > _EPS]
+            proposed = _shares_for(receiving, policy, custom, pool)
+            used = 0.0
+            for key, amount in proposed.items():
+                put = min(amount, max(0.0, state[key].amount - saved[key]))
+                saved[key] += put
+                shares[key] = shares.get(key, 0.0) + put
+                used += put
+            if used <= _EPS:
+                break
+            pool -= used
         for key, amount in shares.items():
-            t = state[key]
-            need = t.amount - saved[key]
-            put = min(amount, max(0.0, need))
-            saved[key] += put
             peak[key] = max(peak[key], amount)
             if m == 0:
                 first_month[key] = amount
@@ -319,7 +369,7 @@ def build_plan(store, policy: str | None = None,
             f"up the ladder.")
     return Plan(surplus=pool0, policy=policy, allocations=allocations,
                 cascades=cascades, dates=dates, progress=progress,
-                warnings=warnings, horizon_months=horizon_months)
+                warnings=warnings, horizon_months=horizon_months, custom=dict(custom))
 
 
 def _shares_for(live: list[Target], policy: str, custom: dict[str, float],
@@ -382,6 +432,7 @@ def speedups(store, plan: Plan, amounts=(50.0, 100.0, 250.0, 500.0),
     out = []
     for extra in amounts:
         alt = build_plan(store, policy=plan.policy, surplus=plan.surplus,
+                         custom=plan.custom,
                          horizon_months=plan.horizon_months,
                          extra_monthly=extra)
         a2 = alt.by_key(focus.target.key)
@@ -516,17 +567,50 @@ def deadline_plan(store, plan: Plan, target_key: str, by: date) -> Deadline:
             shortfall=t.remaining, feasible=False,
             note="That date is this month or already past. Pick a later one.")
 
-    needed = t.remaining / months
-    # A loan keeps receiving its required payment whatever else happens.
-    current = alloc.monthly + (t.required if t.kind == LOAN else 0.0)
-    shortfall = max(0.0, needed - current)
+    # This month's installment is included by build_plan. Quote an indicative
+    # standalone pace, but determine extra household budget by replaying the
+    # actual ladder, including interest, priorities and released payments.
+    installments = months + 1
+    r = t.apr / 12 if t.kind == LOAN else 0.0
+    needed = (t.remaining * r / (1 - (1 + r) ** -installments)
+              if r > 0 else t.remaining / installments)
+    end_month = by.replace(day=1)
+    if alloc.eta is not None and alloc.eta <= end_month:
+        shortfall = 0.0
+    else:
+        def meets(extra: float) -> bool:
+            alt = build_plan(store, policy=plan.policy, surplus=plan.surplus,
+                             custom=plan.custom, extra_monthly=extra,
+                             horizon_months=installments)
+            a = alt.by_key(target_key)
+            return a is not None and a.eta is not None and a.eta <= end_month
+
+        low, high = 0.0, max(1.0, needed)
+        # A custom zero share can make a target wait until others finish. The
+        # same replay captures that instead of declaring it on track from a
+        # standalone division of dollars by months.
+        while high < 1e9 and not meets(high):
+            high *= 2
+        if high >= 1e9 and not meets(high):
+            shortfall = high
+        else:
+            for _ in range(24):
+                mid = (low + high) / 2
+                if meets(mid):
+                    high = mid
+                else:
+                    low = mid
+            shortfall = math.ceil(high * 100) / 100
 
     cuts = _cut_candidates(store)
     available = sum(c.monthly for c in cuts)
     if shortfall <= 0.01:
         return Deadline(target=t.name, by=by, months=months,
                         needed_monthly=needed, shortfall=0.0, cuts=[],
-                        available=available,
+                        available=available, rank=rank, ahead=ahead,
+                        advice=(f"This is priority {rank}, behind {', '.join(ahead)}. "
+                                "The plan includes those commitments before this goal."
+                                if ahead else ""),
                         note="Already on track for that date at the current split.")
 
     chosen: list[Cut] = []
