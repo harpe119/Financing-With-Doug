@@ -9,13 +9,83 @@ from __future__ import annotations
 from PyQt6.QtWidgets import (QCheckBox, QComboBox, QDialog, QFileDialog,
                              QFormLayout, QGridLayout, QHBoxLayout, QLabel,
                              QLineEdit, QMessageBox, QPushButton, QTableWidget,
-                             QTableWidgetItem, QVBoxLayout)
+                             QTableWidgetItem, QVBoxLayout, QDialogButtonBox, QHeaderView, QScrollArea, QWidget)
+from PyQt6.QtCore import Qt
 
 from ..ingest import ImportConfig, SIGN_MODES, guess_mapping, read_raw, sniff_delimiter
 from ..models import AccountType
-from ..pipeline import import_with_config, refresh_derived
+from ..pipeline import import_with_config, import_summary, refresh_derived
+from ..import_matching import PostingDateReviewRequired
 from ..store import Store
-from .widgets import Card, form_row, hint
+from .widgets import Card, CollapsibleCard, form_row, hint
+from ..util import fmt_money
+
+
+def confirm_posting_dates(parent, changes):
+    dlg = QDialog(parent)
+    dlg.setWindowTitle('Review older posting dates')
+    dlg.resize(860, 460)
+    lay = QVBoxLayout(dlg)
+    count = len(changes)
+    entry = 'entry used a purchase date' if count == 1 else 'entries used purchase dates'
+    lay.addWidget(hint(f'{count} older {entry}. The CSV supplies these bank posting dates. '
+                       'Updating them changes balance history while keeping categories, review history and goal links. '
+                       'Cancel leaves the import unchanged. Undo reverses the complete import.'))
+    table = QTableWidget(len(changes), 5)
+    table.setHorizontalHeaderLabels(['Description', 'Amount', 'Old date', 'Posting date', 'Reference'])
+    table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+    table.setAccessibleName('Proposed posting date corrections')
+    for i, change in enumerate(changes):
+        for j, value in enumerate([change['description'], fmt_money(change['amount'], signed=True),
+                                   change['old_date'], change['date'], change['source_reference']]):
+            table.setItem(i,j,QTableWidgetItem(str(value)))
+    table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+    table.horizontalHeader().setSectionResizeMode(0,QHeaderView.ResizeMode.Stretch)
+    lay.addWidget(table)
+    buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+    buttons.button(QDialogButtonBox.StandardButton.Ok).setText('Update dates and import')
+    buttons.button(QDialogButtonBox.StandardButton.Ok).setAutoDefault(False)
+    buttons.button(QDialogButtonBox.StandardButton.Cancel).setDefault(True)
+    buttons.accepted.connect(dlg.accept)
+    buttons.rejected.connect(dlg.reject)
+    lay.addWidget(buttons)
+    return dlg.exec() == QDialog.DialogCode.Accepted
+
+
+class ImportDetailsDialog(QDialog):
+    def __init__(self, store, parent=None, account_id=None):
+        super().__init__(parent)
+        self.setWindowTitle('Latest CSV import')
+        self.resize(820,480)
+        lay = QVBoxLayout(self)
+        lay.addWidget(hint('Unposted entries from the latest imported CSV for each account are shown below. '
+                           'They are excluded from balances, spending and forecasts. This is an export snapshot, '
+                           'not a live list of bank holds. Import a newer CSV to replace it.'))
+        reports, rows = [], []
+        for account in store.accounts():
+            if account_id is not None and account.id != account_id:
+                continue
+            report = store.get_setting(f'import_report:{account.id}')
+            if report:
+                reports.append(f'{account.name}: {import_summary(store, account.id)}')
+                rows.extend((account.name, row) for row in report.get('pending',[]))
+        note = QLabel('\n'.join(reports) or 'No CSV import details recorded yet.')
+        note.setTextFormat(Qt.TextFormat.PlainText)
+        note.setWordWrap(True)
+        lay.addWidget(note)
+        table = QTableWidget(len(rows),5)
+        table.setHorizontalHeaderLabels(['Account','Transaction date','Description','Amount','Reference'])
+        table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        for i,(account,row) in enumerate(rows):
+            for j,value in enumerate([account,row.get('date') or 'Unknown',row['description'],
+                                       fmt_money(row['amount'],signed=True),row.get('reference','')]):
+                table.setItem(i,j,QTableWidgetItem(str(value)))
+        table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        table.horizontalHeader().setSectionResizeMode(2,QHeaderView.ResizeMode.Stretch)
+        lay.addWidget(table)
+        buttons=QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(self.reject)
+        lay.addWidget(buttons)
 
 _DELIMS = [("Auto-detect", "auto"), ("Comma  ,", ","), ("Semicolon  ;", ";"),
            ("Tab", "\t"), ("Pipe  |", "|")]
@@ -28,10 +98,8 @@ class ImportDialog(QDialog):
     _CHOOSE_FILE = ("Choose the CSV file you downloaded from your bank. Doug "
                     "suggests which columns to use; you can check them before "
                     "anything is imported.")
-    _CHECK_PREVIEW = ("Check that Date, Description and Amount point at the "
-                      "right columns in the preview. Spending should be saved "
-                      "as negative and income as positive; if your bank shows "
-                      "it the other way round, change Amount signs.")
+    _CHECK_PREVIEW = ('Use Posting Date for balance history; weekend purchases may post later. '
+                      'Transaction Date is kept separately. Check amount signs: spending is negative and income positive.')
 
     def __init__(self, store: Store, parent=None, account_id: int | None = None):
         super().__init__(parent)
@@ -78,25 +146,26 @@ class ImportDialog(QDialog):
         lay.addWidget(self.note)
 
         # options
-        opts = QHBoxLayout()
+        opts = QGridLayout()
         self.delim = QComboBox()
         for label, val in _DELIMS:
             self.delim.addItem(label, val)
         self.sign = QComboBox()
+        self.sign.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.sign.setMinimumContentsLength(16)
         self.sign.addItem("Auto-detect", "auto")
         for key, label in SIGN_MODES.items():
             self.sign.addItem(label, key)
         self.dayfirst = QCheckBox("Day-first dates (31/12/2025)")
         sep_label = QLabel("Column separator")
         sep_label.setBuddy(self.delim)
-        opts.addWidget(sep_label)
-        opts.addWidget(self.delim)
-        opts.addSpacing(12)
+        opts.addWidget(sep_label,0,0)
+        opts.addWidget(self.delim,0,1)
+        opts.addWidget(self.dayfirst,0,2)
         sign_label = QLabel("Amount signs")
         sign_label.setBuddy(self.sign)
-        opts.addWidget(sign_label)
-        opts.addWidget(self.sign, 1)
-        opts.addWidget(self.dayfirst)
+        opts.addWidget(sign_label,1,0)
+        opts.addWidget(self.sign,1,1,1,2)
         lay.addLayout(opts)
 
         # column mapping
@@ -109,7 +178,7 @@ class ImportDialog(QDialog):
         self.c_indicator = QComboBox()
         self.c_debit = QComboBox()
         self.c_credit = QComboBox()
-        form_row(form, "Date", self.c_date)
+        form_row(form, "Posting / balance date", self.c_date)
         form_row(form, "Description", self.c_desc)
         form_row(form, "Amount", self.c_amount)
         form_row(form, "Credit/debit indicator", self.c_indicator)
@@ -122,13 +191,36 @@ class ImportDialog(QDialog):
             "column plus a column marking each row as credit or debit, or "
             "separate Debit and Credit columns. Running-balance columns are "
             "ignored."))
-        lay.addWidget(map_card)
+        mapping_host = QWidget()
+        mapping_layout = QVBoxLayout(mapping_host)
+        mapping_layout.setContentsMargins(0,0,0,0)
+        mapping_layout.addWidget(map_card)
+        source = CollapsibleCard('Source details · optional',expanded=False)
+        sf = QFormLayout()
+        self.c_transaction_date = QComboBox()
+        self.c_reference = QComboBox()
+        self.c_status = QComboBox()
+        form_row(sf,'Transaction date',self.c_transaction_date)
+        form_row(sf,'Bank reference',self.c_reference)
+        form_row(sf,'Pending / posted status',self.c_status)
+        source.body.addLayout(sf)
+        source.body.addWidget(hint('Explicit pending status or a blank Posting Date keeps an entry outside the posted ledger. '
+                                   'A missing status column does not establish that every row is posted.'))
+        mapping_layout.addWidget(source)
+        mapping_layout.addStretch()
+        mapping_scroll = QScrollArea()
+        mapping_scroll.setWidgetResizable(True)
+        mapping_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        mapping_scroll.setWidget(mapping_host)
+        mapping_scroll.setMinimumHeight(160)
+        lay.addWidget(mapping_scroll,1)
 
         # preview
         self.preview = QTableWidget(0, 0)
         self.preview.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.preview.verticalHeader().setVisible(False)
         self.preview.setAlternatingRowColors(True)
+        self.preview.setMinimumHeight(110)
         lay.addWidget(self.preview, 1)
 
         # actions
@@ -167,6 +259,7 @@ class ImportDialog(QDialog):
         try:
             df = read_raw(p, self._delimiter(), nrows=50)
         except Exception as e:
+            self.go.setEnabled(False)
             QMessageBox.warning(
                 self, "Couldn't read this file",
                 "Doug couldn't open this file as a table. Check that it is a "
@@ -179,6 +272,8 @@ class ImportDialog(QDialog):
         for combo, key in ((self.c_date, "date"), (self.c_desc, "desc"),
                            (self.c_amount, "amount"),
                            (self.c_indicator, "indicator"),
+                           (self.c_transaction_date, 'transaction_date'),
+                           (self.c_reference, 'reference'), (self.c_status, 'status'),
                            (self.c_debit, "debit"), (self.c_credit, "credit")):
             combo.blockSignals(True)
             combo.clear()
@@ -228,6 +323,8 @@ class ImportDialog(QDialog):
             col_debit=self.c_debit.currentData() or "",
             col_credit=self.c_credit.currentData() or "",
             col_indicator=self.c_indicator.currentData() or "",
+            col_transaction_date=self.c_transaction_date.currentData() or '',
+            col_reference=self.c_reference.currentData() or '', col_status=self.c_status.currentData() or '',
         )
         try:
             # One press of Ctrl-Z has to take back the whole import. Without
@@ -235,7 +332,12 @@ class ImportDialog(QDialog):
             # re-categorisation, patterns and checkpoint — and undoing "an
             # import" would mean pressing it until the numbers looked right.
             with self.store.undo_group("Import CSV"):
-                added, skipped = import_with_config(self.store, cfg)
+                try:
+                    added, skipped = import_with_config(self.store, cfg)
+                except PostingDateReviewRequired as review:
+                    if not confirm_posting_dates(self, review.changes):
+                        return
+                    added, skipped = import_with_config(self.store, cfg, approve_date_updates=True)
                 n_rec = refresh_derived(self.store)
         except ValueError as e:
             QMessageBox.warning(
@@ -246,9 +348,7 @@ class ImportDialog(QDialog):
         self.result_counts = (added, skipped)
         QMessageBox.information(
             self, "Import complete",
-            f"Added {added} transaction{'s' if added != 1 else ''}; "
-            f"{skipped} already imported {'was' if skipped == 1 else 'were'} "
-            f"skipped.\n"
+            import_summary(self.store, cfg.account_id) + '\n'
             f"Doug found {n_rec} recurring bill or income "
             f"pattern{'s' if n_rec != 1 else ''}. Review "
             f"{'it' if n_rec == 1 else 'them'} under Bills & payday → "

@@ -84,7 +84,7 @@ def main() -> None:
     sample = read_raw(str(fix), ",", nrows=50)
     gi = guess_mapping(list(sample.columns), sample)
     check("BOM stripped and indicator column found",
-          gi["date"] == "Transaction Date"
+          gi["date"] == "Posting Date"
           and gi["indicator"] == "Credit Debit Indicator")
     check("indicator column not mistaken for debit/credit amounts",
           gi["debit"] == "" and gi["credit"] == "")
@@ -369,8 +369,14 @@ def main() -> None:
     _f = _tmp / "bal.csv"
     _f.write_text("When,Value\n01/02/2025,\"10,500.00\"\n"
                   "15/02/2025,10990\nbad,row\n")
+    try:
+        _ps(str(_f), "When", "Value", ",", dayfirst=True)
+        raise AssertionError('invalid snapshot must be reported')
+    except ValueError:
+        pass
+    _f.write_text("When,Value\n01/02/2025,\"10,500.00\"\n15/02/2025,10990\n")
     _recs = _ps(str(_f), "When", "Value", ",", dayfirst=True)
-    check("snapshot parser handles commas/dayfirst and skips junk",
+    check("snapshot parser handles commas/dayfirst after reporting junk",
           len(_recs) == 2 and _recs[0][1] == 10500.0
           and _recs[0][0].day == 1 and _recs[0][0].month == 2)
 
@@ -1493,8 +1499,8 @@ def main() -> None:
     _chq.type.setCurrentIndex(_TYPES_ORDER.index(AccountType.CHECKING))
     _chq.name.setText("Chq")
     _chq.balance.setValue(1500.0)
-    check("a cash account is still a plain balance",
-          _chq.balance_label.text() == "Balance"
+    check("a cash account asks for a closing posted balance",
+          _chq.balance_label.text() == "Closing posted balance"
           and abs(_chq.get_account().balance - 1500.0) < 1e-9)
 
     # "Treat as" was a permanent column of combo boxes paying for a choice
@@ -1780,8 +1786,8 @@ def main() -> None:
     check("it reports the implied opening balance", _issues[0].opening < -1000)
     check("and the net flow that forces it", _issues[0].net_flow > 1000)
     check("the message explains rather than just flagging",
-          "current balance" in _issues[0].message
-          and "started at" in _issues[0].message)
+          "closing balance" in _issues[0].message
+          and "posting dates" in _issues[0].message)
 
     # The same event posted twice under different wording is what the row hash
     # cannot collapse, because the description is part of the hash.
@@ -3009,6 +3015,11 @@ def main() -> None:
     from test_page_sync import run_tests as run_sync_tests
     if not run_sync_tests().wasSuccessful():
         raise AssertionError('linked-page synchronization regressions failed')
+
+    print('posted bank ledger and CSV date migration regressions')
+    from test_posted_ledger import run_tests as run_posted_tests
+    if not run_posted_tests().wasSuccessful():
+        raise AssertionError('posted ledger regressions failed')
 
     print("\nall tests passed")
 

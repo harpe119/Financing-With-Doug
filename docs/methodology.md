@@ -667,6 +667,33 @@ structured so such a source can drop in beside the CSV path.
 
 ## CSV overlap and reconstructed account balances
 
+For exports with both dates, Posting Date is the default ledger date.
+Transaction Date, Posting Date and Reference are retained independently.
+Bank-supplied weekend and holiday posting dates are used as supplied; there is
+no rule that shifts purchases to Monday. A saved older Transaction Date mapping
+is upgraded when the next export supplies both columns. Exact legacy matches
+whose dates differ require review before any write. The approved repair retains
+the original transaction ID/hash, category and review metadata, reimbursement
+split and goal links. Multiple identical legacy rows can move together only
+when the complete group has one common destination date. Conflicting copies
+or ambiguous date assignments stop the import rather than adding duplicates.
+
+Rows with recognized pending/authorization status, or a blank mapped Posting
+Date plus a valid Transaction Date, do not enter the posted transaction table.
+The latest import report stores them as an account-scoped export snapshot,
+visible under Transactions → Tools → Latest CSV import. It is replaced on the
+next successful import and is not treated as a live authorization feed. Cancelled,
+voided and declined rows and zero amounts are counted separately. Final charges
+import once as posted entries, even if their authorization amount or description
+changed. A pending row already imported by an older version cannot be identified
+or removed from headers alone. The bank reference is retained for inspection;
+it is not assumed globally unique or stable enough to delete financial rows.
+
+Malformed CSV records and invalid dates/nonfinite amounts stop the import.
+Approved repairs, newly added rows, the saved mapping and import report are
+written in one SQLite transaction. Undo covers the complete GUI import. A
+rejected or cancelled date review writes nothing.
+
 Import matching first reserves exact stored hashes, then compares remaining
 rows as a multiset of account, calendar date, signed amount rounded to cents,
 and description. Only Unicode canonical composition, case, and whitespace are
@@ -694,6 +721,23 @@ rounded to cents so floating-point residue cannot create a spurious negative
 balance. These are reconstructions, not independently verified bank balances;
 missing, duplicated, or incorrectly signed transactions and an incorrect anchor
 can all affect them.
+Same-day row balances carry **≈** because their order is unverified. The
+negative-balance filter uses the closing balance after all rows on that day.
+Cash reconstruction requires an **end-of-day posted** balance, not an available
+balance already adjusted for holds. An intraday observation cannot reliably
+advance through later same-day entries without an inclusion cutoff; the entry
+forms therefore ask for a closed date and closing posted figure. No timing or
+available-balance adjustment is guessed from an unlabeled observation.
+
+Checking/savings accounts default to being unable to overdraw; the account
+editor can explicitly allow overdrafts. Reconciliation flags reconstructed
+negative daily closes for accounts that cannot overdraw, and unexplained ledger
+differences between successive dated observations. Credit-card opening debt is
+not treated as a deposit-account inconsistency. The newest observation remains
+the reconstruction anchor; earlier conflicting observations produce a warning,
+not a fabricated adjustment or an automatic transaction deletion. Negative
+values are never clipped to zero. Acknowledgements include the minimum balance
+and observation gaps so a changed interior dip reopens a dismissed warning.
 
 Separate Dashboard account lines reuse the cash and snapshot history routines.
 Loans are negative amounts owed and credit cards keep their signed balance.

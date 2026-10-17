@@ -76,6 +76,18 @@ reported separately and cannot make a historical check look more current.
     def add(key, title, review, detail, page, action):
         checks.append(QualityCheck(key, title, bool(review), detail, page, action))
 
+    pending_notes = []
+    for account in accounts:
+        report = store.get_setting(f'import_report:{account.id}', {})
+        pending = report.get('pending', [])
+        if pending:
+            pending_notes.append(f'{account.name}: {len(pending)} unposted CSV entries, net amount {sum(r["amount"] for r in pending):+,.2f}.')
+    add('unposted_imports', 'Unposted CSV entries', pending_notes,
+        ('\n'.join(pending_notes) if pending_notes else 'No unposted entries in the latest imported exports.') +
+        '\nThese are snapshots of the latest CSV exports, not live bank holds. They are excluded from balances and forecasts. '
+        'Review Transactions → Tools → Latest CSV import and import a newer export after settlement.',
+        'Transactions', 'Review import')
+
     balance_notes = []
     for account in accounts:
         anchor, _ = cash_anchor(store, account)

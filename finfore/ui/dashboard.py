@@ -1,5 +1,6 @@
 """Dashboard page — where the ledger becomes a picture."""
 from __future__ import annotations
+from html import escape
 
 from datetime import date, timedelta
 
@@ -868,15 +869,9 @@ class DashboardPage(QWidget):
         if not issues:
             self.warn_row.setVisible(False)
             return
-        rows = ["<b>This history doesn't add up, and the chart is showing it "
-                "honestly rather than hiding it.</b>"]
+        rows = ['<b>Check the posted ledger and dated balances before relying on this history.</b>']
         for i in issues:
-            rows.append(
-                f"<div style='margin-top:5px'>· <b>{i.account}</b>: the "
-                f"imported rows total <b>{fmt_money(i.net_flow, signed=True)}</b> "
-                f"since {i.since:%b %Y}, against a current balance of "
-                f"{fmt_money(i.entered)}. Those only fit if the account started "
-                f"at <b>{fmt_money(i.opening)}</b>.</div>")
+            rows.append(f"<div style='margin-top:5px'>{escape(i.message)}</div>")
             if i.duplicates:
                 rows.append(
                     f"<div style='margin-left:12px'>{i.duplicates} row"
@@ -887,12 +882,8 @@ class DashboardPage(QWidget):
                     f"the duplicate check can't catch it because the "
                     f"descriptions differ.</div>")
         rows.append(
-            "<div style='margin-top:5px'>Usual causes, in order: the export is "
-            "missing withdrawals or doesn't reach back far enough; the same "
-            "transaction was exported twice; or the balance / as-of date on "
-            "the Accounts page needs correcting. Adding a "
-            "<b>Snapshot</b> with a known past balance re-anchors the history "
-            "from that date.</div>")
+            '<div>Use Posting Date for bank balance history and a closing posted balance, excluding pending holds. '
+            'Earlier observations are checked against the ledger; discrepancies are shown without inventing money.</div>')
         rows.append(
             "<div style='margin-top:5px'><b>Got it</b> hides this until the "
             "numbers change. The full detail stays on Accounts → Check my "
@@ -1000,7 +991,7 @@ class DashboardPage(QWidget):
             return
         if self._history_mode == "accounts":
             text = ("Each line is one selected account. Investments and loans use dated balance snapshots; "
-                    "cash accounts use the bank ledger. Money owed is below $0. Overview totals include all accounts.")
+                    "cash accounts use the posted ledger. Negative cash needs review; credit-card debt is below $0. Overview totals include all accounts.")
             self.hist_note.setText(text)
             self.plot_hist.setAccessibleDescription(text)
             return

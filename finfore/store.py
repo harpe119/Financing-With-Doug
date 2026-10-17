@@ -237,7 +237,11 @@ class Store:
         for table, fields in {
             'transactions': [('category_source', "TEXT NOT NULL DEFAULT 'legacy'"),
                 ('category_reason', "TEXT NOT NULL DEFAULT ''"),
-                ('category_reviewed', 'INTEGER NOT NULL DEFAULT 0'), ('category_reviewed_at', 'TEXT')],
+                ('category_reviewed', 'INTEGER NOT NULL DEFAULT 0'), ('category_reviewed_at', 'TEXT'),
+                ('transaction_date', 'TEXT'), ('posting_date', 'TEXT'),
+                ('source_reference', "TEXT NOT NULL DEFAULT ''"),
+                ('date_basis', "TEXT NOT NULL DEFAULT 'legacy'")],
+            'accounts': [('allow_overdraft', 'INTEGER NOT NULL DEFAULT 0')],
             'category_feedback': [('remember', 'INTEGER NOT NULL DEFAULT 1'),
                 ('transaction_id', 'INTEGER REFERENCES transactions(id) ON DELETE SET NULL'),
                 ('transaction_date', 'TEXT')],
@@ -360,11 +364,11 @@ class Store:
     def add_account(self, a: Account) -> int:
         cur = self.con.execute(
             """INSERT INTO accounts (name,type,balance,balance_date,apr,annual_return,
-               volatility,monthly_contribution,monthly_payment,payment_day)
-               VALUES (?,?,?,?,?,?,?,?,?,?)""",
+               volatility,monthly_contribution,monthly_payment,payment_day,allow_overdraft)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
             (a.name, a.type.value, a.balance, a.balance_date.isoformat(), a.apr,
              a.annual_return, a.volatility, a.monthly_contribution,
-             a.monthly_payment, a.payment_day),
+             a.monthly_payment, a.payment_day, int(a.allow_overdraft)),
         )
         self.con.commit()
         a.id = cur.lastrowid
@@ -379,10 +383,10 @@ class Store:
             self.con.execute(
                 """UPDATE accounts SET name=?,type=?,balance=?,balance_date=?,apr=?,
                    annual_return=?,volatility=?,monthly_contribution=?,
-                   monthly_payment=?,payment_day=? WHERE id=?""",
+                   monthly_payment=?,payment_day=?,allow_overdraft=? WHERE id=?""",
                 (a.name, a.type.value, a.balance, a.balance_date.isoformat(), a.apr,
                  a.annual_return, a.volatility, a.monthly_contribution,
-                 a.monthly_payment, a.payment_day, a.id),
+                 a.monthly_payment, a.payment_day, int(a.allow_overdraft), a.id),
             )
             if changed_balance:
                 # A same-day snapshot otherwise overrides this explicit edit
@@ -412,6 +416,7 @@ class Store:
             apr=r["apr"], annual_return=r["annual_return"], volatility=r["volatility"],
             monthly_contribution=r["monthly_contribution"],
             monthly_payment=r["monthly_payment"], payment_day=r["payment_day"],
+            allow_overdraft=bool(r['allow_overdraft']),
         )
 
     # ---------------- snapshots ----------------
@@ -544,7 +549,7 @@ class Store:
 
     # ---------------- transactions ----------------
     @undoable("Import transactions")
-    def add_transactions(self, df: pd.DataFrame) -> tuple[int, int]:
+    def add_transactions(self, df: pd.DataFrame, *, _commit: bool = True) -> tuple[int, int]:
         """Insert rows (idempotent on import_hash). Returns (added, skipped).
 
         Dates are normalised to ISO ``YYYY-MM-DD`` on the way in. A row whose
@@ -554,6 +559,7 @@ class Store:
         """
         rows = []
         provenance = {}
+        metadata = {}
         for _, r in df.iterrows():
             d = pd.to_datetime(r["date"], errors="coerce")
             if pd.isna(d):
@@ -563,6 +569,10 @@ class Store:
                          str(r.get("category", "Misc")), str(r["import_hash"])))
             provenance[str(r['import_hash'])] = (
                 str(r.get('category_source', 'legacy')), str(r.get('category_reason', '')))
+            def iso(value):
+                return None if value is None or pd.isna(value) else pd.Timestamp(value).date().isoformat()
+            metadata[str(r['import_hash'])] = (iso(r.get('transaction_date')), iso(r.get('posting_date')),
+                str(r.get('source_reference', '')), str(r.get('date_basis', 'legacy')))
         blocked = self.suppressed_hashes()
         added = 0
         for row in rows:
@@ -576,7 +586,10 @@ class Store:
             if cur.rowcount:
                 self.con.execute('UPDATE transactions SET category_source=?,category_reason=? WHERE id=?',
                                  (*provenance[row[5]], cur.lastrowid))
-        self.con.commit()
+                self.con.execute('UPDATE transactions SET transaction_date=?,posting_date=?,source_reference=?,date_basis=? WHERE id=?',
+                                 (*metadata[row[5]], cur.lastrowid))
+        if _commit:
+            self.con.commit()
         return added, len(df) - added
 
     def import_identities(self, account_ids) -> pd.DataFrame:
@@ -584,14 +597,15 @@ class Store:
         ids = [int(account_id) for account_id in account_ids]
         marks = ",".join("?" for _ in ids)
         return pd.read_sql_query(
-            f"SELECT account_id, date, description, amount, import_hash FROM transactions "
+            f"SELECT id, account_id, date, description, amount, import_hash,transaction_date,posting_date,source_reference,date_basis FROM transactions "
             f"WHERE account_id IN ({marks})", self.con, params=ids)
 
     @cached_read
     def transactions(self, account_id: int | None = None) -> pd.DataFrame:
         q = ("SELECT t.id, t.account_id, t.date, t.description, t.amount, t.category, "
              "COALESCE(b.amount, 0.0) AS business_reimbursement, "
-             "t.category_source,t.category_reason,t.category_reviewed,t.category_reviewed_at "
+             "t.category_source,t.category_reason,t.category_reviewed,t.category_reviewed_at, "
+             "t.transaction_date,t.posting_date,t.source_reference,t.date_basis "
              "FROM transactions t LEFT JOIN business_reimbursements b "
              "ON b.transaction_id=t.id")
         params: tuple = ()
@@ -605,8 +619,35 @@ class Store:
         # format makes pandas give up on inference and hand back NaT (or plain
         # strings), which then blows up every consumer that calls .strftime().
         df["date"] = pd.to_datetime(df["date"], format="ISO8601", errors="coerce")
+        for col in ('transaction_date', 'posting_date'):
+            df[col] = pd.to_datetime(df[col], format='ISO8601', errors='coerce')
         return _numeric(df, id="int64", account_id="int64", amount="float64",
                         business_reimbursement="float64", category_reviewed='int64')
+
+    @undoable('Import bank CSV')
+    def apply_csv_import(self, account_id, df, repairs, mapping, report):
+        """Commit rows, approved date repairs and provenance as one transaction.
+
+        Repairs keep the original IDs/hashes and all human category/goal data.
+        Metadata-only matches also leave those decisions intact.
+        """
+        from .import_matching import unseen_transactions
+        from .learning import apply_chain, full_chain
+        with self.con:
+            for repair in repairs:
+                self.con.execute('UPDATE transactions SET date=?,transaction_date=?,posting_date=?,source_reference=?,date_basis=? WHERE id=?',
+                    (repair['date'], repair['transaction_date'], repair['posting_date'],
+                     repair['source_reference'], repair['date_basis'], repair['id']))
+            fresh = unseen_transactions(self, df)
+            if not fresh.empty:
+                fresh = apply_chain(fresh, full_chain(self))
+            added, _ = self.add_transactions(fresh, _commit=False)
+            report = dict(report, added=added, skipped=len(df)-added,
+                          corrected=sum(r['old_date'] != r['date'] for r in repairs))
+            for key, value in ((f'import_map:{account_id}', mapping), (f'import_report:{account_id}', report)):
+                self.con.execute('INSERT OR REPLACE INTO settings (key,value) VALUES (?,?)',
+                                 (key, json.dumps(value)))
+        return added, len(df)-added
 
     @undoable("Set paycheck reimbursement")
     def set_business_reimbursement(self, transaction_id: int, amount: float) -> None:

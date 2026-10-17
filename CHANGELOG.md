@@ -8,6 +8,20 @@ itself.
 
 ## Unreleased — goal planning, CSV overlap and account balance debugging
 
+- Use Posting Date for bank-ledger imports when available; retain Transaction
+  Date and bank Reference. Review exact legacy date corrections before updating
+  older rows, preserving IDs, categories, reimbursements and goal links. Block
+  ambiguous matches and keep approved imports atomic and undoable.
+- Keep pending/unposted authorizations outside settled balances and forecast
+  inputs; show the latest export snapshot under Transactions tools. Report
+  excluded rows and stop invalid/malformed imports instead of silently dropping rows.
+- Request closing posted balances rather than available balances. Add an
+  account overdraft setting, flag negative daily closes and discrepancies between
+  dated observations, and stop treating normal credit-card debt as an error.
+- Qualify unverified intraday running balances, filter negative daily closes,
+  and add an optional seven-day duplicate comparison for posting delays without
+  preselecting those wider matches for removal.
+
 - Connect Forecast curves to the Goals funding allowance, priority and payment
   allocations. Add a saved Use Goals funding plan choice, shared by Dashboard
   outlooks, reports and new checkpoints. Keep savings earmarks in household cash

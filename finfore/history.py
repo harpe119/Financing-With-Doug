@@ -13,7 +13,7 @@ snapshot.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, replace, field
 from datetime import date
 
 import numpy as np
@@ -178,6 +178,10 @@ class LedgerIssue:
     inflow: float = 0.0
     outflow: float = 0.0
     kind: str = "cash"
+    allow_overdraft: bool = False
+    minimum: float = 0.0
+    minimum_date: date | None = None
+    snapshot_gaps: list = field(default_factory=list)
 
     @property
     def if_opened_at_zero(self) -> float:
@@ -192,34 +196,39 @@ class LedgerIssue:
 
     @property
     def ok(self) -> bool:
-        return self.opening >= -25.0
+        return not self.needs_review()
+
+    def needs_review(self, tolerance=25.0):
+        deposit = self.kind in (AccountType.CHECKING.label, AccountType.SAVINGS.label)
+        return bool(self.snapshot_gaps or (deposit and not self.allow_overdraft and
+                    (self.opening < -tolerance or self.minimum < -0.005)))
 
     @property
     def message(self) -> str:
-        return (
-            f"{self.account}: the imported rows add up to "
-            f"{self.net_flow:+,.2f} since {self.since:%b %Y}, and you entered a "
-            f"current balance of {self.entered:,.2f}. Those two only fit "
-            f"together if the account started at {self.opening:,.2f} — which "
-            f"for a deposit account is almost certainly wrong.")
+        def money(value):
+            return ('-' if value < 0 else '') + f'${abs(value):,.2f}'
+        if self.snapshot_gaps:
+            gap = self.snapshot_gaps[0]
+            return (f"{self.account}: between {gap['start']} and {gap['end']}, the observed balances differ "
+                    f"from the posted ledger by {money(gap['difference'])}. Check missing/duplicate rows, "
+                    'posting dates and whether both observations are closing posted balances.')
+        if self.minimum < -0.005:
+            return (f'{self.account}: reconstructed closing balance {money(self.minimum)} on {self.minimum_date}. '
+                    'This account is marked as unable to overdraw. Check posting dates, missing/duplicate rows '
+                    'and the closing posted balance. This calculation does not establish a bank overdraft.')
+        return (f'{self.account}: implied opening balance {money(self.opening)}. Check the export coverage, '
+                'posting dates and closing posted balance before relying on the history.')
 
 
 def reconcile(store: Store, tolerance: float = 25.0) -> list[LedgerIssue]:
-    """Find cash accounts whose history is arithmetically forced to be absurd.
+    """Flag conflicting observations or negative cash where overdrafts are disallowed.
 
-    The reconstruction is not a guess: B(start) = B(today) − ΣF is exact, so if
-    the imported flows are net positive while the balance today is near zero,
-    the account *must* have started deeply negative. When it does, the numbers
-    are right and one of the inputs is wrong.
-
-    Saying so is the only honest option. Silently drawing a savings account at
-    −$1,469 for three years invites the reader to distrust the whole chart,
-    when the actual fault is upstream — most often a bank export that posts the
-    same transaction twice in two formats (common around a core conversion,
-    where the row hash cannot dedupe them because the descriptions differ), a
-    partial export missing withdrawals, or a stale balance / as-of date.
+    The reconstruction assumes a complete posted ledger and a closing posted
+    anchor. A warning identifies inconsistent inputs, not a verified overdraft
+    or permission to manufacture a balancing transaction. Negative credit-card
+    debt and explicitly allowed overdrafts are not errors by sign alone.
     """
-    return [i for i in reconcile_all(store) if i.opening < -tolerance]
+    return [i for i in reconcile_all(store) if i.needs_review(tolerance)]
 
 
 def _ack_key(issue: LedgerIssue) -> str:
@@ -227,15 +236,14 @@ def _ack_key(issue: LedgerIssue) -> str:
 
 
 def _ack_value(issue: LedgerIssue) -> float:
-    """What was acknowledged, to the dollar.
-
-    The opening balance rather than a plain "seen" flag, so acknowledgement is
-    of *this* discrepancy and not of the account. Import another partial export
-    and the number moves; the warning comes back, which is the whole point —
-    "I know about that one" must never quietly become "never tell me about this
-    account again".
-    """
-    return round(issue.opening)
+    """Stable discrepancy fingerprint, exactly representable by legacy numeric settings."""
+    # Include the kind of inconsistency so a new middle-of-history dip or a
+    # changed observation reopens the warning even if opening cash is unchanged.
+    import hashlib
+    import json
+    content = json.dumps([round(issue.opening,2), issue.minimum, str(issue.minimum_date),
+                          issue.snapshot_gaps, issue.allow_overdraft, issue.kind],sort_keys=True)
+    return int(hashlib.sha256(content.encode()).hexdigest()[:12],16)
 
 
 def unacknowledged(store: Store, tolerance: float = 25.0) -> list[LedgerIssue]:
@@ -278,7 +286,8 @@ def reconcile_all(store: Store) -> list[LedgerIssue]:
         if not a.type.is_cashlike:
             continue
         sub = tx[tx["account_id"] == a.id] if not tx.empty else tx
-        if len(sub) < 2:
+        snaps = store.snapshots(a.id)
+        if sub.empty and snaps.empty:
             continue
         net = float(sub["amount"].sum())
         start = known_from(tx, a, pd.Timestamp(a.balance_date))
@@ -291,13 +300,26 @@ def reconcile_all(store: Store) -> list[LedgerIssue]:
         prior = float(sub.loc[sub["date"] <= anchor_date, "amount"].sum())
         opening = anchor_bal - prior
         n_dup, dup_val = _double_postings(sub)
+        grid = pd.date_range(min(start, pd.Timestamp(date.today())), date.today())
+        line = cash_history(tx, a, grid, anchor=(anchor_date, anchor_bal))
+        points = {pd.Timestamp(a.balance_date): float(a.balance)}
+        for row in snaps.itertuples():
+            points[pd.Timestamp(row.date)] = float(row.balance)
+        points = sorted((d,b) for d,b in points.items() if d <= pd.Timestamp(date.today()))
+        gaps = []
+        for (d0,b0),(d1,b1) in zip(points,points[1:]):
+            delta = float(sub.loc[(sub.date > d0) & (sub.date <= d1),'amount'].sum())
+            difference = round((b1-b0)-delta,2)
+            if abs(difference) >= .01:
+                gaps.append(dict(start=d0.date().isoformat(),end=d1.date().isoformat(),difference=difference))
         out.append(LedgerIssue(
             account=a.name, opening=opening,
-            entered=float(a.balance), net_flow=net, since=start.date(),
+            entered=float(anchor_bal), net_flow=net, since=start.date(),
             duplicates=n_dup, duplicate_value=dup_val, n_rows=len(sub),
             inflow=float(sub.loc[sub["amount"] > 0, "amount"].sum()),
             outflow=float(-sub.loc[sub["amount"] < 0, "amount"].sum()),
-            kind=a.type.label))
+            kind=a.type.label, allow_overdraft=a.allow_overdraft,
+            minimum=round(float(line.min()),2), minimum_date=line.idxmin().date(),snapshot_gaps=gaps))
     return out
 
 
@@ -327,7 +349,7 @@ def transaction_balances(store: Store, tx: pd.DataFrame | None = None) -> pd.Dat
     use import ID order, which is not necessarily the bank's posting order.
     """
     tx = store.transactions() if tx is None else tx
-    columns = ["before", "after", "anchor_date", "anchor_balance"]
+    columns = ["before", "after", "anchor_date", "anchor_balance", 'day_close', 'unordered']
     records = {}
     for account in store.accounts():
         if not account.type.is_cashlike or tx.empty:
@@ -341,9 +363,12 @@ def transaction_balances(store: Store, tx: pd.DataFrame | None = None) -> pd.Dat
         cumulative = rows.amount.cumsum()
         flow_at_anchor = float(rows.loc[rows.day <= anchor_date, "amount"].sum())
         after = (anchor_balance + cumulative - flow_at_anchor).round(2)
+        closing = pd.Series(after.to_numpy(),index=rows.index).groupby(rows.day).last()
+        counts = rows.day.value_counts()
         for row, value in zip(rows.itertuples(index=False), after):
             records[int(row.id)] = [round(float(value - row.amount), 2), float(value),
-                                    anchor_date.date(), float(anchor_balance)]
+                                    anchor_date.date(), float(anchor_balance), float(closing.loc[row.day]),
+                                    bool(counts.loc[row.day] > 1)]
     result = pd.DataFrame.from_dict(records, orient="index", columns=columns)
     result.index.name = "id"
     return result

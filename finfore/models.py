@@ -47,6 +47,7 @@ class Account:
     monthly_payment: float = 0.0         # loans: fallback payment if none detected
     payment_day: int = 1                 # loans: day-of-month for payment
     id: int | None = None
+    allow_overdraft: bool = False        # checking/savings: flag negative reconstructed closes
 
     @property
     def signed_balance(self) -> float:

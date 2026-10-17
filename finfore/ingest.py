@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import math
 import re
+import warnings
 from dataclasses import dataclass, field
 from datetime import date as _date
 
@@ -33,8 +35,11 @@ DEBIT_TOKENS = frozenset({"debit", "dr", "d", "dbit", "debit memo",
 CREDIT_TOKENS = frozenset({"credit", "cr", "c", "crdt", "credit memo",
                            "deposit", "in", "+"})
 
-_DATE_HDRS = ("transaction date", "posting date", "posted date", "post date",
-              "date posted", "trans date", "date", "booking date", "value date")
+_POSTED_HDRS = ("posting date", "posted date", "post date", "date posted", "booking date")
+_TRANSACTED_HDRS = ("transaction date", "trans date", "purchase date")
+_DATE_HDRS = (*_POSTED_HDRS, "date", "value date", *_TRANSACTED_HDRS)
+_REFERENCE_HDRS = ("transaction id", "transaction reference", "reference", "fitid")
+_STATUS_HDRS = ("posting status", "transaction status", "status")
 _DESC_HDRS = ("description", "payee", "merchant", "name", "details", "memo",
               "transaction description", "narrative")
 _AMT_HDRS = ("amount", "transaction amount", "amount (usd)", "amt", "value")
@@ -43,7 +48,7 @@ _DEBIT_HDRS = ("debit", "withdrawal", "withdrawals", "money out", "amount debit"
 _CREDIT_HDRS = ("credit", "deposit", "deposits", "money in", "amount credit",
                 "inflow", "paid in")
 _INDICATOR_HDRS = ("credit debit indicator", "debit credit indicator",
-                   "credit/debit", "debit/credit", "cr/dr", "dr/cr",
+                   "credit debit", "credit/debit", "debit/credit", "cr/dr", "dr/cr",
                    "transaction indicator", "indicator")
 
 
@@ -61,6 +66,9 @@ class ImportConfig:
     col_credit: str = ""
     col_indicator: str = ""
     extra: dict = field(default_factory=dict)
+    col_transaction_date: str = ""
+    col_reference: str = ""
+    col_status: str = ""
 
 
 def sniff_delimiter(path: str) -> str:
@@ -73,11 +81,16 @@ def sniff_delimiter(path: str) -> str:
 
 
 def read_raw(path: str, delimiter: str, nrows: int | None = None) -> pd.DataFrame:
-    return pd.read_csv(
-        path, sep=delimiter, dtype=str, nrows=nrows,
-        encoding="utf-8-sig", engine="python", keep_default_na=False,
-        skip_blank_lines=True, on_bad_lines="skip",
-    )
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter('error', pd.errors.ParserWarning)
+            return pd.read_csv(
+                path, sep=delimiter, dtype=str, nrows=nrows, index_col=False,
+                encoding="utf-8-sig", engine="python", keep_default_na=False,
+                skip_blank_lines=True, on_bad_lines="error",
+            )
+    except (pd.errors.ParserError, pd.errors.ParserWarning) as exc:
+        raise ValueError(f'The CSV has a malformed row. Export it again or correct the row before importing. {exc}') from exc
 
 
 def _match(columns: list[str], candidates: tuple[str, ...]) -> str:
@@ -119,6 +132,10 @@ def guess_mapping(columns: list[str],
         "date": _match(columns, _DATE_HDRS),
         "desc": _match(columns, _DESC_HDRS),
         "amount": _match(columns, _AMT_HDRS),
+        "transaction_date": _match(columns, _TRANSACTED_HDRS),
+        "posting_date": _match(columns, _POSTED_HDRS),
+        "reference": _match(columns, _REFERENCE_HDRS),
+        "status": _match(columns, _STATUS_HDRS),
     }
     g["indicator"] = _sniff_indicator(columns, sample,
                                       {g["date"], g["desc"], g["amount"]})
@@ -198,7 +215,10 @@ def parse_amount(s) -> float:
 def parse_transactions(cfg: ImportConfig) -> pd.DataFrame:
     """Load + normalize a CSV per config. Raises ValueError with a readable
     message on unusable mappings."""
-    raw = read_raw(cfg.path, cfg.delimiter)
+    try:
+        raw = read_raw(cfg.path, cfg.delimiter)
+    except pd.errors.ParserError as exc:
+        raise ValueError(f"The CSV has a malformed row. Export it again or correct the row before importing. {exc}") from exc
     if raw.empty:
         raise ValueError("File contains no data rows.")
     for col, label in ((cfg.col_date, "date"), (cfg.col_desc, "description")):
@@ -207,15 +227,36 @@ def parse_transactions(cfg: ImportConfig) -> pd.DataFrame:
 
     dates = pd.to_datetime(raw[cfg.col_date], errors="coerce",
                            dayfirst=cfg.dayfirst, format="mixed")
+    guessed = guess_mapping(list(raw.columns), raw.head(50))
+    def text_column(name):
+        return raw[name].astype(str).str.strip() if name in raw else pd.Series('', index=raw.index)
+    transaction_col = cfg.col_transaction_date or guessed['transaction_date']
+    transaction_dates = pd.to_datetime(text_column(transaction_col), errors='coerce',
+                                      dayfirst=cfg.dayfirst, format='mixed')
+    status = text_column(cfg.col_status or guessed['status']).str.casefold()
+    pending = status.isin({'pending', 'authorized', 'authorised', 'authorization', 'unposted', 'processing'})
+    # A blank posting date is unposted, not a reason to silently use purchase
+    # date for the bank ledger. Invalid nonblank dates remain validation errors.
+    if cfg.col_date == guessed['posting_date']:
+        pending |= text_column(cfg.col_date).eq('') & transaction_dates.notna()
+    excluded = status.isin({'cancelled', 'canceled', 'void', 'voided', 'declined', 'rejected'})
 
     if cfg.sign_mode == "debit_credit":
         if not cfg.col_debit and not cfg.col_credit:
             raise ValueError("Select the debit and/or credit columns.")
+        for col in (cfg.col_debit, cfg.col_credit):
+            if col and col not in raw:
+                raise ValueError(f"The saved amount column {col!r} is missing. Choose the columns again.")
         deb = raw[cfg.col_debit].map(parse_amount) if cfg.col_debit in raw.columns else 0.0
         cre = raw[cfg.col_credit].map(parse_amount) if cfg.col_credit in raw.columns else 0.0
+        bad_amount = pd.Series(False, index=raw.index)
+        for col in (cfg.col_debit, cfg.col_credit):
+            if col:
+                bad_amount |= text_column(col).ne('') & raw[col].map(parse_amount).isna()
         deb = pd.Series(deb, index=raw.index).fillna(0.0).abs()
         cre = pd.Series(cre, index=raw.index).fillna(0.0).abs()
         amounts = cre - deb
+        amounts = amounts.mask(bad_amount)
     elif cfg.sign_mode == "indicator":
         if not cfg.col_amount or cfg.col_amount not in raw.columns:
             raise ValueError("Select which column holds the amount.")
@@ -233,22 +274,39 @@ def parse_transactions(cfg: ImportConfig) -> pd.DataFrame:
         if cfg.sign_mode == "flip":
             amounts = -amounts
 
+    invalid = (~pending & ~excluded & dates.isna()) | (~excluded & ~amounts.map(math.isfinite))
+    if invalid.any():
+        rows = ', '.join(str(int(i) + 2) for i in raw.index[invalid][:12])
+        raise ValueError(f"Invalid date or amount on CSV row(s) {rows}. Nothing was imported. "
+                         "Correct these rows or check the column mapping and date format.")
     df = pd.DataFrame({
         "date": dates,
         "description": raw[cfg.col_desc].astype(str).str.strip(),
         "amount": amounts,
+        "transaction_date": transaction_dates,
+        "posting_date": dates if cfg.col_date == guessed['posting_date'] else pd.NaT,
+        "source_reference": text_column(cfg.col_reference or guessed['reference']),
+        "date_basis": 'posted' if cfg.col_date == guessed['posting_date'] else 'selected',
+        "source_row": raw.index + 2,
     })
     n0 = len(df)
-    df = df.dropna(subset=["date", "amount"])
-    df = df[df["amount"] != 0.0]
+    pending_rows = df.loc[pending & ~excluded].copy()
+    pending_rows['date'] = pending_rows.transaction_date.fillna(pending_rows.date)
+    pending_records = [dict(date=None if pd.isna(r.date) else r.date.date().isoformat(),
+                            description=r.description, amount=float(r.amount), reference=r.source_reference)
+                       for r in pending_rows.itertuples()]
+    zero = int((df.amount.eq(0) & ~pending & ~excluded).sum())
+    df = df.loc[~pending & ~excluded & df.amount.ne(0)].copy()
     df = df.sort_values("date", kind="stable").reset_index(drop=True)
-    if df.empty:
+    if df.empty and not pending_records and not excluded.any() and not zero:
         raise ValueError(
             f"Parsed 0 usable rows out of {n0}. Check the column mapping, "
             "delimiter, and date format (try the day-first option)."
         )
     df["account_id"] = cfg.account_id
     df["import_hash"] = make_hashes(df)
+    df.attrs['import_report'] = dict(source_rows=n0, pending=pending_records,
+                                    excluded=int(excluded.sum()), zero=zero)
     return df
 
 
@@ -273,8 +331,12 @@ def parse_snapshots(path: str, col_date: str, col_balance: str,
     raw = read_raw(path, delimiter)
     if col_date not in raw.columns or col_balance not in raw.columns:
         raise ValueError("Pick both a date column and a balance column.")
-    dates = pd.to_datetime(raw[col_date], dayfirst=dayfirst, errors="coerce")
+    dates = pd.to_datetime(raw[col_date], dayfirst=dayfirst, errors="coerce",format='mixed')
     bals = raw[col_balance].map(parse_amount)
+    invalid = dates.isna() | ~bals.map(math.isfinite)
+    if invalid.any():
+        rows = ', '.join(str(int(i)+2) for i in raw.index[invalid][:12])
+        raise ValueError(f'Invalid date or balance on CSV row(s) {rows}. Nothing was imported. Correct the rows or column choices.')
     out: dict[_date, float] = {}
     for d, b in zip(dates, bals):
         if pd.isna(d) or pd.isna(b):

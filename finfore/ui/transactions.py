@@ -202,6 +202,7 @@ class TransactionsPage(QWidget):
         self.tools_menu = QMenu(self.tools_btn)
         self.tools_btn.setMenu(self.tools_menu)
         self.tools_menu.addAction('Import CSV…', lambda: self.main.open_import())
+        self.tools_menu.addAction('Latest CSV import…', self._import_details)
         self.tools_menu.addAction('Review uncategorized merchants…', self._review_uncategorized)
         self.tools_menu.addSeparator()
         self.f_account = QComboBox()
@@ -272,7 +273,7 @@ class TransactionsPage(QWidget):
         debug = QHBoxLayout(self.balance_controls)
         debug.setContentsMargins(0, 0, 0, 0)
         debug.setSpacing(12)
-        self.negative_only = QCheckBox("Negative balances only")
+        self.negative_only = QCheckBox("Negative daily closes only")
         self.balance_order = QComboBox()
         self.balance_order.addItem("Newest first", "newest")
         self.balance_order.addItem("Oldest first", "oldest")
@@ -291,7 +292,7 @@ class TransactionsPage(QWidget):
             "Filters do not change them. Same-day rows use import order, which may differ from bank posting order. "
             "Negative credit-card balances mean money owed.")
         self.balance_note = hint('Balances use the full bank ledger and your dated balance. '
-                                 'Negative credit-card balances mean money owed.')
+                                 '≈ means same-day order is unknown. Negative credit-card balances mean money owed.')
         self.balance_note.setToolTip(balance_explanation)
         self.balance_note.hide()
         controls.addWidget(self.balance_note)
@@ -319,6 +320,7 @@ class TransactionsPage(QWidget):
         # including the slightly taller Windows native form metrics.
         self.table.setMinimumHeight(170)
         self.table.setHorizontalHeaderLabels(self.COLS)
+        self.table.horizontalHeaderItem(0).setToolTip('Posting / balance date. Transaction Date and bank Reference are available in Transaction details.')
         for col in range(len(self.COLS)):
             align = (Qt.AlignmentFlag.AlignRight if col in (4, 5)
                      else Qt.AlignmentFlag.AlignLeft)
@@ -464,6 +466,10 @@ class TransactionsPage(QWidget):
         DuplicateDialog(self.store, self, account_id=self.f_account.currentData()).exec()
         self.refresh()
         self.main.refresh_header()
+
+    def _import_details(self):
+        from .import_dialog import ImportDetailsDialog
+        ImportDetailsDialog(self.store,self).exec()
 
     def reset_for_store(self) -> None:
         """Do not carry transaction IDs or pending edits into another ledger."""
@@ -850,7 +856,7 @@ class TransactionsPage(QWidget):
         if cutoff is not None:
             df = df[df["date"].notna() & (df["date"] >= cutoff)]
         if self.show_balances.isChecked() and self.negative_only.isChecked():
-            negative_ids = self._balances.index[self._balances["after"] < 0] if not self._balances.empty else []
+            negative_ids = self._balances.index[self._balances['day_close'] < 0] if not self._balances.empty else []
             df = df[df.id.isin(negative_ids)]
         total = len(df)
         net = df["amount"].sum()
@@ -867,6 +873,8 @@ class TransactionsPage(QWidget):
         for r, (_, row) in enumerate(df.iterrows()):
             d = QTableWidgetItem(fmt_date(row["date"]))
             d.setData(Qt.ItemDataRole.UserRole, int(row["id"]))
+            if pd.notna(row.get('transaction_date')):
+                d.setToolTip(f"Ledger date: {fmt_date(row['date'])}\nTransaction date: {fmt_date(row['transaction_date'])}")
             a = QTableWidgetItem(self._accounts.get(row["account_id"], "?"))
             desc = QTableWidgetItem(str(row["description"]))
             a.setToolTip(a.text())
@@ -898,14 +906,18 @@ class TransactionsPage(QWidget):
                 if int(row["id"]) in self._balances.index:
                     detail = self._balances.loc[int(row["id"])]
                     value = float(detail["after"])
-                    balance.setText(money_exact(value))
+                    balance.setText(('≈ ' if detail['unordered'] else '') + money_exact(value))
                     balance.setData(Qt.ItemDataRole.UserRole, value)
                     balance.setForeground(neg if value < 0 else pos)
-                    crossing = "This transaction takes the calculated balance below $0.\n" if detail["before"] >= 0 > value else ""
+                    crossing = ('Same-day order is unknown; this calculated crossing below $0 is not a verified overdraft.\n'
+                                if detail['unordered'] and detail['before'] >= 0 > value else
+                                'Calculated closing balance is below $0; check the ledger and observation.\n'
+                                if value < 0 and not detail['unordered'] else '')
                     balance.setToolTip(
                         f"{crossing}{a.text()}\nBefore: {money_exact(detail['before'])}\n"
                         f"Transaction: {money_exact(amount, signed=True)}\nAfter: {money_exact(value)}\n"
                         f"Anchor: {money_exact(detail['anchor_balance'])} at end of {detail['anchor_date']}.\n"
+                        f"Daily close: {money_exact(detail['day_close'])}.\n"
                         "Includes all account transactions, including those hidden by filters.\n"
                         "Same-day order follows import IDs; the bank may post in another order.")
                 else:
@@ -1195,6 +1207,10 @@ class TransactionsPage(QWidget):
                 f'<p>{escape(reason)}</p><p>Source: {escape(SOURCES.get(row.category_source, row.category_source))}</p>')
             if row.category_reviewed_at:
                 html += f'<p>Last reviewed: {escape(_review_time(row.category_reviewed_at))}</p>'
+            for label,key in [('Transaction date','transaction_date'),('Posting date','posting_date')]:
+                if pd.notna(row.get(key)):
+                    html += f'<p>{label}: {escape(fmt_date(row[key]))}</p>'
+            html += f'<p>Bank reference: {escape(str(row.get("source_reference") or "Not recorded"))}</p>'
             balances = transaction_balances(self.store)
             if ids[0] in balances.index:
                 balance = balances.loc[ids[0]]
@@ -1202,7 +1218,8 @@ class TransactionsPage(QWidget):
                     f' · After: {money_exact(balance["after"])}</p>'
                     f'<p>Based on {money_exact(balance["anchor_balance"])} at the end of '
                     f'{escape(str(balance["anchor_date"]))}. Includes the full bank ledger, '
-                    'even when filters hide entries. Same-day order follows import order.</p>')
+                    'even when filters hide entries. Same-day order follows import order and is unverified. '
+                    f'Daily close: {money_exact(balance["day_close"])}.</p>')
             history = self.store.category_feedback()
             history = history[history.transaction_id.eq(ids[0])].tail(20)
             if not history.empty:

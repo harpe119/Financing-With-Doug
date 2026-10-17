@@ -434,8 +434,9 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("below $0", page.table.item(0, 5).toolTip())
         page.search.clear()
         page.negative_only.setChecked(True)
-        self.assertEqual(page.table.rowCount(), 1)
-        self.assertEqual(page.table.item(0, 2).text(), "Early purchase")
+        # This day's close is positive; unknown intraday order must not be
+        # presented as a confirmed negative daily balance.
+        self.assertEqual(page.table.rowCount(), 0)
         page.negative_only.setChecked(False)
         page.balance_order.setCurrentIndex(page.balance_order.findData("oldest"))
         self.assertEqual(page.table.item(0, 2).text(), "Early purchase")
@@ -1583,7 +1584,7 @@ class WorkflowTests(unittest.TestCase):
 
         QTimer.singleShot(0, inspect_dialog)
         card.review_btn.click()
-        self.assertEqual(observed, [7])
+        self.assertEqual(observed, [8])
         self.assertEqual(type(self.win.current_page()).__name__, "TransactionsPage")
 
     def test_data_quality_rechecks_saved_events_when_forecast_runs(self):
@@ -2177,10 +2178,10 @@ class WorkflowTests(unittest.TestCase):
             dash._sync_split()
 
     def test_dashboard_warning_stays_visible_with_details_available_on_demand(self):
-        from types import SimpleNamespace
+        from finfore.history import LedgerIssue
         from finfore.ui import dashboard
         self.add_account()
-        issue = SimpleNamespace(account="Checking", net_flow=5000, since=date.today(),
+        issue = LedgerIssue(account="Checking", net_flow=5000, since=date.today(),
                                 entered=100, opening=-4900, duplicates=0)
         dash = self.win.pages[0]
         with patch.object(dashboard,"unacknowledged",return_value=[issue]):

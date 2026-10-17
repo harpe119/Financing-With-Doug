@@ -70,7 +70,9 @@ Drag chart dividers to change how much space each panel gets.
 
 Open **Accounts → Add account** for each account you want to track.
 
-- Checking and savings: enter the balance and the date it was recorded.
+- Checking and savings: enter the **closing posted balance** and its date.
+  Leave **This account can be overdrawn** unchecked when the account cannot
+  go below zero; negative reconstructed closes will then be flagged for review.
 - Credit cards: enter the amount owed as a positive number. A negative amount
   means the card is in credit.
 - Loans: enter the amount owed, APR, regular payment, and payment day.
@@ -80,6 +82,10 @@ Open **Accounts → Add account** for each account you want to track.
 Use the balance date from the statement, not necessarily today's date.
 Doug reconstructs balances from that dated amount and your transactions.
 An incorrect balance or date shifts the reconstructed history.
+For cash and credit-card ledgers, use the end-of-day posted figure, excluding
+pending charges and holds. **Available balance** may already include holds and
+cannot safely anchor a posted ledger. If today's posting is unfinished, use
+the most recent closed date and that day's closing balance.
 
 Return and volatility are modeling assumptions. Change them if they do not
 fit the investment. Future returns are not guaranteed.
@@ -118,7 +124,9 @@ Choose **File → Import CSV…**, select the account, and choose the file.
 For checking, savings, and credit cards, check the transaction preview before
 importing:
 
-- Dates should match the bank's export.
+- **Posting / balance date** should use Posting Date when supplied. Weekend
+  and holiday purchases may post later; Doug uses the supplied date without
+  moving weekends to Monday. The separate Transaction Date is retained.
 - Descriptions should identify the transactions.
 - Expenses should be negative and income positive.
 - Confirm the amount-sign setting, particularly for credit-card exports.
@@ -130,6 +138,30 @@ An import records a checkpoint for later comparison. Duplicate detection
 reduces repeated entries, but you should still review the ledger after an
 import. If you change the CSV mapping or amount signs, check the result rather
 than assuming it was interpreted correctly.
+
+Older imports may have used Transaction Date. On **Update from CSV…**, Doug
+recognizes both columns and offers a table of exact matching entries whose
+posting dates would change. Review the dates, then choose **Update dates and
+import**. Existing categories, review history, IDs and goal links are kept.
+Cancel leaves the import unchanged; Undo reverses an approved import.
+Ambiguous matches and existing copies on both dates are blocked for review.
+Use Accounts → Check my balances → Find duplicate rows and select the seven-day
+comparison to inspect possible weekend/holiday copies; wider matches are never
+preselected for removal.
+
+Rows marked pending/unposted, or with a blank Posting Date and a valid
+Transaction Date, are kept outside balances, spending estimates and forecasts.
+**Transactions → Tools → Latest CSV import…** lists those entries from each
+account's latest imported export. It is an export snapshot, not live bank data.
+A new export replaces that snapshot. Source Reference and Transaction Date are
+available in transaction details. A malformed row or invalid financial
+date/amount stops the import with an explanation instead of silently dropping money.
+
+**Accounts → Check my balances** also compares recorded balances with the
+ledger between observations. An unexplained difference is flagged without
+creating an adjustment. Running transaction balances marked **≈** use unknown
+same-day ordering. **Negative daily closes only** filters by the full day's
+close; an intermediate negative row alone does not establish a bank overdraft.
 
 ## 3. Review transactions and patterns
 

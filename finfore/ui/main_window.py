@@ -28,9 +28,13 @@ from .plan_page import PlanPage
 _METHODOLOGY = """
 <h3>How Doug models your money</h3>
 <p><b>History.</b> Cash-account balances are reconstructed from the ledger by
-anchoring at your entered balance: B(t) = B(t₀) + F(t) − F(t₀), where F is the
+anchoring at a closing posted balance, excluding pending holds: B(t) = B(t₀) + F(t) − F(t₀), where F is the
 cumulative daily net flow. Loans and investments interpolate through balance
-snapshots.</p>
+snapshots. Bank imports use Posting Date when supplied; Transaction Date is kept
+separately. Unposted CSV rows are excluded and can be inspected under
+Transactions → Tools → Latest CSV import. Conflicting dated balances and
+negative daily closes on accounts that cannot overdraw need review; values are
+not forced to zero.</p>
 <p><b>Recurring detection.</b> Descriptions are normalized and grouped; groups
 with ≥3 events whose inter-arrival intervals match a cadence (weekly …
 annual, incl. twice-monthly) within robust tolerances become patterns, scored

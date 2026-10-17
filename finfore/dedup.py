@@ -138,7 +138,7 @@ def find_pairs(store: Store, account_id: int | None = None,
     return out
 
 
-def suggest(store: Store, account_id: int | None = None) -> list[DedupReport]:
+def suggest(store: Store, account_id: int | None = None, *, window_days=WINDOW_DAYS) -> list[DedupReport]:
     """Per-account candidates, with a suggested selection driven by the gap.
 
     Nothing is suggested for an account that already reconciles: a ledger whose
@@ -149,7 +149,7 @@ def suggest(store: Store, account_id: int | None = None) -> list[DedupReport]:
     """
     from .history import reconcile_all
 
-    pairs = find_pairs(store, account_id)
+    pairs = find_pairs(store, account_id, window_days=window_days)
     by_acct: dict[int, list[DuplicatePair]] = {}
     for p in pairs:
         by_acct.setdefault(p.account_id, []).append(p)
@@ -170,7 +170,7 @@ def suggest(store: Store, account_id: int | None = None) -> list[DedupReport]:
             # while they keep the opening below zero, so a suggestion never
             # overshoots into inventing money.
             need = -info.opening
-            for p in sorted([q for q in mine if q.amount > 0],
+            for p in sorted([q for q in mine if q.amount > 0 and abs((q.when-q.other_when).days) <= WINDOW_DAYS],
                             key=lambda q: -q.amount):
                 if p.amount <= need + 1.0:
                     rep.suggested.append(p.drop_id)

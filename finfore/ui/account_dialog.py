@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import date
 
 from PyQt6.QtCore import QDate
-from PyQt6.QtWidgets import (QComboBox, QDateEdit, QDialog, QDialogButtonBox,
+from PyQt6.QtWidgets import (QCheckBox, QComboBox, QDateEdit, QDialog, QDialogButtonBox,
                              QDoubleSpinBox, QFormLayout, QLabel, QLineEdit,
                              QVBoxLayout)
 
@@ -76,6 +76,9 @@ class AccountDialog(QDialog):
         self.balance_label.setBuddy(self.balance)
         form.addRow(self.balance_label, self.balance)
         form.addRow("Balance as of", self.balance_date)
+        self.overdraft = QCheckBox('This account can be overdrawn')
+        self.overdraft.setToolTip('When unchecked, a negative reconstructed closing balance is flagged for review. Values are never forced to zero.')
+        form.addRow(self.overdraft)
 
         self.balance_hint = hint("")
         lay.addWidget(self.balance_hint)
@@ -159,6 +162,7 @@ class AccountDialog(QDialog):
             self.annual_return.setValue(account.annual_return * 100)
             self.volatility.setValue(account.volatility * 100)
             self.contribution.setValue(account.monthly_contribution)
+            self.overdraft.setChecked(account.allow_overdraft)
         # Connected last, so filling the form in does not count as the person
         # changing the balance or choosing a date.
         self.balance.valueChanged.connect(self._balance_changed)
@@ -179,7 +183,8 @@ class AccountDialog(QDialog):
     def _sync_fields(self) -> None:
         t: AccountType = self.type.currentData()
         self.balance_label.setText(
-            "Amount owed" if self._owed_type(t) else "Balance")
+            "Amount owed" if self._owed_type(t) else 'Closing posted balance' if t.is_cashlike else "Balance")
+        self.overdraft.setVisible(t in (AccountType.CHECKING,AccountType.SAVINGS))
         for lbl, w in self._loan_rows:
             lbl.setVisible(t == AccountType.LOAN)
             w.setVisible(t == AccountType.LOAN)
@@ -209,6 +214,9 @@ class AccountDialog(QDialog):
                                     "to give it a history line." + entry,
         }
         self.balance_hint.setText(tips[t])
+        if t.is_cashlike:
+            self.balance_hint.setText('Use the end-of-day posted balance for this date. Exclude pending charges and holds; '
+                                      'do not use Available balance. If today is not closed, use the last closed date. ' + entry)
         self.adjustSize()
 
     def _balance_changed(self, value: float) -> None:
@@ -263,6 +271,7 @@ class AccountDialog(QDialog):
             monthly_contribution=self.contribution.value(),
             monthly_payment=self.payment.value(),
             payment_day=self.payment_day.value(),
+            allow_overdraft=self.overdraft.isChecked(),
         )
         if self._editing:
             a.id = self._editing.id

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import date
+from html import escape
 
 import pandas as pd
 from PyQt6.QtCore import QDate, Qt, pyqtSignal
@@ -20,7 +21,9 @@ from ..models import Account, AccountType
 from ..ingest import (ImportConfig, SIGN_MODES, balances_from_activity,
                       guess_mapping, guess_snapshot_mapping, parse_snapshots,
                       parse_transactions, read_raw, sniff_delimiter)
-from ..pipeline import reimport_with_saved_mapping, refresh_derived
+from ..pipeline import reimport_with_saved_mapping, import_summary, refresh_derived
+from ..import_matching import PostingDateReviewRequired
+from .import_dialog import confirm_posting_dates, ImportDetailsDialog
 from ..store import Store
 from ..history import current_accounts
 from ..util import fmt_money
@@ -518,17 +521,10 @@ class BalanceCheckDialog(QDialog):
         self.setMinimumSize(940, 420)
 
         lay = QVBoxLayout(self)
-        lay.addWidget(hint(
-            "Each row rebuilds an account backwards from the balance you "
-            "entered. <b>Implied opening</b> is what the account must have held "
-            "on its first imported day for the balance and the transactions to "
-            "agree. A deposit account cannot open far below zero, so a large "
-            "negative there means the balance, the as-of date, or the export "
-            "itself needs a look — not that the history is being computed "
-            "wrongly.<br><br><b>If it started at $0</b> is what the balance "
-            "would be today had the account been empty at the top of the "
-            "export. When that figure looks like the real balance and the one "
-            "you entered doesn't, the entered balance is what to fix."))
+        lay.addWidget(hint('Balances use the posted ledger and an end-of-day observation. '
+                           'The check flags negative closes for accounts marked as unable to overdraw, '
+                           'and unexplained differences between dated observations. Credit-card debt may be negative. '
+                           'Implied opening and “If it started at $0” are calculations, not independent bank balances.'))
 
         self.table = QTableWidget(0, len(self.COLS))
         self.table.setHorizontalHeaderLabels(self.COLS)
@@ -639,6 +635,7 @@ class BalanceCheckDialog(QDialog):
                 if c in (1, 7) and not i.ok:
                     it.setForeground(theme.qcolor(theme.AMBER))
                 self.table.setItem(r, c, it)
+                it.setToolTip(i.message)
             if not i.ok:
                 bad.append(i)
         n_sup = len(self.store.suppressed_hashes())
@@ -657,22 +654,12 @@ class BalanceCheckDialog(QDialog):
             self.note.setText("No cash accounts with imported transactions yet.")
         elif not bad:
             self.note.setText(
-                "No account would have had to start below zero to fit its "
-                "transactions, so none is flagged. This check cannot tell "
-                "whether a balance is recent or an export is complete: the "
-                "Status column on the Accounts page covers that.")
+                'No negative closing balances or observation discrepancies were flagged. '
+                'This does not establish that the export is complete or that the entered balance excludes pending holds.')
         else:
             parts = []
             for i in bad:
-                parts.append(
-                    f"<b>{i.account}</b> needs a look. Its rows total "
-                    f"{fmt_money(i.net_flow, signed=True)}, so with a balance "
-                    f"of {fmt_money(i.entered)} it must have opened at "
-                    f"{fmt_money(i.opening)}. If the account started empty, "
-                    f"the balance today would be "
-                    f"<b>{fmt_money(i.if_opened_at_zero)}</b> — check whether "
-                    f"that is the figure you meant, or whether this export "
-                    f"belongs to a different account.")
+                parts.append(escape(i.message))
                 if i.duplicates:
                     parts.append(
                         f"{i.duplicates} row{'s' if i.duplicates != 1 else ''} "
@@ -712,6 +699,16 @@ class DuplicateDialog(QDialog):
             "listed but left alone — two identical transfers on the same day "
             "are usually two real transfers. Removed rows are remembered, so a "
             "later <b>Update from CSV</b> will not bring them back."))
+        dates = QHBoxLayout()
+        dates.addWidget(QLabel('Compare dates within'))
+        self.date_window = QComboBox()
+        self.date_window.setAccessibleName('Compare transaction dates within')
+        self.date_window.addItem('1 day · usual comparison',1)
+        self.date_window.addItem('7 days · weekend / holiday posting delays',7)
+        self.date_window.setToolTip('The wider window lists candidates for your review. Longer-delay pairs are never preselected for removal.')
+        dates.addWidget(self.date_window)
+        dates.addStretch()
+        lay.addLayout(dates)
 
         self.table = QTableWidget(0, len(self.COLS))
         self.table.setHorizontalHeaderLabels(self.COLS)
@@ -745,11 +742,12 @@ class DuplicateDialog(QDialog):
         bb.accepted.connect(self._apply)
         bb.rejected.connect(self.reject)
         lay.addWidget(bb)
+        self.date_window.currentIndexChanged.connect(self._reload)
         self._reload()
 
     def _reload(self) -> None:
         from ..dedup import suggest
-        self._reports = suggest(self.store, self.account_id)
+        self._reports = suggest(self.store, self.account_id, window_days=self.date_window.currentData())
         self._rows = []
         total = sum(len(r.pairs) for r in self._reports)
         self.table.setRowCount(total)
@@ -761,7 +759,7 @@ class DuplicateDialog(QDialog):
                 box.setChecked(p.drop_id in rep.suggested)
                 box.stateChanged.connect(lambda _s: self._sync_effect())
                 self.table.setCellWidget(r, 0, box)
-                cells = [rep.account, p.when.isoformat(),
+                cells = [rep.account, p.when.isoformat() if p.when == p.other_when else f'{p.when} / {p.other_when}',
                          f"{'+' if p.amount > 0 else '-'}${abs(p.amount):,.2f}",
                          p.keep_desc, p.drop_desc, f"{p.score:.2f}"]
                 for c, v in enumerate(cells, start=1):
@@ -849,7 +847,7 @@ class UpdateBalanceDialog(QDialog):
         self.balance = _money_spin(0 if owed else -1e9)
         shown = -account.balance if account.type == AccountType.CREDIT else account.balance
         self.balance.setValue(shown)
-        label = QLabel("Amount owed" if owed else "Balance")
+        label = QLabel("Amount owed" if owed else 'Closing posted balance' if account.type.is_cashlike else "Balance")
         label.setBuddy(self.balance)
         form.addRow(label, self.balance)
         self.when = QDateEdit(QDate.currentDate())
@@ -858,10 +856,10 @@ class UpdateBalanceDialog(QDialog):
         asof = QLabel("As of")
         asof.setBuddy(self.when)
         form.addRow(asof, self.when)
-        lay.addWidget(hint(
-            "Use the figure on your latest statement or banking app, and the "
-            "day it was true. Doug re-anchors this account’s history to it. "
-            "Type digits as cents: 1234 becomes $12.34."))
+        lay.addWidget(hint(('Use the end-of-day posted balance. Exclude pending charges and holds; do not use '
+                            'Available balance. If today is not closed, select the last closed date. '
+                            if account.type.is_cashlike else 'Use the dated value from your statement. ') +
+                           'Type digits as cents: 1234 becomes $12.34.'))
         lay.addStretch(1)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok
                                    | QDialogButtonBox.StandardButton.Cancel)
@@ -988,6 +986,8 @@ class AccountsPage(QWidget):
                                  "account's history")
         self.act_snap.triggered.connect(self._snapshot)
         menu.addSeparator()
+        menu.addAction('Latest CSV import…', lambda: ImportDetailsDialog(self.store,self,
+                       self._selected().id if self._selected() else None).exec())
         self.act_delete = menu.addAction("Delete account…\tDel")
         self.act_delete.triggered.connect(self._delete)
         self.more_btn.setMenu(menu)
@@ -1362,7 +1362,12 @@ class AccountsPage(QWidget):
             return
         try:
             with self.store.undo_group(f"Update {a.name} from CSV"):
-                added, skipped = reimport_with_saved_mapping(self.store, a.id, path)
+                try:
+                    added, skipped = reimport_with_saved_mapping(self.store, a.id, path)
+                except PostingDateReviewRequired as review:
+                    if not confirm_posting_dates(self,review.changes):
+                        return
+                    added, skipped = reimport_with_saved_mapping(self.store,a.id,path,approve_date_updates=True)
                 n_rec = refresh_derived(self.store)
         except LookupError:
             self.main.import_for_account(a)
@@ -1375,9 +1380,7 @@ class AccountsPage(QWidget):
         self.main.refresh_current()
         QMessageBox.information(
             self, "Update complete",
-            f"Added {added} new transaction{'s' if added != 1 else ''} "
-            f"({skipped} already-imported rows skipped). {n_rec} recurring "
-            f"pattern{'s' if n_rec != 1 else ''} tracked.")
+            import_summary(self.store,a.id) + f' {n_rec} recurring patterns tracked.')
 
     def _check_balances(self) -> None:
         BalanceCheckDialog(self.store, self).exec()
