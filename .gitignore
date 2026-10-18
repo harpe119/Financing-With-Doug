@@ -39,3 +39,7 @@ Thumbs.db
 
 # Local release command reminder
 /release-commands.txt
+
+# Manim's render cache (text glyphs, partial movies). The finished videos are
+# copied to assets/ by scripts/video; this folder is scratch.
+/media/

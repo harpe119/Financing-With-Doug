@@ -20,8 +20,7 @@ temperament, not arithmetic:
 ``weighted`` split by 1/rank, so lower goals still visibly move. Slower
              overall, but a goal that never moves for two years is a goal
              people abandon, and a plan abandoned returns nothing.
-``custom``   explicit dollars per target, for when the user knows better than
-             any rule here does.
+``custom``   relative shares per target, normalized to the full spare pool.
 
 Everything is deterministic. This is a plan, not a forecast: the Monte Carlo
 fan on the Forecast page already answers "what might happen", and mixing the
@@ -29,7 +28,7 @@ two would make a schedule nobody can act on.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date
 import math
 
@@ -45,9 +44,9 @@ from .cache import cached_read
 GOAL, LOAN = "goal", "loan"
 
 POLICIES = {
-    "focus": "Focus — everything spare to the top target",
-    "weighted": "Weighted — split by priority, lower goals still move",
-    "custom": "Custom — the amounts you set below",
+    "focus": "Focus — fund the first unfinished goal",
+    "weighted": "Weighted — give more to higher-priority goals",
+    "custom": "Custom — divide the allowance by relative shares",
 }
 
 PLAN_HORIZON_MONTHS = 360        # 30 years; long enough that "never" is obvious
@@ -242,7 +241,8 @@ def build_plan(store, policy: str | None = None,
                custom: dict[str, float] | None = None,
                horizon_months: int = PLAN_HORIZON_MONTHS,
                extra_monthly: float = 0.0,
-               target_overrides: list[Target] | None = None) -> Plan:
+               target_overrides: list[Target] | None = None,
+               debt_budget: float | None = None) -> Plan:
     """Walk the ladder forward month by month, cascading as things complete.
 
     ``extra_monthly`` adds to the spare pool without persisting anything — it
@@ -252,6 +252,19 @@ def build_plan(store, policy: str | None = None,
     policy = policy or store.plan_policy()
     custom = custom if custom is not None else store.plan_allocations()
     items = targets(store) if target_overrides is None else target_overrides
+    if debt_budget is None and store.get_setting('spending_plan') is not None:
+        from .spending_plan import calculate_plan
+        debt_budget = calculate_plan(store).amounts['debt']
+    if debt_budget is not None:
+        loans = [t for t in items if t.kind == LOAN and not t.complete]
+        minimum = sum(t.required for t in loans)
+        extra = max(0.0, debt_budget - minimum)
+        weights = minimum or sum(t.amount for t in loans)
+        if extra and weights:
+            items = [replace(t, required=t.required + extra *
+                       ((t.required if minimum else t.amount) / weights),
+                       payment_source='Plan debt budget, including existing payment')
+                     if t in loans else t for t in items]
     pool0 = (surplus_monthly(store) if surplus is None else float(surplus))
     pool0 = max(0.0, pool0 + float(extra_monthly))
 
@@ -271,10 +284,11 @@ def build_plan(store, policy: str | None = None,
         elif t.kind == LOAN and t.required <= t.amount * t.apr / 12:
             warnings.append(f"{t.name}: the existing payment does not cover monthly "
                             "interest; payoff requires extra money.")
-    reserved = sum(g.saved_amount for g in store.goals() if g.kind == "savings")
-    cash, _ = _pot(store)
-    if reserved > max(0.0, cash) + _EPS:
-        warnings.append("Goal savings recorded exceed current net cash. Review "
+    from .funding import funding_capacity
+    _capacities, unassigned = funding_capacity(store)
+    reserved = sum(g.saved_amount for g in store.goals() if g.kind == 'savings')
+    if reserved > _EPS and unassigned < -_EPS:
+        warnings.append("Goal savings recorded exceed current funding balances. Review "
                         "Already saved amounts and account balances.")
 
     start = date.today().replace(day=1)
@@ -375,8 +389,8 @@ def build_plan(store, policy: str | None = None,
 
     if any(a.eta is None for a in allocations):
         warnings.append(
-            f"Some targets are not reached within {horizon_months // 12} years "
-            f"at this rate — raise the spare amount, lower a target, or move it "
+            f"Some goals are not reached within {horizon_months // 12} years "
+            f"at this rate — raise the spare amount, lower a goal amount, or move it "
             f"up the ladder.")
     return Plan(surplus=pool0, policy=policy, allocations=allocations,
                 cascades=cascades, dates=dates, progress=progress,
@@ -557,7 +571,7 @@ def deadline_plan(store, plan: Plan, target_key: str, by: date) -> Deadline:
     alloc = plan.by_key(target_key)
     if alloc is None:
         return Deadline(target="—", by=by, months=0, needed_monthly=0.0,
-                        shortfall=0.0, note="That target is no longer on the ladder.")
+                        shortfall=0.0, note="That goal is no longer on the ladder.")
     t = alloc.target
     # Where it sits, and what is in front of it. A goal below a loan is not
     # slow because it is underfunded, it is slow because it is waiting — and
@@ -635,11 +649,11 @@ def deadline_plan(store, plan: Plan, target_key: str, by: date) -> Deadline:
     feasible = running >= shortfall - 0.01
     note = ""
     if not feasible:
-        note = (f"Not reachable by then. Every discretionary item adds up to "
+        note = (f"Not reachable by then. Everything you spend on wants adds up to "
                 f"{available:,.0f}/mo, which is {shortfall - available:,.0f}/mo "
-                f"short — and the rest of the budget is essentials and loan "
+                f"short — and the rest of the budget is needs and loan "
                 f"payments, which this will not propose cutting. Push the date "
-                f"out, lower the target, or raise income.")
+                f"out, lower the goal amount, or raise income.")
 
     advice = ""
     if ahead:

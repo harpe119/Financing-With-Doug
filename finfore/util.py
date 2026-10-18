@@ -54,13 +54,31 @@ def fmt_date(value) -> str:
     into a hard abort of the whole application — so an unreadable date degrades
     to a placeholder instead of taking the page down.
     """
+    return fmt_day(value)
+
+
+def fmt_day(value, year: bool = True, weekday: bool = False) -> str:
+    """The one way the app writes a day: "Oct 20, 2026", or "Tue, Oct 20".
+
+    Dates used to appear five ways ("2026-11-01", "20 Oct", "Tue 20 Oct",
+    "16 Oct 2029", "Oct 20"). One format, in the order the rest of the app's
+    US English uses, means a date reads the same wherever it is met.
+    """
     import pandas as pd
-    if value is None or pd.isna(value):
+    if value is None or (not isinstance(value, str) and pd.isna(value)):
         return "—"
     try:
-        return pd.Timestamp(value).strftime("%Y-%m-%d")
+        d = pd.Timestamp(value)
     except (ValueError, TypeError):
         return "—"
+    if pd.isna(d):
+        return "—"
+    text = f"{d:%b} {d.day}"
+    if year:
+        text += f", {d.year}"
+    if weekday:
+        text = f"{d:%a}, {text}"
+    return text
 
 
 def add_months(d: date, months: int) -> date:

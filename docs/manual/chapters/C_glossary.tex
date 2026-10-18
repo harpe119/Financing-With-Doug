@@ -1,0 +1,49 @@
+\chapter{Glossary and symbols}\label{app:glossary}
+\begin{description}
+\item[Allowance] The chosen monthly amount for goals and extra debt funding through the priority ladder.
+\item[Anchor] An observed balance and its date used to reconstruct a ledger backward and forward.
+\item[Available before goals] Budget income less the specified spending, regular debt, reserve, and investing lines, before subtracting the allowance.
+\item[Bootstrap] Repeated sampling from recorded observations to construct a modeled distribution or estimate an interval.
+\item[Cadence] An item's repeat interval, such as weekly, every two weeks, semimonthly, or monthly.
+\item[Checkpoint] A saved summary and forecast used for later comparison. It is not a restorable database backup.
+\item[Complete month or week] An elapsed calendar period eligible under the particular calculation. Monthly averages and weekly forecast samples use different missing-period rules.
+\item[Deterministic reference] A calculation without stochastic draws. It is not automatically the stochastic mean, median, or most likely complete path.
+\item[Earmark] An explicit assignment of existing holdings to a savings purpose. It does not create another asset or a bank transfer.
+\item[Effective sample size] The information-equivalent count used by the implemented weighting formula, \(1/\sum w_j^2\) for normalized weights.
+\item[Goal progress] Savings still held plus recorded qualifying purchases for a savings goal; a household-balance allocation for a cash or net-worth milestone.
+\item[Located savings] Recorded goal savings assigned to a specific tracked account.
+\item[Net worth] Assets less debt as represented by the relevant history or model. Compare the components where an implementation qualification applies.
+\item[Override] A deliberate replacement of a detected budget amount. A group-total override takes precedence over category overrides inside that group.
+\item[Pending] An unposted entry supplied by an export. It is kept outside the posted ledger and is not a live reservation of all possible bank holds.
+\item[Percentile] A pointwise rank in modeled outcomes. P50 is the median at a date; a sequence of percentile values need not be one simulated trajectory.
+\item[Permutation comparison] A comparison constructed by exchanging observation labels under an exchangeability premise.
+\item[Personal amount] The part of a transaction retained after applicable business or reimbursement exclusions for personal analysis.
+\item[Posted close] The account balance after all postings for the selected date, as distinguished from an available balance affected by holds.
+\item[Provenance] The retained origin of an item or result, including source records, classification evidence, or generation inputs and hashes.
+\item[Release] A goal activity that removes saved money and progress so that its use no longer counts toward the goal.
+\item[Rollover] Reallocation after a target finishes, including regular loan payments freed after payoff.
+\item[Scenario] A conditional set of changes to a baseline model, such as a spending multiplier or hypothetical dated expense.
+\item[Unassigned holding] Tracked funding capacity not yet claimed by recorded savings goals. This is distinct from recorded savings whose account has not been assigned.
+\item[Unlocated savings] Already-counted goal savings without an assigned account. Locating it changes attribution rather than progress.
+\item[Weighted estimate] An average that gives observations different specified influence rather than treating them all equally.
+\end{description}
+
+\section{Symbols used in the calculation chapters}
+\begin{tabularx}{\textwidth}{@{}lYl@{}}
+\toprule Symbol & Meaning & Units\\\midrule
+\(B(t), B_0\) & Reconstructed close and observed anchor & dollars\\
+\(F(t)\) & Cumulative signed posted flow & dollars\\
+\(I,E,D,W,G,U,Q,V\) & Budget income, needs, debt payments, wants, giving, unknown, reserve, investing & dollars/month\\
+\(A,R\) & Monthly allowance and remaining budget amount & dollars/month\\
+\(T_g,s_g,p_g\) & Goal target, savings held, and recorded purchases & dollars\\
+\(P,a_j\) & Monthly discretionary pool and target allocation & dollars/month\\
+\(u_j,w_j\) & Relative allocation shares or normalized sample weights, as defined locally & dimensionless\\
+\(r,f,H,M\) & Savings rate, wants-to-needs ratio, habit and means components & dimensionless\\
+\(C_{k,t}\) & Cash in path \(k\) on date \(t\) & dollars\\
+\(\mu,\sigma\) & Annual return and volatility inputs in the implemented investment formula & annualized\\
+\(\Delta t\) & Elapsed investment time & years\\
+\(\widehat{\Delta}\) & After minus before mean weekly spending & dollars/week\\
+\bottomrule
+\end{tabularx}
+
+Symbols are local to their equations. In particular, \(V\) denotes monthly investing in the budget equation and an investment value in the forecast update; the surrounding text and units distinguish them.

@@ -92,37 +92,39 @@ implementation; they do not measure prediction accuracy on real financial data.
 
 ## Progress explainer
 
-Forecast → Progress has its own **Watch explanation** button. It opens the
+Forecast → Track record has its own **Explain → Watch the video** item. It opens the
 bundled `assets/progress.mp4` in the system video player. The silent animation
-uses the same palette, short labels, moving data, and chapter markers as the
-Monte Carlo video. Manim is needed only to render the asset.
+uses the same palette and chapter markers as the Monte Carlo video. It is
+written for a nontechnical adult: each scene introduces one question, shows an
+example, and leaves time to read a plain-language explanation of the result.
+Manim is needed only to render the asset.
 
-The example saves a checkpoint on April 6, 2026 before adding the later
-transactions. That forecast remains fixed while recorded cash extends to
-June 29. The animation compares balances on the same date, counts recorded
-days inside the saved P10–P90 band, and shows why spending less can put cash
-above the band. Better cash and better forecast coverage are different measures.
+The video stays under two minutes by focusing on the results. It introduces a
+checkpoint as a saved record of balances, score and forecast. The example saves
+one on April 6, 2026 before adding later transactions. That forecast remains
+fixed while recorded cash extends to June 29. The video compares cash on the
+same date and explains that a higher recorded balance can reveal an
+underestimate in the earlier forecast.
 
-The spending sequence follows `weekly_discretionary` and `significance_since`:
-non-recurring wants and unknown outflows enter; necessities, giving, transfers,
-and reimbursable business do not. A checkpoint separates the recorded weeks.
-The example has 11 complete weeks before and 12 after. It animates the period
-label shuffles used by the 20,000-draw permutation test, then copies whole weeks
-within each period for the 4,000-draw bootstrap interval. Repeated weeks are
-allowed in the bootstrap. The displayed interval and changes come from the app's
-actual calculations. The renderer checks the draw trace against those results.
+The spending example compares wants outside regular bills and uncategorized
+spending. It has 11 complete weeks before the checkpoint and 12 after, with
+weekly averages of about $304 and $136. The drop is about $168 per week. An
+estimated range of $107–$234 less per week shows uncertainty in the size of
+that change. The video distinguishes insufficient history from an unclear
+result and states the minimum of four complete weeks on each side.
 
-A small sample is shown as insufficient data rather than evidence of no change.
-The uncertainty example shows a range that includes zero. These comparisons
-measure recorded spending, not the cause of a change; their sampling assumptions
-do not establish that future weeks will behave the same way. A zero estimated
-permutation p-value means none of the sampled shuffles was as extreme, not that
-chance or other explanations are impossible.
+The detailed statistical walkthrough and historical reconstruction are omitted
+from the short video. The figures still come from the app's calculations. The
+fixture checks the 20,000 permutation draws and 4,000 bootstrap estimates
+against those results; the displayed range contains the middle 95% of the
+bootstrap estimates. These comparisons describe recorded spending and do not
+establish a cause or guarantee future savings.
 
-The final comparison shows the score, net worth, weekly spending change, and
-cash-versus-forecast result. Historical reconstruction is labeled a retrospective
-test: later transactions are removed before calculating a past checkpoint. It
-must not be confused with a forecast saved before the outcome.
+The closing comparison briefly defines the habits score and net worth beside
+the spending and cash results. The final steps are to import new transactions,
+check categories, and compare with an earlier checkpoint in Track record.
+Reading pauses remain at normal speed. The renderer rejects a Progress video
+that reaches 120 seconds.
 
 The fixture is in `scripts/video/progress_example.py`; the animation is in
 `scripts/video/progress.py`. Both use a fictional in-memory database. From the
@@ -136,5 +138,7 @@ python scripts/video/render.py --video progress
 
 The preview is `build/video/progress_preview.mp4`; the full render replaces
 `assets/progress.mp4` after successful rendering and packaging. Chapter times and
-example results are recorded in `build/video/progress_timeline.json`. Both bundled
-videos are included by `packaging/doug.spec`.
+example results are recorded in `build/video/progress_timeline.json`. The file
+also records `review_times` for the reading pauses, allowing frame checks after
+rendering. Text outside the frame stops the render at those pauses. Both
+bundled videos are included by `packaging/doug.spec`.

@@ -1,0 +1,65 @@
+\chapter{Forecasts and scenarios}\label{ch:forecast}
+\index{forecast}\index{percentile bands}\index{what-if events}\index{history selection}
+\section{Establish the baseline before changing it}
+Open \ui{Forecast > Projection}. Confirm the starting cash and net worth against Accounts and Home. Check the Data quality line and use Review data for the supporting records. Identify the history period, recurring patterns, and whether the saved Goals funding plan is enabled.
+
+In Simple view the page opens on its answer and the chart. \ui{Try a change} opens a panel beside the chart with the income control and the three largest spending categories, plus any category already set away from 100\%. The result updates by itself after each change, and \ui{Hide changes} closes the panel without undoing anything. Everything view shows the full set of controls permanently, including What-if events, Forecast history, and the analysis panel. When Home's outlook calls for caution, its \ui{See what could change this} button opens the same panel.
+
+With less than four weeks of history the headline says it is too early to say where cash is headed. When the newest statement is more than 30 days old, the headline names the date the forecast is based on.
+
+The model begins from current reconstructed holdings. It replays scheduled flows, models debt payments and investment changes, and samples eligible historical weeks for variable spending and irregular income. The calculation methods are developed in Chapter~\ref{ch:forecast-methods}. The visible result is conditional on these inputs, not a statement that every future cost is known.
+
+For an account carrying card debt, also read the recorded opening net-worth qualification in Chapter~\ref{ch:forecast-methods}. The inspected forecast omits that negative card position from opening net worth. Compare the account components before treating the displayed total as the household's complete position.
+
+\section{Read the curve and bands}
+The displayed percentile curves summarize simulated paths at each date. P50 is the median at that date. P10--P90 spans the central 80\% of modeled values at that date, while P25--P75 spans the central 50\%. The bands do not mean that 80\% or 50\% of complete future trajectories must remain inside them at every date.
+
+Cash and net worth answer different questions. Investment growth can improve net worth while contributions reduce cash. Debt repayment reduces cash and debt together, with interest affecting the result. Review both quantities before interpreting an improvement in one as increased room to pay a bill.
+
+\section{Check data quality as evidence}
+The review identifies matters such as old or future-dated balance observations, old transactions, a short history, apparently empty months, uncertain categories, and scheduled outflows without an assigned account. Open the relevant records and compare them with statements.
+
+A quiet month can be legitimate. An old observation can still be moved forward by newer posted transactions. A flagged category may be correct. The checks are prompts for verification; they neither modify the records nor certify that the projection is accurate. A green or unflagged state cannot account for an expense that was never entered.
+
+\section{Compare one explicit change}
+\begin{enumerate}
+\item Read the baseline assumptions and active saved events.
+\item Change a single income or spending assumption first.
+\item Enable the unchanged-controls comparison when available. It is drawn as a dashed line beside the solid result.
+\item Compare the timing, amount, and uncertainty of the cash and net-worth results.
+\item Inspect what changed before making another adjustment.
+\item Use Reset scenario to restore temporary controls when finished.
+\end{enumerate}
+
+When Use Goals funding plan is enabled, the unchanged-controls curve omits the saved budget and Goals funding so their combined effect can be examined. Other active inputs, including saved hypothetical events, still require attention. The comparison is not necessarily a universal ``do nothing'' household baseline.
+
+The engine uses common random draws for comparable baseline and scenario runs. This reduces differences caused merely by drawing another random sample. It does not remove uncertainty about future behavior or establish that the proposed plan is achievable.
+
+\section{Use the saved budget deliberately}
+With Goals funding enabled, saved budget amounts replace the corresponding monthly references. Existing recurring dates and weekly spending patterns are scaled to those amounts where evidence exists. A planned amount without a usable historical reference is spread evenly across days instead of being assigned an invented bill date.
+
+The Goals ladder supplies loan payments, including existing obligations, allocated extras, and payment rollovers. Separate extra-loan and rollover controls are disabled in this mode to avoid conflicting decisions. Other scenario adjustments remain additional assumptions. Without this mode, Forecast uses its independent extra-loan and rollover controls.
+
+Goal earmarks retain their cash or investment holdings. Their schedule describes intended allocations; it does not create a sale, transfer, or future purchase. The forecast can therefore improve because a budget lowers spending while an earmark by itself changes no cash path.
+
+\section{Add a hypothetical expense or income}
+Expand What-if events. Enter a recognizable name, the amount per occurrence, and its date. A negative amount represents a cost and a positive amount represents income. Choose Once or a repeat interval and, for a repeating event, an optional inclusive end date.
+
+An event of \money{50} per week means \money{50} on every occurrence, not \money{50} divided across the entire repeat period. Monthly-family repeats remain anchored to the original day: January 31 can become the last day of February and then March 31. Only occurrences in the relevant future horizon affect the projection.
+
+Events are saved records and are retained by Reset scenario. Use the event checkbox to compare with and without an event, or edit or delete it explicitly. Both comparison curves normally retain active saved events. Remove or disable a hypothetical when its effect is already represented by imported behavior or another planned amount, to avoid adding the same expense twice.
+
+\section{Select a relevant historical period}
+In Everything view, Forecast history can use Automatic, a rolling period, a fixed starting date, or all available history. Automatic normally caps eligible weekly samples at 78. An explicit period includes complete Monday--Sunday weeks within its boundaries and the recorded ledger span. Quiet eligible weeks remain zero-spending observations; older weeks are not silently imported to repair a short selection.
+
+Under four usable complete weeks, historical variable-spending sampling is omitted and a warning is shown. Explicit saved-budget amounts may still supply planned daily flows. Extend the period or import more records before treating the sampled history as a representation of ordinary variable expenses.
+
+The option to re-estimate paydays and bills uses the selected period without rewriting saved recurring records. It preserves disabled status and loan links, but a short period may miss an annual or quarterly payment. Loan terms and investment assumptions remain account inputs.
+
+\section{Investigate a modeled cash dip}
+Read the shortfall description and its dates, depth, duration, and recovery. The probability of crossing zero alone cannot distinguish a brief small dip from a prolonged deficit. The nearby-flow explanation names scheduled items contributing around the modeled low point; it is not a complete causal account of a household's finances.
+
+A timing experiment changes the scenario. It does not change a payment instruction at the bank or payee. Before relying on a shifted date outside the model, verify that the actual payment arrangement can be changed.
+
+\source{finfore/ui/forecast_page.py; finfore/forecast.py; finfore/forecast_history.py; finfore/data_quality.py; finfore/events.py}
+

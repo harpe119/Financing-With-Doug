@@ -1,0 +1,11 @@
+\begin{tikzpicture}[node distance=0.7cm,>=Stealth,font=\small,
+ box/.style={draw=Rule,fill=PaperTint,rounded corners=2pt,text width=12.8cm,inner sep=10pt,align=left}]
+\node[box] (goals) {\textsf{\textbf{Goals: define the purposes and priorities}}\\
+Targets, recorded savings and their account locations, monthly allowance, allocation policy, and loan priority.};
+\node[box,below=of goals] (budget) {\textsf{\textbf{Monthly budget: make room for the allowance}}\\
+Take-home income less needs, debt, wants, giving, reserve, and investing. Save the intended amounts; compare available room with the chosen allowance.};
+\node[box,below=of budget] (forecast) {\textsf{\textbf{Forecast: test the saved plan}}\\
+Enable Use Goals funding plan. Apply the saved monthly amounts and loan schedule; compare cash and net worth with the unchanged-controls case.};
+\draw[->,thick,Teal] (goals) -- (budget);
+\draw[->,thick,Teal] (budget) -- (forecast);
+\end{tikzpicture}

@@ -7,7 +7,7 @@ goes, subscriptions carved out), and dollar-ranked reduction suggestions.
 from __future__ import annotations
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import (QHBoxLayout, QLabel, QMessageBox, QPushButton, QScrollArea,
+from PyQt6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QMessageBox, QPushButton, QScrollArea,
                              QSizePolicy, QVBoxLayout, QWidget)
 
 from ..insights import (breakdown, monthly_aggregates, monthly_breakdown, spending_score,
@@ -15,6 +15,9 @@ from ..insights import (breakdown, monthly_aggregates, monthly_breakdown, spendi
 from ..store import Store
 from ..util import fmt_money
 from . import theme
+from .first_use import (NO_ACCOUNTS, NO_TRANSACTIONS, READY, FirstUsePanel,
+                        setup_stage)
+from .spending_charts import SpendingCharts
 from .widgets import Card, DonutChart, hint, hsplit, vsplit
 
 _KIND_ACCENT = {
@@ -50,9 +53,18 @@ class InsightsPage(QWidget):
         root.setContentsMargins(18, 16, 18, 16)
         root.setSpacing(12)
 
-        self.empty = hint("Import transactions to calculate monthly spending and the spending score. "
-                          "Only complete months are included.")
-        root.addWidget(self.empty)
+        self.first_use = FirstUsePanel(
+            main, "Your spending will show up here",
+            "A spending score, where the money goes, and a few changes worth "
+            "trying, all worked out from your own statements.",
+            {NO_ACCOUNTS: "Add an account, then import its statements.",
+             NO_TRANSACTIONS: "Import a CSV from your bank. One complete month "
+                              "is enough to start; about three make the score steadier.",
+             READY: "Doug needs a complete month that includes income, such as "
+                    "a paycheck. Import your checking account's statement, or "
+                    "an earlier month."},
+            ready_label="Import more history…", ready_action=main.open_import)
+        root.addWidget(self.first_use, 0, Qt.AlignmentFlag.AlignTop)
 
         # ---- score panel ----
         self.score_card = Card("Spending habits")
@@ -89,7 +101,7 @@ class InsightsPage(QWidget):
         tcol.setSpacing(6)
         tcol.addStretch(1)
         self.means = QLabel("")
-        self.means.setStyleSheet("font-size: 17px; font-weight: 600;")
+        self.means.setObjectName("headline")
         self.means.setWordWrap(True)
         self.detail = hint("")
         self.verdict = QLabel("")
@@ -102,7 +114,7 @@ class InsightsPage(QWidget):
         self.components.setObjectName("statSub")
         self.components.setWordWrap(True)
         self.explain = hint(
-            "The score compares discretionary spending with necessities and savings "
+            "The score compares spending on wants with spending on needs, and savings "
             "with income. It uses the 50/30/20 guideline: 50% of income for needs, "
             "30% for wants, and 20% saved. This is a benchmark, not a personal budget.")
         # Say how far back this looks, in the terms people actually ask about.
@@ -124,11 +136,15 @@ class InsightsPage(QWidget):
         comp_card = Card("Average monthly spending")
         crow = QHBoxLayout()
         self.donut = DonutChart()
-        self.donut.setMinimumSize(210, 210)
+        self.donut.setMinimumSize(150, 150)
         crow.addWidget(self.donut, 1)
         self.legend = QVBoxLayout()
         self.legend.setSpacing(7)
         self.legend.addStretch(1)
+        # The score beside this card speaks in shares of *income* ("64% needs");
+        # these are shares of *spending* ("Needs 81%"), so the legend says so.
+        self.legend_caption = hint("Share of spending")
+        self.legend.insertWidget(0, self.legend_caption)
         legend_host = QWidget()
         legend_host.setLayout(self.legend)
         legend_host.setFixedWidth(210)
@@ -141,18 +157,26 @@ class InsightsPage(QWidget):
         self.sug_host = QWidget()
         self.sug_box = QVBoxLayout(self.sug_host)
         self.sug_box.setContentsMargins(0, 0, 6, 0)
-        self.sug_box.setSpacing(8)
+        self.sug_box.setSpacing(0)
         self.sug_scroll.setWidget(self.sug_host)
         sug_card.body.addWidget(self.sug_scroll)
 
         # The score panel is the tallest block of prose on the page and the one
         # most often in the way once it has been read. Putting it above a
         # divider lets it be folded down to a strip without losing it.
-        bottom = hsplit(comp_card, sug_card, sizes=[500, 500])
+        bottom = hsplit(comp_card, sug_card, sizes=[560, 440])
+        # Wide enough for the donut and its 210px legend side by side; narrower
+        # than this the legend's figures were cut off at the window's minimum width.
+        comp_card.setMinimumWidth(404)
         for c in (self.score_card, comp_card, sug_card):
             c.setMinimumHeight(330 if c is self.score_card else 300)
             c.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
-        root.addWidget(vsplit(self.score_card, bottom, sizes=[330, 380]), 1)
+        self.body_split = vsplit(self.score_card, bottom, sizes=[330, 380])
+        root.addWidget(self.body_split, 1)
+        # Where the money went, month by month and by category. Folded: they back
+        # up the figures above and used to sit under Home's net worth chart.
+        self.charts = SpendingCharts(main)
+        root.addWidget(self.charts)
 
     # ---------------------------------------------------------------
     def _show_breakdown(self):
@@ -180,9 +204,16 @@ class InsightsPage(QWidget):
 
     def refresh(self) -> None:
         tx = self.store.transactions()
+        self.charts.refresh(tx)
         agg = monthly_aggregates(tx)
         has = bool(agg is not None and agg.income > 0)
-        self.empty.setVisible(not has)
+        # With nothing to score the page says so once, instead of showing a ghost
+        # donut and two cards that explain their own emptiness.
+        self.first_use.setVisible(not has)
+        if not has:
+            self.first_use.sync(setup_stage(self.store))
+        self.body_split.setVisible(has)
+        self.charts.setVisible(has)
         self.score_card.setVisible(has)
         if not has:
             self._agg = self._score = None
@@ -199,7 +230,7 @@ class InsightsPage(QWidget):
         self.grade.setStyleSheet(f"font-size: 58px; font-weight: 700; color: {col};")
         self.grade_num.setText(f"{sc.value:.1f} / 10")
         self.means.setText(sc.means_line)
-        self.means.setStyleSheet(f"font-size: 17px; font-weight: 600; color: {col};")
+        self.means.setStyleSheet(f"color: {col};")
         self.detail.setText(sc.detail)
         # Two plainly-named halves and no acronym. "FESR 0.62 vs 0.60 target"
         # is a precise statement of something the reader has no unit for; "for
@@ -214,7 +245,9 @@ class InsightsPage(QWidget):
         self.window_note.setText(window_note(agg))
 
         # composition
-        slices = breakdown(agg)
+        # The groups' colours belong to the theme, not to the arithmetic.
+        slices = [(label, value, theme.SPENDING_COLORS.get(label, colour))
+                  for label, value, colour in breakdown(agg)]
         self.donut.set_data(slices, "spending", fmt_money(agg.spending))
         self._rebuild_legend(slices, agg.spending)
 
@@ -254,7 +287,7 @@ class InsightsPage(QWidget):
             f"<p class='m'>The penalty is an interaction term: it only bites "
             f"when both halves are weak, so a shortfall caused by circumstance "
             f"is not punished the way the same shortfall caused by "
-            f"discretionary spending is.</p>",
+            f"spending on wants is.</p>",
             f"<p class='m'>FESR compares wants to <i>needs</i> rather than to "
             f"income on purpose — grading someone against their income "
             f"punishes a low earner for a circumstance rather than a habit. It "
@@ -264,12 +297,12 @@ class InsightsPage(QWidget):
             f"absolving spending habits.</p>",
             "<h3>The monthly figures being scored</h3><table>",
             f"<tr><th>Income</th><td>{fmt_money(agg.income)}</td></tr>",
-            f"<tr><th>Necessities</th><td>{fmt_money(agg.essential)}</td></tr>",
+            f"<tr><th>Needs</th><td>{fmt_money(agg.essential)}</td></tr>",
             f"<tr><th>Wants</th><td>{fmt_money(agg.frivolous)}</td></tr>",
             f"<tr><th>Giving</th><td>{fmt_money(agg.giving)} "
             f"<span class='m'>· own bucket, kept out of the ratio</span>"
             f"</td></tr>",
-            f"<tr><th>Not yet categorised</th><td>{fmt_money(agg.unknown)} "
+            f"<tr><th>Not yet categorized</th><td>{fmt_money(agg.unknown)} "
             f"({sc.unknown_share * 100:.0f}% of spending)</td></tr>",
             f"<tr><th>Left over</th>"
             f"<td>{fmt_money(agg.surplus, signed=True)}</td></tr>",
@@ -291,7 +324,7 @@ class InsightsPage(QWidget):
             rows.append(
                 f"<p style='color:{theme.AMBER}'>Provisional: "
                 f"{sc.unknown_share * 100:.0f}% of spending is still "
-                f"uncategorised and excluded from the ratio, which is above the "
+                f"uncategorized and excluded from the ratio, which is above the "
                 f"25% threshold at which the grade stops being trustworthy.</p>")
         return title, "".join(rows)
 
@@ -300,11 +333,12 @@ class InsightsPage(QWidget):
         while self.legend.count():
             it = self.legend.takeAt(0)
             w = it.widget()
-            if w:
+            if w and w is not self.legend_caption:
                 w.deleteLater()
 
     def _rebuild_legend(self, slices, total: float) -> None:
         self._clear_legend()
+        self.legend.addWidget(self.legend_caption)
         for lbl, val, col in slices:
             row = QWidget()
             rl = QHBoxLayout(row)
@@ -338,16 +372,16 @@ class InsightsPage(QWidget):
             self.sug_box.addWidget(hint("No suggestions — nothing stands out."))
             self.sug_box.addStretch(1)
             return
-        for s in sugs:
-            card = QWidget()
-            card.setStyleSheet(
-                f"background: {theme.SURFACE2}; border: 1px solid {theme.BORDER};"
-                f"border-radius: 8px;")
+        for i, s in enumerate(sugs):
+            # Entries in the card's list, parted by a hairline. Each used to be a
+            # bordered card of its own inside this one.
+            card = QFrame()
+            card.setObjectName("listEntryFirst" if i == 0 else "listEntry")
             cl = QVBoxLayout(card)
-            cl.setContentsMargins(12, 9, 12, 9)
+            cl.setContentsMargins(0, 2 if i == 0 else 10, 0, 10)
             cl.setSpacing(3)
             head = QHBoxLayout()
-            accent = _KIND_ACCENT.get(s.kind, theme.MUTED)
+            accent = theme.live(_KIND_ACCENT.get(s.kind, theme.MUTED))
             title = QLabel(s.title)
             title.setStyleSheet(f"font-weight: 600; color: {accent};")
             title.setWordWrap(True)
@@ -363,6 +397,5 @@ class InsightsPage(QWidget):
             body.setObjectName("muted")
             cl.addWidget(body)
             card.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
-            card.setMinimumHeight(100)
             self.sug_box.addWidget(card)
         self.sug_box.addStretch(1)

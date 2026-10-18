@@ -363,9 +363,13 @@ def emergency_fund_target(store, months: int = 3) -> float:
 def breakdown(agg: Aggregates) -> list[tuple[str, float, str]]:
     """Slices for the composition chart: (label, monthly $, hex color)."""
     friv_other = max(0.0, agg.frivolous - agg.subscriptions)
+    # Subscriptions are wants too; they are drawn apart so they can be found,
+    # and the other slice says so, otherwise the wants a person reads in the
+    # score would not match the wants drawn here.
+    wants = "Other wants" if agg.subscriptions > 0.005 else "Wants"
     slices = [
-        ("Essential", agg.essential, "#5B9CE0"),
-        ("Frivolous", friv_other, "#E0A83C"),
+        ("Needs", agg.essential, "#5B9CE0"),
+        (wants, friv_other, "#E0A83C"),
         ("Subscriptions", agg.subscriptions, "#9B7EDE"),
         ("Giving", agg.giving, "#4FB3A4"),
         ("Uncategorized", agg.unknown, "#8B98A9"),
@@ -505,7 +509,7 @@ class Score:
 _QUADRANTS = {
     ("high", "low"): (
         "overspending",
-        "Your shortfall is being driven by discretionary spending."),
+        "Your shortfall is being driven by spending on wants."),
     ("high", "high"): (
         "comfortable but loose",
         "You're not at risk, but you're leaving real money on the table."),
@@ -589,10 +593,10 @@ def spending_score(agg: Aggregates) -> Score | None:
     detail = (
         shares +
         f"You spend {fmt_money(agg.frivolous)}/mo on wants against "
-        f"{fmt_money(agg.essential)}/mo of essentials — a ratio of {fesr:.2f}, "
+        f"{fmt_money(agg.essential)}/mo on needs — a ratio of {fesr:.2f}, "
         f"{'above' if fesr > FESR_TARGET else 'within'} the wants-to-needs "
         f"ceiling of {FESR_TARGET:.2f} ({pct_of_target:.0f}% of it), which is "
-        f"what the habits half of the score reads. Net income is "
+        f"what the habits half of the score reads. Income minus spending is "
         f"{fmt_money(agg.surplus, signed=True)}/mo, a "
         f"{'savings' if r >= 0 else 'deficit'} rate of {abs(r) * 100:.0f}% "
         f"against the 20% target.")
@@ -731,7 +735,7 @@ def suggestions(agg: Aggregates, recurring: list[RecurringItem],
         share = agg.unknown_share
         levers.append(Suggestion(
             title=f"Uncategorized spending: {fmt_money(agg.unknown)}/mo",
-            detail=(f"{share * 100:.0f}% of your spending isn't labelled, so it "
+            detail=(f"{share * 100:.0f}% of your spending isn't categorized, so it "
                     f"can't be judged a need or a want and is left out of your "
                     f"ratio entirely. Categorize it on the Transactions page — "
                     f"Review uncategorized does the highest-value ones first — "

@@ -11,6 +11,8 @@ release notes having been shown first.
 """
 from __future__ import annotations
 
+from ..util import fmt_day
+
 import os
 import subprocess
 import sys
@@ -73,12 +75,12 @@ class UpdateDialog(QDialog):
         lay.setSpacing(9)
 
         head = QLabel(f"Version {release.version} is available")
-        head.setStyleSheet("font-size: 17px; font-weight: 600;")
+        head.setObjectName("headline")
         lay.addWidget(head)
 
         bits = [f"You have {__version__}."]
         if release.published:
-            bits.append(f"Released {release.published.strftime('%d %B %Y')}.")
+            bits.append(f"Released {fmt_day(release.published)}.")
         if release.has_installer:
             bits.append(f"{release.asset_name} · {release.size_mb:.0f} MB.")
         sub = QLabel(" ".join(bits))

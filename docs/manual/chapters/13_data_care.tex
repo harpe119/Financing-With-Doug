@@ -1,0 +1,49 @@
+\chapter{Backups, updates, and recovery}\label{ch:data}
+\index{backup}\index{restore}\index{Undo}\index{updates}
+\section{Back up the database that is actually open}
+Choose \ui{File > Back up data}. Confirm the current database path in the status bar and the presence or absence of a demonstration banner. The backup contains the open database, including accounts, transactions, goals, recorded activity, checkpoints, and database settings.
+
+A backup made while a demonstration is open contains that demonstration. Separate view preferences and the in-memory Undo history are not part of the database backup. Keep backup names and locations clear enough that their household, date, and intended purpose can be identified later.
+
+The backup uses SQLite's backup mechanism rather than an arbitrary copy of an actively changing database file. Retain backups independently of the only working copy. Whether a storage location is encrypted, synchronized, or accessible to others depends on the user's system and service configuration.
+
+\section{Restore without overwriting the only copy}
+\begin{enumerate}
+\item Identify the intended database path and the backup to restore.
+\item Close Doug so that the database is not in use.
+\item Keep a separate copy of the current database, even if it appears incorrect.
+\item Replace the intended working database with the backup, or open a separate copy using the source application's explicit database option.
+\item Reopen Doug and verify the path, account names, most recent records, and several known amounts.
+\end{enumerate}
+
+Restoring replaces the database state. It is not an import that merges the backup with newer transactions. An old backup may lack later imports or changes, so retain those original exports and reconcile what must be re-entered.
+
+\section{Use Undo within a session}
+Edit > Undo reverses the most recent recorded financial action; Redo reapplies an undone action when available. The header can also identify the pending Undo action. Keyboard shortcuts follow native conventions, including Ctrl+Z and supported redo alternatives.
+
+An action can include several related database changes. For example, deleting a goal includes its activity and priority state. Undo operates on the saved action boundary rather than requiring a separate reversal for every affected row. The history is bounded in memory and ends when the application closes, so it cannot replace a persistent backup.
+
+When a save fails, read the visible result before retrying. A failed activity write retains its entered fields. A saved activity followed by a failed view refresh is reported separately so that the same contribution is not unintentionally recorded twice. Use Refresh to reload a view; use Record activity only for an activity that has not already been saved.
+
+\section{Update an installed application}
+Check for updates queries the project's GitHub releases. An update must have an appropriate published installer and checksum; a changed source checkout or a pushed commit alone does not update another installed copy. After an installation, inspect About Doug to confirm the version actually running.
+
+Keep a backup before an update involving significant data changes. If an update check cannot reach the service, the current local database and ordinary offline application functions remain separate from that network operation. A failed check is not evidence that financial data was lost.
+
+This manual has its own revision and inspected source baseline. An installer version and a manual revision are different identifiers. Verify both when reporting a discrepancy between a described control and an installed edition.
+
+\section{Recover from an unexpected result}
+\begin{enumerate}
+\item Record the page, selected account or goal, date, and visible message.
+\item Check whether the issue concerns a bank record, a plan, a temporary scenario, or display state.
+\item Compare the relevant values with statements or the saved plan.
+\item Use a provided Retry or Refresh when the problem is a failed load or save. Check access to the database file if it is locked or unwritable.
+\item Preserve entered values and the original records before making a broad correction.
+\end{enumerate}
+
+If reporting an application error, include the version, the steps that produced it, and the relevant message. Diagnostic details can include file paths or transaction descriptions. Review them before sharing, and prefer fictional reproduction data when the problem can be demonstrated without financial records.
+
+The troubleshooting tables in Appendix~\ref{app:troubleshooting} connect common symptoms with checks and recovery steps. They identify possibilities rather than claiming to diagnose a bank or user error without evidence.
+
+\source{finfore/store.py; finfore/undo.py; finfore/update.py; finfore/ui/main_window.py; run.py}
+

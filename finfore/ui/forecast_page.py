@@ -27,11 +27,13 @@ from ..forecast_history import ForecastHistory, SETTING as HISTORY_SETTING
 from ..events import EVENT_REPEATS
 from ..models import OneOffEvent, Scenario
 from ..store import Store
-from ..util import fmt_money
+from ..util import fmt_money, fmt_day
 from . import charts, prefs, theme, video
 from .widgets import (Card, CollapsibleCard, FlowLayout, IntSpinBox, LegendToggles,
-                      SeriesRegistry, WrappedCheckBox, fan_entries, hint, nerd_button, vsplit)
+                      NERD_LABEL, NERD_TIP, SeriesRegistry, WrappedCheckBox, explain_button, fan_entries,
+                      hint, info_opener, vsplit)
 from .account_dialog import _money_spin
+from ..data_quality import data_freshness
 from .data_quality import DataQualityCard
 
 _HORIZONS = [("6 months", 183), ("1 year", 365), ("2 years", 730),
@@ -314,17 +316,17 @@ class CrunchDialog(QDialog):
         lay.setSpacing(10)
 
         head = QLabel(sf.headline)
-        head.setStyleSheet("font-size: 16px; font-weight: 600;")
+        head.setObjectName("headline")
         head.setWordWrap(True)
         lay.addWidget(head)
 
-        when = sf.low_date.strftime("%d %B %Y") if sf.low_date else "the low point"
+        when = fmt_day(sf.low_date) if sf.low_date else "the low point"
         if self.timing:
             intro = [f"Around <b>{when}</b> the balance bottoms out near "
                      f"<b>{fmt_money(-sf.median_depth)}</b>."]
             if next_in is not None:
                 intro.append(f"The next money in is {escape(next_in.label)} on "
-                             f"<b>{next_in.when.strftime('%d %b')}</b> "
+                             f"<b>{fmt_day(next_in.when, year=False)}</b> "
                              f"({fmt_money(next_in.amount)}) — anything moved "
                              f"past that date is paid out of it instead.")
         else:
@@ -390,7 +392,7 @@ class CrunchDialog(QDialog):
         col.setSpacing(1)
         title = _EventNameLabel(f"{f.label} · {fmt_money(f.amount)}")
         title.setStyleSheet(f"color: {theme.RED};")
-        sub = QLabel(f"{f.when.strftime('%a %d %b')} · "
+        sub = QLabel(f"{fmt_day(f.when, year=False, weekday=True)} · "
                      f"{_SOURCE_LABEL.get(f.source, f.source)}")
         sub.setObjectName("hint")
         col.addWidget(title)
@@ -399,7 +401,7 @@ class CrunchDialog(QDialog):
         if f.movable and self.timing:
             to = QDateEdit()
             to.setCalendarPopup(True)
-            to.setDisplayFormat("d MMM yyyy")
+            to.setDisplayFormat("MMM d, yyyy")
             # Default: the day after the next money lands, which is the move
             # that actually fixes a timing problem.
             target = (next_in.when + timedelta(days=1)) if next_in is not None \
@@ -430,9 +432,9 @@ class CrunchDialog(QDialog):
         # original date, and goes out on the new one.
         try:
             self.store.add_events([
-                OneOffEvent(f"{f.label} — not paid {f.when.strftime('%d %b')}",
+                OneOffEvent(f"{f.label} — not paid {fmt_day(f.when, year=False)}",
                             f.when, abs(f.amount)),
-                OneOffEvent(f"{f.label} — paid {target.strftime('%d %b')} instead",
+                OneOffEvent(f"{f.label} — paid {fmt_day(target, year=False)} instead",
                             target, -abs(f.amount))])
         except Exception as error:
             self.move_error.setText("The payment move could not be saved. "
@@ -462,6 +464,7 @@ class ForecastPage(QWidget):
         self.store = store
         self.main = main
         self._cat_sliders: list[SliderRow] = []
+        self._simple = False
         self._analysis = "tornado"
         self._analysis_dirty = True
         self._goal_labels: dict[int, QLabel] = {}
@@ -551,7 +554,8 @@ class ForecastPage(QWidget):
         self.overlay.setToolTip(
             "Compare with income and spending at 100%, extra loan payments and investing "
             "at $0, and loan-payment rollover enabled. Both use the same history setting "
-            "and saved what-if events.")
+            "and saved what-if events. The comparison leaves the saved Plan and Goals "
+            "funding disabled so you can see their combined effect.")
         self.overlay.setChecked(True)
         proj.body.addWidget(self.overlay)
         self.run_btn = QPushButton("Refresh forecast")
@@ -595,7 +599,7 @@ class ForecastPage(QWidget):
         hsl.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
         self.history_since = QDateEdit(QDate.currentDate().addMonths(-6))
         self.history_since.setCalendarPopup(True)
-        self.history_since.setDisplayFormat("d MMM yyyy")
+        self.history_since.setDisplayFormat("MMM d, yyyy")
         self.history_since.setMaximumDate(QDate.currentDate())
         self.history_since.setAccessibleName("First date of forecast history")
         hsl.addRow("Start date", self.history_since)
@@ -611,7 +615,7 @@ class ForecastPage(QWidget):
             "to replace old income and bills in this forecast as well."))
         self.history_note = hint("")
         self.history_card.body.addWidget(self.history_note)
-        review = QPushButton("Review recurring patterns")
+        review = QPushButton("Review detected bills and pay")
         review.setObjectName("small")
         review.clicked.connect(lambda: self.main.show_page("Recurring"))
         self.history_card.body.addWidget(review)
@@ -632,7 +636,7 @@ class ForecastPage(QWidget):
         tip_layout.setContentsMargins(0, 4, 0, 4)
         tip_layout.setSpacing(6)
         tip = hint("Try changing one spending control. Compare the result "
-                   "with the white dashed line for unchanged controls.")
+                   "with the dashed line for unchanged controls.")
         tip.setTextFormat(Qt.TextFormat.PlainText)
         tip_layout.addWidget(tip)
         self.dismiss_tip_btn = QPushButton("Dismiss tip")
@@ -675,7 +679,7 @@ class ForecastPage(QWidget):
         self.e_when = QDateEdit()
         self.e_when.setCalendarPopup(True)
         self.e_when.setDate(QDate.currentDate().addMonths(6))
-        self.e_when.setDisplayFormat("d MMM yyyy")
+        self.e_when.setDisplayFormat("MMM d, yyyy")
         self.e_when.setMinimumDate(QDate.currentDate().addDays(1))
         self.e_name.setAccessibleName("Event name")
         self.e_amount.setAccessibleName("Event amount")
@@ -697,7 +701,7 @@ class ForecastPage(QWidget):
         self.e_until_enabled.setAccessibleName("Set an end date for this event")
         self.e_until = QDateEdit(QDate.currentDate().addYears(1))
         self.e_until.setCalendarPopup(True)
-        self.e_until.setDisplayFormat("d MMM yyyy")
+        self.e_until.setDisplayFormat("MMM d, yyyy")
         self.e_until.setAccessibleName("Event end date, inclusive")
         self.e_until_enabled.toggled.connect(self.e_until.setEnabled)
         self.e_until.setEnabled(False)
@@ -741,12 +745,15 @@ class ForecastPage(QWidget):
 
         goals = CollapsibleCard("Goals", expanded=False)
         self.follow_goals = WrappedCheckBox("Use Goals funding plan")
-        self.follow_goals.setToolTip('Apply the allowance, priority and allocation policy from Goals '
-            'to future loan repayments. Savings earmarks remain part of household cash.')
+        self.follow_goals.setToolTip('Apply the saved monthly budget from Plan and the allowance, '
+            'priority and allocation policy from Goals. Scenario adjustments apply on top. '
+            'Reserves stay in cash; goal earmarks retain their underlying cash or investment holdings. '
+            'future purchases from those reserves are not assumed.')
         self.follow_goals.toggled.connect(self._goal_plan_changed)
         goals.body.addWidget(self.follow_goals)
-        goals.body.addWidget(hint('The graph follows your Goals loan repayments when enabled. '
-            'Turn this off to use the separate extra-loan and rollover controls.'))
+        goals.body.addWidget(hint('Uses your saved Plan income, spending and investment contributions, '
+            'plus Goals loan repayments. Turn this off to forecast existing habits with the separate '
+            'extra-loan and rollover controls.'))
         self.goal_box = QVBoxLayout()
         self.goal_box.setSpacing(8)
         goals.body.addLayout(self.goal_box)
@@ -787,6 +794,7 @@ class ForecastPage(QWidget):
         vrl.setSpacing(6)
         vrl.addWidget(QLabel("Show"))
         self.view_pick = QComboBox()
+        self.view_pick.setAccessibleName("Chart to show")
         for lbl, key in (("Cash + net worth", "both"), ("Cash only", "cash"),
                          ("Net worth only", "networth"),
                          ("Analysis only", "analysis")):
@@ -801,15 +809,26 @@ class ForecastPage(QWidget):
         self.show_analysis.setChecked(False)
         self.show_analysis.stateChanged.connect(lambda _s: self._apply_view())
         picker.addWidget(self.show_analysis)
-        self.video_btn = QPushButton("Watch explanation")
-        self.video_btn.setObjectName("small")
-        self.video_btn.setToolTip("Open the forecast video in your video player")
-        self.video_btn.clicked.connect(lambda: video.play(self))
-        self.video_btn.setEnabled(video.video_path() is not None)
-        picker.addWidget(self.video_btn)
-        # The page says what it thinks; this says how it knows. Everything
-        # quantitative that used to crowd the risk caption lives behind it.
-        picker.addWidget(nerd_button(self._nerd_panel))
+        # In Simple view the controls stay out of the way until asked for: the page
+        # opens on the answer and the chart, with one button for "what if".
+        self.try_btn = QPushButton("Try a change")
+        self.try_btn.setObjectName("small")
+        self.try_btn.setCheckable(True)
+        self.try_btn.setToolTip("Change income or spending and watch the forecast move")
+        self.try_btn.toggled.connect(self._apply_drawer)
+        self.try_btn.setVisible(False)
+        picker.addWidget(self.try_btn)
+        # The page says what it thinks; this says how it knows. The video and the
+        # written explanation, with everything quantitative that used to crowd
+        # the risk caption, share one menu.
+        self.explain_btn = explain_button([
+            ("video", "Watch the video", lambda: video.play(self),
+             "Open the forecast video in your video player"),
+            ("how", NERD_LABEL, info_opener(NERD_LABEL, self._nerd_panel, self),
+             NERD_TIP)])
+        self.video_action = self.explain_btn.actions_by_key["video"]
+        self.video_action.setEnabled(video.video_path() is not None)
+        picker.addWidget(self.explain_btn)
         right.addWidget(picker_host)
         self.data_quality = DataQualityCard(self.main)
         right.addWidget(self.data_quality)
@@ -822,13 +841,14 @@ class ForecastPage(QWidget):
         self.cash_compare.hide()
         cash_card.body.addWidget(self.cash_compare)
         self.plot_cash = charts.new_plot()
-        self.plot_cash.setMinimumHeight(180)
+        self.plot_cash.setAccessibleName("Cash projection chart")
+        self.plot_cash.setMinimumHeight(180 + charts.AXIS_ALLOWANCE)
         cash_card.body.addWidget(self.plot_cash)
         self.cash_series = SeriesRegistry()
         self.cash_legend = LegendToggles(
             _forecast_legend_entries(theme.BLUE, extras=[
                 ("history", "history", theme.MUTED, "line"),
-                ("baseline", "unchanged controls · middle outcome", "#C7D0DB", "dash"),
+                ("baseline", "unchanged controls · middle outcome", theme.COMPARISON, "dash"),
                 ("zero", "$0 · debt below this", theme.REFERENCE, "line"),
                 ("starter", "starter buffer", theme.AMBER, "dash"),
                 ("emergency", "cash buffer · essential spending", theme.ACCENT, "dash"),
@@ -846,6 +866,7 @@ class ForecastPage(QWidget):
         verdict.setContentsMargins(0, 0, 0, 0)
         verdict.setSpacing(8)
         self.risk = QLabel("")
+        self.risk.setObjectName("headline")
         self.risk.setWordWrap(True)
         self.risk.setTextFormat(Qt.TextFormat.PlainText)
         verdict.addWidget(self.risk)
@@ -895,14 +916,15 @@ class ForecastPage(QWidget):
         self.nw_compare.hide()
         nw_card.body.addWidget(self.nw_compare)
         self.plot_nw = charts.new_plot()
-        self.plot_nw.setMinimumHeight(110)
+        self.plot_nw.setAccessibleName("Net worth projection chart")
+        self.plot_nw.setMinimumHeight(110 + charts.AXIS_ALLOWANCE)
         nw_card.body.addWidget(self.plot_nw)
         self.nw_series = SeriesRegistry()
         self.nw_legend = LegendToggles(
             _forecast_legend_entries(theme.ACCENT, extras=[
                 ("history", "history", theme.MUTED, "line"),
                 ("det", "average inputs · no random variation", theme.AMBER, "dash"),
-                ("baseline", "unchanged controls · middle outcome", "#C7D0DB", "dash"),
+                ("baseline", "unchanged controls · middle outcome", theme.COMPARISON, "dash"),
                 ("zero", "$0 · net worth", theme.RED, "line"),
                 ("goals", "saved goals", theme.AMBER, "dash"),
             ]),
@@ -949,7 +971,8 @@ class ForecastPage(QWidget):
         an.body.addWidget(tabs_host)
         self.plot_analysis = charts.new_plot(date_axis=False, money_left=False,
                                              money_bottom=True)
-        self.plot_analysis.setMinimumHeight(100)
+        self.plot_analysis.setAccessibleName("Sensitivity analysis chart")
+        self.plot_analysis.setMinimumHeight(100 + charts.AXIS_ALLOWANCE)
         an.body.addWidget(self.plot_analysis)
         self.analysis_note = hint("")
         an.body.addWidget(self.analysis_note)
@@ -991,7 +1014,7 @@ class ForecastPage(QWidget):
         setup_layout.setSpacing(6)
         self.setup_title = QLabel()
         self.setup_title.setTextFormat(Qt.TextFormat.PlainText)
-        self.setup_title.setStyleSheet("font-size: 16px; font-weight: 600;")
+        self.setup_title.setObjectName("headline")
         self.setup_title.setWordWrap(True)
         self.setup_description = hint("")
         self.setup_description.setTextFormat(Qt.TextFormat.PlainText)
@@ -1063,7 +1086,7 @@ class ForecastPage(QWidget):
         layout.setSpacing(16)
         title = QLabel("See where your cash could go")
         title.setTextFormat(Qt.TextFormat.PlainText)
-        title.setStyleSheet("font-size: 24px; font-weight: 600;")
+        title.setStyleSheet("font-size: 20px; font-weight: 600;")
         title.setWordWrap(True)
         layout.addWidget(title)
         description = hint("Start with today’s balances, then import your bank statements. "
@@ -1083,7 +1106,7 @@ class ForecastPage(QWidget):
         buttons.addWidget(self.start_account_btn)
         buttons.addWidget(self.start_demo_btn)
         layout.addWidget(actions)
-        self.start_video_btn = QPushButton("Watch explanation")
+        self.start_video_btn = QPushButton("Watch the video")
         self.start_video_btn.setObjectName("small")
         self.start_video_btn.clicked.connect(lambda: video.play(self))
         layout.addWidget(self.start_video_btn, 0, Qt.AlignmentFlag.AlignLeft)
@@ -1173,8 +1196,7 @@ class ForecastPage(QWidget):
             self.risk_details.setMinimumHeight(details_height)
         for card, base, plot in ((self.cash_card, 300, self.plot_cash),
                                 (self.nw_card, 260, self.plot_nw),
-                                (self.analysis_card, 260, self.plot_analysis),
-                                (self.data_quality, 0, None)):
+                                (self.analysis_card, 260, self.plot_analysis)):
             required = max(base, self._column_height(card.layout(), card.width(), plot))
             if card.minimumHeight() != required:
                 card.setMinimumHeight(required)
@@ -1231,6 +1253,13 @@ class ForecastPage(QWidget):
         the numbers they produce are all still under For nerds.
         """
         self._simple = on
+        self.try_btn.setVisible(on)
+        if not on:
+            self.try_btn.setChecked(False)
+        # Changes apply as they are made, so a button to apply them is only a
+        # question ("do I press this?") for someone who was handed the page.
+        self.run_btn.setVisible(not on)
+        self._apply_drawer()
         self.paths_row.setVisible(not on)
         self.history_card.setVisible(not on)
         self.overlay.setVisible(not on)
@@ -1245,6 +1274,21 @@ class ForecastPage(QWidget):
                 self.view_pick.setCurrentIndex(i)
             self.show_analysis.setChecked(False)
         self._apply_view()
+
+    def _apply_drawer(self, *_args) -> None:
+        """In Simple view the controls are a drawer; in Everything they are the column."""
+        wanted = (not self._simple) or self.try_btn.isChecked()
+        was_open = self.control_scroll.isVisibleTo(self)
+        self.try_btn.setText("Hide changes" if self.try_btn.isChecked() else "Try a change")
+        self.control_scroll.setVisible(wanted)
+        if wanted and not was_open:
+            total = max(self.forecast_split.width(), 700)
+            self.forecast_split.setSizes([356, total - 356])
+
+    def open_controls(self) -> None:
+        """Show the controls, whichever view this is. Links that mean "what if" use it."""
+        if self._simple:
+            self.try_btn.setChecked(True)
 
     def refresh(self) -> None:
         try:
@@ -1293,6 +1337,10 @@ class ForecastPage(QWidget):
             self.cat_box.addWidget(row)
             self._cat_sliders.append(row)
             self._connect_slider(row)
+        # Simple view offers the three biggest categories, plus any other one that is
+        # currently set away from 100%, so a change made in Everything is never hidden.
+        for rank, row in enumerate(self._cat_sliders):
+            row.setVisible(not self._simple or rank < 3 or row.value() != 1)
 
         self._rebuild_goals()
         self._rebuild_events()
@@ -1517,10 +1565,10 @@ class ForecastPage(QWidget):
             col_layout.setSpacing(2)
             lbl = _EventNameLabel(e.label)
             lbl.setStyleSheet(f"color: {col if e.active else theme.MUTED};")
-            schedule = (f"Once · {e.when:%d %b %Y}" if e.repeat == "once" else
-                        f"{EVENT_REPEATS.get(e.repeat, e.repeat)} from {e.when:%d %b %Y}")
+            schedule = (f"Once · {fmt_day(e.when)}" if e.repeat == "once" else
+                        f"{EVENT_REPEATS.get(e.repeat, e.repeat)} from {fmt_day(e.when)}")
             if e.until is not None:
-                schedule += f" through {e.until:%d %b %Y}"
+                schedule += f" through {fmt_day(e.until)}"
             details = QLabel(f"{'−' if e.is_expense else '+'}${abs(e.amount):,.2f} · {schedule}")
             details.setTextFormat(Qt.TextFormat.PlainText)
             details.setObjectName("hint")
@@ -1756,6 +1804,8 @@ class ForecastPage(QWidget):
             self._run_analysis()
 
     def _set_analysis(self, which: str) -> None:
+        if which != self._analysis:
+            self.plot_analysis.forget_view()
         self._analysis = which
         self.btn_tornado.setChecked(which == "tornado")
         self.btn_backtest.setChecked(which == "backtest")
@@ -1879,7 +1929,8 @@ class ForecastPage(QWidget):
             self.risk_details.hide()
             self.cause_btn.setVisible(False)
             return
-        col = {"high": theme.RED, "crunch": theme.AMBER, "watch": theme.AMBER,
+        # Amber, like Home's verdict: a forecast is "look closer", never coral.
+        col = {"high": theme.AMBER, "crunch": theme.AMBER, "watch": theme.AMBER,
                "brief": theme.BLUE, "thin": theme.AMBER}.get(sf.level,
                                                              theme.ACCENT)
 
@@ -1894,9 +1945,27 @@ class ForecastPage(QWidget):
             when = res.dates[min(res.first_breach_day, len(res.dates) - 1)]
             text += (f"  The earliest it shows up in 1 run in 10 is "
                      f"{when.strftime('%B %Y')}.")
-        self.risk.setText(sf.headline + ("\nDay-to-day spending is omitted."
-                                       if res.history_weeks < 4 else ""))
-        self.risk.setStyleSheet(f"color: {col}; font-size: 16px; font-weight: 600;")
+        headline = sf.headline
+        if res.history_weeks < 4 and sf.level in ("ok", "thin", "brief"):
+            # With fewer than four weeks of statements everyday spending is left out,
+            # so "cash holds up" only means the balances and scheduled bills do. Good
+            # news waits for evidence; bad news (a real shortfall) never does.
+            headline = "Too early to say where your cash is headed."
+            col = theme.TEXT
+            text = ("Doug has your balances but fewer than four weeks of statements, "
+                    "so everyday spending is left out. The chart shows balances plus "
+                    "scheduled bills and paychecks: a floor, not a forecast. Import "
+                    "at least four complete weeks to see a range.")
+        else:
+            if res.history_weeks < 4:
+                headline += "\nDay-to-day spending is omitted."
+            fresh = data_freshness(self.store.transactions(),
+                                   demo=bool(getattr(self.main, "demo_key", None)))
+            if fresh.stale:
+                headline += (f"\nBased on statements through "
+                             f"{fresh.last:%b} {fresh.last.day}, {fresh.age_days} days ago.")
+        self.risk.setText(headline)
+        self.risk.setStyleSheet(f"color: {col};")
         self.risk_detail.setText(text)
         self.empty_note.hide()
         self.risk_panel.setVisible(self.view_pick.currentData() in ("cash", "both"))
@@ -1956,8 +2025,8 @@ class ForecastPage(QWidget):
             f"<h3>How the fan is built</h3>",
             f"<p>{res.history_weeks} complete historical weeks are available "
             f"under the selected history setting. "
-            + (f"They span {res.history_first:%d %b %Y} to "
-               f"{res.history_last:%d %b %Y}. " if res.history_first else "")
+            + (f"They span {fmt_day(res.history_first)} to "
+               f"{fmt_day(res.history_last)}. " if res.history_first else "")
             + ("Paydays and bills were re-estimated from this period.</p>"
                if res.recurring_refitted else
                "Paydays and bills use your saved recurring patterns.</p>"),
@@ -2128,7 +2197,7 @@ class ForecastPage(QWidget):
         if res.history_first:
             self.history_note.setText(
                 f"{res.history_weeks} complete weeks · "
-                f"{res.history_first:%d %b %Y} to {res.history_last:%d %b %Y}. "
+                f"{fmt_day(res.history_first)} to {fmt_day(res.history_last)}. "
                 + ("Paydays and bills use this period too." if res.recurring_refitted
                    else "Paydays and bills use your saved recurring patterns."))
             if res.history_weeks < 4:
@@ -2138,10 +2207,14 @@ class ForecastPage(QWidget):
         else:
             self.history_note.setText("No complete spending weeks in this period. "
                                       "Choose a longer period or import recent data.")
+        if res.spending_plan_applied:
+            self.history_note.setText(self.history_note.text() + ' Saved monthly Plan applied. '
+                'Existing bill dates and spending variation are scaled to the budget. '
+                'Amounts without usable history are spread evenly across days.')
         base: ForecastResult | None = None
-        if self.overlay.isChecked() and (not scenario.is_baseline() or not scenario.snowball):
+        if self.overlay.isChecked() and (scenario.follow_goal_plan or not scenario.is_baseline() or not scenario.snowball):
             base = run_forecast(store, H, self.paths.value(),
-                                Scenario(follow_goal_plan=scenario.follow_goal_plan),
+                                Scenario(),
                                 emergency_target=ef_target,
                                 essential_monthly=ess)
 
@@ -2161,9 +2234,13 @@ class ForecastPage(QWidget):
         reg = self.cash_series
         reg.reset()
         reg.add("zero", charts.zero_floor(p))
-        reg.add("starter", charts.soft_floor(
-            p, STARTER_BUFFER, f"{charts._short(STARTER_BUFFER)} · starter buffer",
-            theme.AMBER, slot="starter"))
+        if not self._simple:
+            # The starter buffer sits a few pixels above $0 on most charts, so the
+            # two labels fought for the same corner; Simple view keeps $0 and the
+            # cash buffer, which are the two lines that answer "do I run out?".
+            reg.add("starter", charts.soft_floor(
+                p, STARTER_BUFFER, f"{charts._short(STARTER_BUFFER)} · starter buffer",
+                theme.AMBER, slot="starter"))
         if ef_target and ef_target > STARTER_BUFFER * 1.05:
             reg.add("emergency", charts.soft_floor(
                 p, ef_target,
@@ -2180,8 +2257,8 @@ class ForecastPage(QWidget):
         reg.add("median", med)
         if base is not None:
             reg.add("baseline",
-                    charts.line(p, fx, base.cash_pct[50], "#C7D0DB", 1.2,
-                                "Unchanged controls · middle outcome", dashed=True))
+                    charts.line(p, fx, base.cash_pct[50], theme.COMPARISON, 1.2,
+                                "Without plan / unchanged controls · middle outcome", dashed=True))
         charts.today_line(p)
         for g in goals:
             if g.kind == "cash":
@@ -2212,7 +2289,7 @@ class ForecastPage(QWidget):
                                    dashed=True))
         if base is not None:
             reg.add("baseline", charts.line(p, fx, base.networth_pct[50],
-                                            "#C7D0DB", 1.4, dashed=True))
+                                            theme.COMPARISON, 1.4, dashed=True))
         charts.today_line(p)
         for g in goals:
             if g.kind == "networth":
@@ -2234,11 +2311,14 @@ class ForecastPage(QWidget):
             if original is not None:
                 ending, unchanged = float(values[-1]), float(original[-1])
                 difference = ending - unchanged
+                comparison = 'without the plan' if scenario.follow_goal_plan else 'unchanged'
+                baseline_label = ('unchanged controls without the plan' if scenario.follow_goal_plan
+                                  else 'unchanged controls')
                 label.setText(
-                    f"Middle {noun} outcome on {res.dates[-1]:%d %b %Y}: "
-                    f"{fmt_money(ending)} with these controls · {fmt_money(unchanged)} unchanged "
+                    f"Middle {noun} outcome on {fmt_day(res.dates[-1])}: "
+                    f"{fmt_money(ending)} with these controls · {fmt_money(unchanged)} {comparison} "
                     f"({fmt_money(difference, signed=True)}).\n"
-                    "Solid: these controls · white dashed: unchanged controls.")
+                    f"Solid: these controls · dashed: {baseline_label}.")
                 label.setToolTip(
                     "The middle outcome is the median: half the simulated balances are "
                     "above it on that date and half below. It is not a guaranteed balance. "
@@ -2271,6 +2351,8 @@ class ForecastPage(QWidget):
         if res.goal_plan_budget is not None:
             bits.insert(0, f"Goals funding plan · {fmt_money(res.goal_plan_budget)}/mo extra · "
                         "loan repayments applied to this graph")
+        if res.spending_plan_applied:
+            bits.insert(0, 'Saved monthly Plan income, spending & investing applied')
         for lo in res.loans:
             when = lo.payoff.strftime(fmt) if lo.payoff else "beyond horizon"
             bits.append(f"{lo.account.name}: {fmt_money(lo.payment)}/mo → paid off "

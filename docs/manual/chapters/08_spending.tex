@@ -1,0 +1,43 @@
+\chapter{Reading Home and spending}\label{ch:spending}
+\index{Home}\index{spending score}\index{weighted monthly average}
+\section{Begin with the balances and their evidence}
+Home's Overview opens on its answer. A verdict sentence states where cash is most likely headed over the next 90 days, with its range, the next bill and payday, and a reminder that it is an estimate. With less than four weeks of history it says instead that it is too early to say, and offers to import more; when the newest statement is more than 30 days old it says it is going by older statements and names the last date it uses. The figures follow as an equation: net worth equals cash plus investments minus what is owed. Saved from income, beside them, is the share of income kept in a typical month. The net-worth history comes next, and \ui{Needs a look}, which lists at most three matters across the program with a link to each, comes last. Read these components together: cash, investments, debts, and net worth describe related quantities. A high net worth can coexist with little readily available cash.
+
+The history plot can show combined totals or separate selected accounts. Account and date selections affect the chart being inspected; they do not remove the other accounts from every calculation. Check the chart's active selection before comparing its value with a headline total that includes all accounts.
+
+Layer controls and Expand change how information is displayed. If a reconciliation notice appears, open its details and trace the amount to the relevant account and dated observation. A cleaner-looking curve is not a reason to dismiss a balance difference.
+
+\section{Inspect monthly amounts before the grade}
+The Spending tab groups personal activity into Needs, Wants, Giving, and Uncategorized spending, with income treated separately. Subscriptions are shown distinctly within wants so that they can be examined without being counted twice.
+
+Monthly amounts are recency-weighted averages of completed calendar months. The current unfinished month is excluded. Up to twenty-four recorded completed months contribute, with a three-month half-life: a month three months older has half the unnormalized weight. These figures answer a different question from a report for one named calendar month.
+
+\begin{enumerate}
+\item Read income and the spending groups as amounts per month.
+\item Open \ui{How this works} and its monthly breakdown.
+\item Expand a group and category to inspect the contributing transactions.
+\item Review the months and exclusions supporting the average.
+\item Correct misclassified or missing records before interpreting an apparent spending pattern.
+\end{enumerate}
+
+Refunds reduce their corresponding spending group. Internal transfers and reimbursable business activity are excluded from personal analytics, while a reimbursement embedded in income is removed from the personal portion. These exclusions do not remove the underlying transactions from the bank ledger.
+
+\section{Interpret the score as a benchmark}
+The score combines a wants-to-needs comparison with a savings-rate comparison. Its implemented reference points are associated with the 50/30/20 budgeting benchmark. The exact interpolation tables and combination are given in Chapter~\ref{ch:ledger-methods}; the result is not a personalized spending requirement.
+
+A favorable wants-to-needs ratio can coexist with spending above income. For example, if needs and wants rise together, their ratio can remain unchanged while the household moves into deficit. Read the income shares and actual surplus alongside the score. Giving is shown as its own spending group and is not folded into the wants-to-needs numerator.
+
+Large uncategorized spending makes the classification-based score provisional. An income or essential-spending denominator that cannot support a ratio can make a score unavailable. A missing score is different from a score of zero.
+
+\section{Trace a category to its ledger}
+Monthly cash flow and Spending by category are folded at the bottom of the Spending tab; open them to see the months and categories behind the averages. The cash-flow chart keeps its vertical scale fixed to the data, so dragging moves through time only. Open the spending breakdown or select a category bar to inspect the contributing records. The visible category chart and the weighted monthly breakdown may cover different stated periods; use the period named by the view. A recent ninety-day category list is not the complete evidence set for a twenty-four-month weighted average.
+
+Transaction details can explain the original bank amount, the portion retained as personal spending, and its contribution to the monthly estimate. This distinction matters for refunds, reimbursements, and a recent large purchase. The bank amount answers what moved; the weighted contribution answers how it enters the estimate.
+
+\section{Turn an observation into an explicit plan}
+A spending suggestion does not itself alter a budget or a bank payment. Use Monthly budget to enter a changed amount, then decide how the resulting room should be allocated. Review the proposed change against commitments and recent circumstances rather than treating the score as a complete description of what is affordable.
+
+If spending fell recently, distinguish a sustained change from a short quiet period. Forecast history can restrict the evidence to the relevant period, and Track record can compare earlier and later weekly spending. Neither tool proves that the same change will persist.
+
+\source{finfore/ui/dashboard.py; finfore/ui/insights_page.py; finfore/ui/spending_details.py; finfore/insights.py}
+

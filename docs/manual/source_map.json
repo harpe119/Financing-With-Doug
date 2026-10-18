@@ -1,0 +1,315 @@
+{
+  "schema": 1,
+  "note": "Impact map; verification paths are references, not a record of tests executed for this edition.",
+  "chapters": [
+    {
+      "chapter": "chapters/00_frontmatter.tex",
+      "topic": "About this manual",
+      "sources": [
+        "finfore/__init__.py",
+        "finfore/ui/main_window.py"
+      ],
+      "verification_files": []
+    },
+    {
+      "chapter": "chapters/01_introduction.tex",
+      "topic": "What Doug records and estimates",
+      "sources": [
+        "finfore/models.py",
+        "finfore/store.py",
+        "finfore/forecast.py",
+        "finfore/update.py"
+      ],
+      "verification_files": []
+    },
+    {
+      "chapter": "chapters/02_setup.tex",
+      "topic": "Installation and a first session",
+      "sources": [
+        "run.py",
+        "requirements.txt",
+        "finfore/ui/main_window.py",
+        "finfore/demo.py"
+      ],
+      "verification_files": [
+        "tests/test_onboard.py"
+      ]
+    },
+    {
+      "chapter": "chapters/03_conventions.tex",
+      "topic": "Navigation and conventions",
+      "sources": [
+        "finfore/ui/main_window.py",
+        "finfore/ui/widgets.py",
+        "finfore/ui/input_behavior.py",
+        "finfore/ui/charts.py",
+        "finfore/ui/manual.py"
+      ],
+      "verification_files": [
+        "tests/test_navigation.py",
+        "tests/test_input_behavior.py",
+        "tests/test_chart_views.py",
+        "tests/test_usability.py"
+      ]
+    },
+    {
+      "chapter": "chapters/04_accounts.tex",
+      "topic": "Accounts and balance reconciliation",
+      "sources": [
+        "finfore/ui/accounts.py",
+        "finfore/ui/account_dialog.py",
+        "finfore/history.py",
+        "finfore/store.py",
+        "tests/test_posted_ledger.py"
+      ],
+      "verification_files": [
+        "tests/test_posted_ledger.py",
+        "tests/test_account_view.py"
+      ]
+    },
+    {
+      "chapter": "chapters/05_importing.tex",
+      "topic": "Importing statements",
+      "sources": [
+        "finfore/ingest.py",
+        "finfore/pipeline.py",
+        "finfore/store.py",
+        "finfore/ui/import_dialog.py",
+        "finfore/dedup.py"
+      ],
+      "verification_files": [
+        "tests/test_posted_ledger.py",
+        "tests/test_core.py"
+      ]
+    },
+    {
+      "chapter": "chapters/06_transactions.tex",
+      "topic": "Reviewing transactions and categories",
+      "sources": [
+        "finfore/ui/transactions.py",
+        "finfore/categorize.py",
+        "finfore/learning.py",
+        "finfore/store.py"
+      ],
+      "verification_files": [
+        "tests/test_category_review.py",
+        "tests/test_personal_finances.py"
+      ]
+    },
+    {
+      "chapter": "chapters/07_calendar.tex",
+      "topic": "Bills, paydays, and the calendar",
+      "sources": [
+        "finfore/recurrence.py",
+        "finfore/calendar.py",
+        "finfore/ui/recurring.py",
+        "finfore/ui/calendar_page.py"
+      ],
+      "verification_files": [
+        "tests/test_core.py"
+      ]
+    },
+    {
+      "chapter": "chapters/08_spending.tex",
+      "topic": "Reading Home and spending",
+      "sources": [
+        "finfore/ui/dashboard.py",
+        "finfore/ui/insights_page.py",
+        "finfore/ui/spending_details.py",
+        "finfore/insights.py"
+      ],
+      "verification_files": [
+        "tests/test_categories.py",
+        "tests/test_personal_finances.py"
+      ]
+    },
+    {
+      "chapter": "chapters/09_goals.tex",
+      "topic": "Goals and the location of savings",
+      "sources": [
+        "finfore/ui/goals_page.py",
+        "finfore/ui/goal_funding_map.py",
+        "finfore/ui/goal_funding.py",
+        "finfore/goals.py",
+        "finfore/funding.py"
+      ],
+      "verification_files": [
+        "tests/test_goal_funding_map.py",
+        "tests/test_goal_hardening.py",
+        "tests/test_goal_planning.py"
+      ]
+    },
+    {
+      "chapter": "chapters/10_budget.tex",
+      "topic": "Building the monthly budget",
+      "sources": [
+        "finfore/ui/plan_page.py",
+        "finfore/spending_plan.py",
+        "finfore/goals.py",
+        "finfore/forecast.py"
+      ],
+      "verification_files": [
+        "tests/test_spending_plan.py",
+        "tests/test_page_sync.py"
+      ]
+    },
+    {
+      "chapter": "chapters/11_forecast.tex",
+      "topic": "Forecasts and scenarios",
+      "sources": [
+        "finfore/ui/forecast_page.py",
+        "finfore/forecast.py",
+        "finfore/forecast_history.py",
+        "finfore/data_quality.py",
+        "finfore/events.py"
+      ],
+      "verification_files": [
+        "tests/test_forecast_history.py",
+        "tests/test_events.py",
+        "tests/test_spending_plan.py"
+      ]
+    },
+    {
+      "chapter": "chapters/12_track_record.tex",
+      "topic": "Track record and reports",
+      "sources": [
+        "finfore/ui/progress_page.py",
+        "finfore/progress.py",
+        "finfore/report.py",
+        "finfore/pipeline.py"
+      ],
+      "verification_files": [
+        "tests/test_core.py"
+      ]
+    },
+    {
+      "chapter": "chapters/13_data_care.tex",
+      "topic": "Backups, updates, and recovery",
+      "sources": [
+        "finfore/store.py",
+        "finfore/undo.py",
+        "finfore/update.py",
+        "finfore/ui/main_window.py",
+        "run.py"
+      ],
+      "verification_files": [
+        "tests/test_core.py"
+      ]
+    },
+    {
+      "chapter": "chapters/14_examples.tex",
+      "topic": "A worked household example",
+      "sources": [
+        "docs/manual/examples/build_examples.py",
+        "docs/manual/generated/provenance.json"
+      ],
+      "verification_files": []
+    },
+    {
+      "chapter": "chapters/15_ledger_spending.tex",
+      "topic": "Ledger and spending calculations",
+      "sources": [
+        "finfore/history.py",
+        "finfore/categorize.py",
+        "finfore/insights.py",
+        "tests/test_posted_ledger.py"
+      ],
+      "verification_files": [
+        "tests/test_posted_ledger.py",
+        "tests/test_personal_finances.py"
+      ]
+    },
+    {
+      "chapter": "chapters/16_planning_model.tex",
+      "topic": "Goal allocation and the budget model",
+      "sources": [
+        "finfore/goals.py",
+        "finfore/funding.py",
+        "finfore/spending_plan.py",
+        "finfore/store.py"
+      ],
+      "verification_files": [
+        "tests/test_goal_planning.py",
+        "tests/test_spending_plan.py"
+      ]
+    },
+    {
+      "chapter": "chapters/17_forecast_model.tex",
+      "topic": "Forecast construction",
+      "sources": [
+        "finfore/forecast.py",
+        "finfore/forecast_history.py",
+        "finfore/recurrence.py",
+        "finfore/events.py",
+        "finfore/goals.py"
+      ],
+      "verification_files": [
+        "tests/test_forecast_history.py",
+        "tests/test_spending_plan.py"
+      ]
+    },
+    {
+      "chapter": "chapters/18_evidence.tex",
+      "topic": "Evidence and interpretation",
+      "sources": [
+        "finfore/progress.py",
+        "finfore/history.py",
+        "docs/manual/examples/build_examples.py",
+        "docs/manual/examples/check_manual.py"
+      ],
+      "verification_files": [
+        "tests/test_core.py"
+      ]
+    },
+    {
+      "chapter": "chapters/A_reference.tex",
+      "topic": "Quick reference",
+      "sources": [
+        "finfore/ingest.py",
+        "finfore/models.py",
+        "finfore/ui/main_window.py",
+        "finfore/ui/widgets.py",
+        "run.py"
+      ],
+      "verification_files": []
+    },
+    {
+      "chapter": "chapters/B_troubleshooting.tex",
+      "topic": "Troubleshooting",
+      "sources": [
+        "finfore/ui/main_window.py",
+        "finfore/ui/transactions.py",
+        "finfore/ui/goals_page.py",
+        "finfore/ui/plan_page.py",
+        "finfore/ui/forecast_page.py",
+        "finfore/ui/progress_page.py"
+      ],
+      "verification_files": []
+    },
+    {
+      "chapter": "chapters/C_glossary.tex",
+      "topic": "Glossary and symbols",
+      "sources": [
+        "finfore/models.py",
+        "finfore/funding.py",
+        "finfore/history.py",
+        "finfore/forecast.py"
+      ],
+      "verification_files": []
+    },
+    {
+      "chapter": "chapters/D_maintenance.tex",
+      "topic": "Maintaining the manual",
+      "sources": [
+        "docs/manual/README.md",
+        "docs/manual/Makefile",
+        "docs/manual/examples/build_examples.py",
+        "docs/manual/examples/check_manual.py",
+        "packaging/doug.spec",
+        "finfore/ui/manual.py",
+        "finfore/ui/main_window.py"
+      ],
+      "verification_files": []
+    }
+  ]
+}

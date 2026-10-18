@@ -12,20 +12,21 @@ from PyQt6.QtWidgets import (QButtonGroup, QComboBox, QFrame, QGridLayout, QHBox
                              QPushButton, QScrollArea, QSizePolicy,
                              QVBoxLayout, QWidget)
 
+from ..account_view import account_statuses
 from ..alerts import annual_total, bill_changes, summarise
 from ..calendar import upcoming_schedule
-from ..data_quality import BALANCE_REMINDER_DAYS
+from ..category_review import needs_attention
+from ..data_quality import BALANCE_REMINDER_DAYS, data_freshness, inspect_data_quality
 from ..forecast import goal_plan_enabled, run_forecast
 from ..models import Scenario
-from ..history import (acknowledge, category_spending, headline_stats,
-                       monthly_cashflow, networth_history, account_balance_history, unacknowledged)
-from ..insights import emergency_fund_target, essential_monthly
+from ..history import (acknowledge, headline_stats,
+                       networth_history, account_balance_history, unacknowledged)
+from ..insights import emergency_fund_target, essential_monthly, monthly_aggregates
 from ..store import Store
 from ..util import fmt_money
 from . import charts, theme
-from .widgets import (Card, ChartKey, CollapsibleCard, LegendToggles,
-                      SeriesRegistry, StatCard, FlowLayout, hint, hsplit, info_button,
-                      vsplit)
+from .widgets import (Card, ChartKey, LegendToggles, SeriesRegistry, StatCard, FlowLayout,
+                      WrappingLabel, hint, info_button)
 
 # How far ahead the "where is this heading" line looks. Ninety days is far
 # enough to see a squeeze coming and near enough that the answer is not mostly
@@ -37,8 +38,11 @@ LOOKAHEAD_PATHS = 300
 # rather than squeezing a chart under these.
 # Below this page width the "kept from income" card drops to its own row.
 STATS_WIDE_MIN = 880
-HIST_PLOT_MIN = 320
-BOTTOM_PLOT_MIN = 110
+# The history chart is the third thing on the page, after the verdict and the
+# figures, so it opens at a size that leaves the figures in view. Expand gives
+# it the whole page when a taller view is wanted.
+HIST_PLOT_MIN = 280 + charts.AXIS_ALLOWANCE
+HIST_PLOT_MAX = 300 + charts.AXIS_ALLOWANCE
 
 # Net worth history windows: label, days (None = the whole ledger).
 _RANGES = (("3 months", 90.0, "the last 3 months"),
@@ -82,8 +86,6 @@ class DashboardPage(QWidget):
         self._history_mode = "totals"
         self._chart_h = None
         self._h = None               # the net worth frame the chart shows
-        self._cats = None            # every category the chart could show
-        self._cat_fit = 0            # …and how many of them fit right now
         self._expanded = False       # net worth chart has the whole page
         self._hist_data: dict = {}   # layer key -> plotted values
         self._hist_floors: dict = {} # layer key -> reference value
@@ -122,14 +124,28 @@ class DashboardPage(QWidget):
         self.verdict.setWordWrap(True)
         vrow.addWidget(self.verdict, 1)
         self.verdict_btn = QPushButton("See the forecast")
-        self.verdict_btn.clicked.connect(
-            lambda: self.main.show_page("Projection"))
+        self._verdict_action = lambda: self.main.show_page("Projection")
+        self.verdict_btn.clicked.connect(lambda: self._verdict_action())
         vrow.addWidget(self.verdict_btn, 0, Qt.AlignmentFlag.AlignTop)
         vb.addLayout(vrow)
         self.verdict_detail = hint("")
         vb.addWidget(self.verdict_detail)
         self.verdict_band.setVisible(False)
         lay.addWidget(self.verdict_band)
+
+        # --- what needs a look -----------------------------------------------
+        # The few things across the whole program that deserve a person's
+        # attention, each with a way to act on it. Until now they were scattered:
+        # a stale balance on Accounts, a count on Transactions, a card on
+        # Forecast. Amber, because this is "look closer", never an error, and it
+        # is not on the page at all when there is nothing to look at.
+        self.needs_look = Card("Needs a look")
+        self.needs_look.title.setStyleSheet(f"color: {theme.AMBER};")
+        self.look_rows = QVBoxLayout()
+        self.look_rows.setSpacing(6)
+        self.needs_look.body.addLayout(self.look_rows)
+        self.needs_look.setVisible(False)
+        lay.addWidget(self.needs_look)
 
         # --- the figures, read as an equation -------------------------------
         # Net worth is what you own minus what you owe, and the cards are laid
@@ -140,7 +156,7 @@ class DashboardPage(QWidget):
         self.card_inv = StatCard("Investments", swatch=theme.PURPLE,
                                  dashed=True)
         self.card_debt = StatCard("You owe", swatch=theme.RED, dashed="dot")
-        self.card_save = StatCard("Kept from income")
+        self.card_save = StatCard("Saved from income")
         self.stats_w = QWidget()
         self.stats_grid = QGridLayout(self.stats_w)
         g = self.stats_grid
@@ -322,58 +338,29 @@ class DashboardPage(QWidget):
         self.hist_note = hint("")
         hist_card.body.addWidget(self.hist_note)
 
-        # Foldable, because the net-worth history is the chart people actually
-        # sit and read and the other two are references you glance at. A
-        # divider can already give history most of the page, but it cannot give
-        # it *all* of the page — two cards will not shrink past their own
-        # minimum height. Folding them to their title strips will, and the
-        # chevron is the same control the Forecast page's scenario cards use.
-        flow_card = CollapsibleCard("Monthly cash flow", expanded=False)
-        self.plot_flow = charts.new_plot()
-        self.plot_flow.setAccessibleName("Monthly cash flow chart")
-        self.plot_flow.setMinimumHeight(BOTTOM_PLOT_MIN)
-        flow_card.body.addWidget(self.plot_flow, 1)
-        flow_card.body.addWidget(ChartKey([("Income", theme.ACCENT, "bar"),
-                                           ("Spending", theme.RED, "bar")]))
-        self.flow_summary = ""
-        cat_card = CollapsibleCard("Spending by category · last 90 days",
-                                   expanded=False)
-        self.plot_cat = charts.new_plot(date_axis=False, money_left=False,
-                                        money_bottom=True)
-        self.plot_cat.setAccessibleName("Spending by category chart")
-        self.plot_cat.setMinimumHeight(BOTTOM_PLOT_MIN)
-        self.plot_cat.installEventFilter(self)
-        cat_card.body.addWidget(self.plot_cat, 1)
-        self.cat_summary = ""
-        self.flow_card, self.cat_card = flow_card, cat_card
-        for c in (flow_card, cat_card):
-            c.header.setToolTip("Fold this away and give the net worth history "
-                                "the room")
-            c.header.clicked.connect(self._sync_split)
-
-        # A plot's own size hint is a 640x480 default. Left to count, three of
-        # them make the page claim well over a thousand pixels; ignoring it
-        # leaves each plot with exactly the minimum height set above.
-        for plot in (self.plot_hist, self.plot_flow, self.plot_cat):
-            plot.setSizePolicy(QSizePolicy.Policy.Expanding,
-                               QSizePolicy.Policy.Ignored)
-
-        # Draggable dividers rather than fixed 3:2 and 1:1 splits. Which chart
-        # deserves the room depends on what is being looked at right now, and
-        # that is not a question this file can answer once for everybody.
-        bottom = hsplit(flow_card, cat_card, sizes=[500, 500])
-        for c in (hist_card, flow_card, cat_card):
-            c.setSizePolicy(QSizePolicy.Policy.Expanding,
-                            QSizePolicy.Policy.Expanding)
-        self.split = vsplit(hist_card, bottom, sizes=[600, 48])
-        self.split.setVisible(False)
-        # History leads; balances and the forecast are supporting information.
-        # The two reference charts remain available through their disclosures.
-        lay.removeWidget(self.stats_w)
-        lay.removeWidget(self.verdict_band)
-        lay.addWidget(self.split, 2)
-        lay.addWidget(self.stats_w)
-        lay.addWidget(self.verdict_band)
+        # The net worth history is the only chart on Home. The two supporting
+        # spending charts (monthly cash flow, spending by category) moved to the
+        # Spending tab, where spending is; Expand gives this one the whole page.
+        hist_card.setSizePolicy(QSizePolicy.Policy.Expanding,
+                                QSizePolicy.Policy.Expanding)
+        self.plot_hist.setSizePolicy(QSizePolicy.Policy.Expanding,
+                                     QSizePolicy.Policy.Ignored)
+        hist_card.setVisible(False)
+        # The verdict leads, then the figures it rests on, then the history chart,
+        # which is the page's focus and can be given the whole page with Expand.
+        # What needs a look comes last: it is a list to work down once the picture
+        # has been read, and above the chart it pushed the chart off the screen.
+        for w in (self.verdict_band, self.needs_look, self.stats_w, self.welcome,
+                  self.alert_row, self.warn_row):
+            lay.removeWidget(w)
+        # The welcome sits under the figures: with no account the figures are not
+        # shown and it stands alone, and once one is added the figures lead and
+        # the next step sits right under them, not stranded between them and the
+        # bottom of the window.
+        for w, stretch in ((self.verdict_band, 0),
+                           (self.alert_row, 0), (self.warn_row, 0), (self.stats_w, 0),
+                           (self.welcome, 1), (self.hist_card, 2), (self.needs_look, 0)):
+            lay.addWidget(w, stretch)
         self.scroll.viewport().installEventFilter(self)
         self.hist_card.installEventFilter(self)
 
@@ -405,7 +392,7 @@ class DashboardPage(QWidget):
     def _fit_history_height(self) -> None:
         """Keep history readable instead of letting secondary content crush it."""
         width = max(0, self.scroll.viewport().width() - 36)
-        height = max(HIST_PLOT_MIN, min(460, round(width * .38)))
+        height = max(HIST_PLOT_MIN, min(HIST_PLOT_MAX, round(width * .3)))
         if self.plot_hist.minimumHeight() != height:
             self.plot_hist.setMinimumHeight(height)
         # QSplitter asks for minimumSizeHint at the card's *minimum width*,
@@ -422,6 +409,7 @@ class DashboardPage(QWidget):
         wrap = QWidget()
         outer = QVBoxLayout(wrap)
         outer.setContentsMargins(0, 8, 0, 8)
+        self._welcome_outer = outer
         outer.addStretch(1)
         mid = QHBoxLayout()
         mid.addStretch(1)
@@ -455,7 +443,7 @@ class DashboardPage(QWidget):
         spec = (
             ("Add your accounts",
              "Enter each account and what is in it today.",
-             "Add an account", lambda: self.main.show_page("Accounts")),
+             "Add an account", lambda: self.main.add_account()),
             ("Import a statement",
              "Download a CSV file from your bank’s website, then choose it here.",
              "Import a CSV…", lambda: self.main.open_import()),
@@ -511,9 +499,20 @@ class DashboardPage(QWidget):
         outer.addStretch(2)
         return wrap
 
+    def focus_first_step(self) -> None:
+        """Put the keyboard on the step to take, not on the first thing in the header."""
+        for step in self.steps:
+            button = step["btn"]
+            if button is not None and button.isVisibleTo(self.welcome):
+                button.setFocus()
+                return
+
     def _sync_welcome(self, has_accounts: bool) -> None:
         """Mark the step the person is on: one primary button, the rest quiet."""
         current = 2 if has_accounts else 1
+        # Alone on the page the card is centred; under the figures it is top-aligned.
+        self._welcome_outer.setStretch(0, 0 if has_accounts else 1)
+        self._welcome_outer.setStretch(2, 1 if has_accounts else 2)
         for s in self.steps:
             n, btn = s["n"], s["btn"]
             done = n < current
@@ -530,26 +529,6 @@ class DashboardPage(QWidget):
         self.demo_btn.setEnabled(True)
 
     # ---------------------------------------------------------------
-    def _sync_split(self) -> None:
-        """Hand the freed height to the history rather than leaving a gap.
-
-        A QSplitter keeps whatever sizes it was given, so folding both cards
-        without this leaves the bottom pane the same height with two title
-        strips floating at the top of it — the space is freed and nobody gets
-        it. Reclaiming it is the entire point of folding them.
-        """
-        folded = not (self.flow_card.expanded or self.cat_card.expanded)
-        # The panes' own sizes, not the splitter's height: height() is the
-        # widget's, which includes the handle and — before the window has been
-        # laid out even once — is not yet anything at all.
-        total = max(1, sum(self.split.sizes()))
-        if folded:
-            strip = max(self.flow_card.minimumSizeHint().height(),
-                        self.flow_card.header.sizeHint().height() + 24)
-            self.split.setSizes([max(1, total - strip), strip])
-        else:
-            self.split.setSizes([int(total * 0.58), int(total * 0.42)])
-
     def _selected_chart_accounts(self):
         return [a for a in self.store.accounts()
                 if self._selected_account_ids is None or a.id in self._selected_account_ids]
@@ -790,26 +769,17 @@ class DashboardPage(QWidget):
         away again; what the person asked for is height, and everything else on
         the page is what was taking it.
         """
-        self.expand_btn.setVisible(not self.split.isHidden() or self._expanded)
+        self.expand_btn.setVisible(not self.hist_card.isHidden() or self._expanded)
         if not self._expanded:
-            self.split.widget(1).setVisible(True)
             return
-        for w in (self.verdict_band, self.stats_w, self.alert_row,
+        for w in (self.verdict_band, self.needs_look, self.stats_w, self.alert_row,
                   self.warn_row, self.welcome):
             w.setVisible(False)
-        self.split.widget(1).setVisible(False)
 
     def _set_range(self, days: float | None) -> None:
         self._range_days = days
         charts.show_window(self.plot_hist, days)
         self._update_hist_note()
-
-    def _open_category(self, name: str) -> None:
-        self.main.show_page("Transactions")
-        page = self.main.current_page()
-        fn = getattr(page, "show_category", None)
-        if fn is not None:
-            fn(name, 90)
 
     def _render_alerts(self) -> None:
         """Say plainly which recurring charges moved on their own."""
@@ -846,7 +816,7 @@ class DashboardPage(QWidget):
             "has to move by more than three times its usual swing before it is "
             "mentioned at all, which is why a hot August does not appear here "
             "and a subscription going up by two dollars does. Deactivating a "
-            "pattern under Bills &amp; payday → Recurring patterns stops it being checked.</p>")
+            "pattern under Bills &amp; payday → Detected bills &amp; pay stops it being checked.</p>")
         return "What changed without being asked", "".join(rows)
 
     def _ack_warning(self) -> None:
@@ -907,6 +877,8 @@ class DashboardPage(QWidget):
         self.verdict_band.setVisible(False)
         if tx.empty:
             return
+        fresh = data_freshness(tx, demo=bool(getattr(self.main, "demo_key", None)))
+        self._verdict_action = lambda: self.main.show_page("Projection")
         try:
             ess = essential_monthly(self.store)
             res = run_forecast(self.store, LOOKAHEAD_DAYS, LOOKAHEAD_PATHS,
@@ -921,6 +893,23 @@ class DashboardPage(QWidget):
         level = sf.level if sf else "ok"
         caution = level in ("crunch", "watch", "high")
         level_ok = level in ("ok", "thin", "brief")
+        if fresh.thin and level_ok:
+            # Under four weeks of statements the forecast leaves everyday spending
+            # out, so "you're on track" would be a statement about nothing. Good
+            # news is held back until there is something to base it on; bad news
+            # (a balance that really does run short) is never held back.
+            self.verdict.setText("Too early to say where your cash is headed.")
+            self.verdict_detail.setText(
+                f"Only {fresh.span_days} day{'s' if fresh.span_days != 1 else ''} of "
+                f"statements so far. Import at least four weeks and Doug will give you "
+                f"a range.\nAn estimate from your own history, not a promise.")
+            self.verdict_btn.setText("Import more history…")
+            self._verdict_action = lambda: self.main.open_import()
+            self.verdict_band.setProperty("caution", "true")
+            self.verdict_band.style().unpolish(self.verdict_band)
+            self.verdict_band.style().polish(self.verdict_band)
+            self.verdict_band.setVisible(True)
+            return
         between = f"between {_approx_money(lo)} and {_approx_money(hi)}"
         rng = (f"In {LOOKAHEAD_DAYS} days your cash will most likely be {between}."
                if level_ok else f"By then it will most likely be {between}.")
@@ -938,6 +927,9 @@ class DashboardPage(QWidget):
             head = "Your cash stays above zero, but it gets thin at times."
         else:
             head = "You’re on track."
+        if fresh.stale and level_ok:
+            # Reassurance is only as good as the statements behind it.
+            head = f"Going by older statements, {head[0].lower()}{head[1:]}"
         self.verdict.setText(f"{head} {rng}")
 
         bits = []
@@ -946,20 +938,90 @@ class DashboardPage(QWidget):
                         f"of essentials.")
         bits.extend(self._next_events())
         caveat = "An estimate from your own history, not a promise."
-        dates = tx["date"].dropna()
-        if len(dates):
-            span = (dates.max() - dates.min()).days + 1
-            if span < 90:
-                caveat += (f" Only {span} day{'s' if span != 1 else ''} of "
-                           f"history so far, so treat it as rough.")
+        if fresh.span_days < 90:
+            caveat += (f" Only {fresh.span_days} day{'s' if fresh.span_days != 1 else ''} of "
+                       f"history so far, so treat it as rough.")
+        if fresh.stale:
+            when = f"{fresh.last:%b} {fresh.last.day}"
+            caveat = (f"Based on statements through {when} · {fresh.age_days} days ago, "
+                      f"so recent months may be missing.\n") + caveat
         self.verdict_detail.setText(
             ("  ·  ".join(bits) + "\n" if bits else "") + caveat)
         self.verdict_btn.setText("See what could change this" if caution
                                  else "See the forecast")
-        self.verdict_band.setProperty("caution", "true" if caution else "false")
+        # "What could change this" means the what-if controls, which Simple view
+        # keeps in a drawer on the Forecast page, so the link opens it.
+        self._verdict_action = (self._open_forecast_controls if caution
+                                else lambda: self.main.show_page("Projection"))
+        self.verdict_band.setProperty("caution", "true" if (caution or fresh.stale) else "false")
         self.verdict_band.style().unpolish(self.verdict_band)
         self.verdict_band.style().polish(self.verdict_band)
         self.verdict_band.setVisible(True)
+
+    def _open_forecast_controls(self) -> None:
+        self.main.show_page("Projection")
+        page = self.main.current_page()
+        if hasattr(page, "open_controls"):
+            page.open_controls()
+
+    def _look_items(self, tx) -> list[tuple[str, str, object]]:
+        """(sentence, link label, what the link does), most pressing first, at most three."""
+        items = []
+        statuses = account_statuses(self.store)
+        look = sum(1 for st in statuses.values() if st.needs_a_look)
+        if look:
+            items.append((f"{look} account{'s' if look != 1 else ''} "
+                          f"{'need' if look != 1 else 'needs'} a look",
+                          "Check balances", lambda: self.main.show_page("Accounts")))
+        waiting = sum(1 for st in statuses.values() if st.level == "info")
+        if waiting:
+            items.append((f"{waiting} account{'s' if waiting != 1 else ''} still "
+                          f"{'need' if waiting != 1 else 'needs'} transactions imported",
+                          "Import…", self.main.open_import))
+        attention = int(needs_attention(tx).sum()) if len(tx) else 0
+        if attention:
+            items.append((f"{attention} transaction{'s' if attention != 1 else ''} "
+                          f"{'need' if attention != 1 else 'needs'} a look",
+                          "Review", self.main.show_attention))
+        try:
+            checks = len(inspect_data_quality(self.store).concerns)
+        except Exception:
+            checks = 0
+        if checks:
+            items.append((f"{checks} forecast check{'s' if checks != 1 else ''} "
+                          f"{'need' if checks != 1 else 'needs'} a look",
+                          "See checks", lambda: self.main.show_page("Projection")))
+        return items[:3]
+
+    def _render_needs_look(self, tx) -> None:
+        while self.look_rows.count():
+            item = self.look_rows.takeAt(0)
+            if item.layout() is not None:
+                while item.layout().count():
+                    child = item.layout().takeAt(0)
+                    if child.widget() is not None:
+                        child.widget().deleteLater()
+            elif item.widget() is not None:
+                item.widget().deleteLater()
+        items = [] if tx.empty or self._expanded else self._look_items(tx)
+        for sentence, label, action in items:
+            row = QHBoxLayout()
+            row.setSpacing(12)
+            text = WrappingLabel(sentence)
+            text.setTextFormat(Qt.TextFormat.PlainText)
+            button = QPushButton(label)
+            button.setObjectName("link")
+            button.setAccessibleName(f"{label}: {sentence}")
+            if label == "Review":
+                button.setToolTip(
+                    "Doug guessed these categories from the description, or could "
+                    "not place them. Check each one: the spending score is only as "
+                    "good as its categories.")
+            button.clicked.connect(lambda _checked=False, fn=action: fn())
+            row.addWidget(text, 1)
+            row.addWidget(button, 0, Qt.AlignmentFlag.AlignVCenter)
+            self.look_rows.addLayout(row)
+        self.needs_look.setVisible(bool(items))
 
     def _next_events(self) -> list[str]:
         """The next bill and the next payday, from the same schedule as the
@@ -1047,11 +1109,21 @@ class DashboardPage(QWidget):
         else:
             self.card_debt.set_money(st["debt"] if has_data else None,
                                      sub="Cards and loans")
-        rate = st["savings_rate"]
+        # The same figures the Spending score and the Goals allowance are built
+        # from: recent complete months, the latest counting most. Home used to
+        # read the raw last 90 days, so it said 33% where Spending said 22%. The
+        # 90 days stand in only until there is a complete month to average.
+        typical = monthly_aggregates(tx) if has_data else None
+        if typical is not None and typical.income > 0:
+            rate, burn = typical.savings_rate, typical.spending
+            basis, per = "A typical month", ""
+        else:
+            rate, burn = st["savings_rate"], st["burn"]
+            basis, per = "Last 3 months", " a month"
         if rate is not None:
-            note = ("Last 3 months · " +
-                    (f"you spend about {fmt_money(st['burn'])} a month"
-                     if rate >= 0 and st["burn"] else
+            note = (f"{basis} · " +
+                    (f"you spend about {fmt_money(burn)}{per}"
+                     if rate >= 0 and burn else
                      "more went out than came in"))
             self.card_save.set_text(
                 f"{rate * 100:.0f}%",
@@ -1070,86 +1142,15 @@ class DashboardPage(QWidget):
             QSizePolicy.Policy.Preferred if show_charts
             else QSizePolicy.Policy.Expanding)
         self._sync_welcome(has_accounts)
-        self.split.setVisible(show_charts)
+        self.hist_card.setVisible(show_charts)
         self._render_verdict(tx)
+        self._render_needs_look(tx)
         self._render_alerts()
         self._render_warnings()
 
         self._load_chart_selection()
         self._render_history(tx, has_data)
 
-        # monthly cash flow — zero is the break-even line between the bars
-        p = self.plot_flow
-        p.clear()
-        if p.plotItem.legend:
-            p.plotItem.legend.clear()
-        mc = monthly_cashflow(tx)
-        self.flow_summary = ""
-        if len(mc):
-            months = list(mc["month_start"])
-            charts.month_bars(p, months, mc["income"].values,
-                              mc["spending"].values)
-            mx = charts.to_ts(months)
-            # Half a bar-group of slack at each end so the outermost bars are
-            # not clipped by the axis they sit against.
-            pad = 86400.0 * 16
-            charts.lock_view(p, float(mx[0]) - pad, float(mx[-1]) + pad,
-                             [mc["income"].values, mc["spending"].values],
-                             include_y=[0.0],
-                             initial_days=charts.HISTORY_INITIAL_DAYS + 30,
-                             x_data=mx, zoom_y=False)
-            charts.attach_readout(
-                p, mx, [("Income", theme.ACCENT, mc["income"].values),
-                        ("Spending", theme.RED, mc["spending"].values)],
-                label=lambda ts: pd.Timestamp(ts, unit="s").strftime("%B %Y"),
-                tolerance=86400.0 * 16)
-            full = mc[mc["month_start"] < pd.Timestamp.today().replace(day=1)]
-            full = full.tail(3)
-            if len(full):
-                self.flow_summary = (
-                    f"Over the last {len(full)} full month"
-                    f"{'s' if len(full) != 1 else ''}, about "
-                    f"{fmt_money(float(full['income'].mean()))} came in and "
-                    f"{fmt_money(float(full['spending'].mean()))} went out "
-                    f"each month.")
-        self.plot_flow.setAccessibleDescription(self.flow_summary)
-
-        # categories
-        self._cats = category_spending(tx)
-        self._cat_fit = 0
-        self._draw_categories()
-
-    def _draw_categories(self) -> None:
-        """Draw as many category bars as the plot is tall enough to label.
-
-        Nine bars in a short plot leave their labels overprinting each other
-        or dropped at random, so a short plot shows its biggest few instead.
-        """
-        p = self.plot_cat
-        p.clear()
-        cs = self._cats
-        self.cat_summary = ""
-        if cs is not None and len(cs):
-            fit = self._bars_that_fit(len(cs))
-            self._cat_fit = fit
-            shown = cs.iloc[:fit]
-            names = list(shown.index)
-            charts.category_bars(p, names, shown.values)
-            charts.on_bar_click(p, names, self._open_category)
-            p.autoRange()
-            self.cat_summary = (
-                f"{names[0]} is the biggest category: "
-                f"{fmt_money(float(shown.values[0]))} in the last 90 days.")
-        p.setAccessibleDescription(self.cat_summary)
-
-    def _bars_that_fit(self, n: int) -> int:
-        """How many category rows the plot can label legibly.
-
-        A 12px label needs about 17px of row, plus room for the axis below.
-        Fewer rows with every label drawn beats more rows with half of them
-        silently dropped; the Spending tab has the whole breakdown.
-        """
-        return int(min(n, max(3, (self.plot_cat.height() - 36) // 17)))
 
     def eventFilter(self, obj, ev) -> bool:
         if obj is self.scroll.viewport() and ev.type() == QEvent.Type.Resize:
@@ -1158,11 +1159,6 @@ class DashboardPage(QWidget):
             self._fit_history_height()
         if obj is self.plot_hist.viewport() and ev.type() == QEvent.Type.Resize:
             self.hist_empty.setGeometry(self.plot_hist.viewport().rect())
-        if (obj is getattr(self, "plot_cat", None) and ev.type() == QEvent.Type.Resize
-                and self._cats is not None and len(self._cats)):
-            fit = self._bars_that_fit(len(self._cats))
-            if fit != self._cat_fit:
-                self._draw_categories()
         return super().eventFilter(obj, ev)
 
     def _render_data_chip(self, last_tx) -> None:

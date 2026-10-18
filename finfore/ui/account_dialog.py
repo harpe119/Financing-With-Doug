@@ -75,8 +75,12 @@ class AccountDialog(QDialog):
         self.balance_label = QLabel("Balance")
         self.balance_label.setBuddy(self.balance)
         form.addRow(self.balance_label, self.balance)
+        # The field fills in from the cents, so typing 3200 gives $32.00. That is
+        # said under the field, where the first mistake is made, not in a tooltip.
+        self.cents_hint = hint("Type 320000 for $3,200.00, or paste $3,200.00.")
+        form.addRow("", self.cents_hint)
         form.addRow("Balance as of", self.balance_date)
-        self.overdraft = QCheckBox('This account can be overdrawn')
+        self.overdraft = QCheckBox('Allow this account to go below $0')
         self.overdraft.setToolTip('When unchecked, a negative reconstructed closing balance is flagged for review. Values are never forced to zero.')
         form.addRow(self.overdraft)
 
@@ -183,7 +187,7 @@ class AccountDialog(QDialog):
     def _sync_fields(self) -> None:
         t: AccountType = self.type.currentData()
         self.balance_label.setText(
-            "Amount owed" if self._owed_type(t) else 'Closing posted balance' if t.is_cashlike else "Balance")
+            "Amount owed" if self._owed_type(t) else 'Balance at end of day' if t.is_cashlike else "Balance")
         self.overdraft.setVisible(t in (AccountType.CHECKING,AccountType.SAVINGS))
         for lbl, w in self._loan_rows:
             lbl.setVisible(t == AccountType.LOAN)
@@ -191,7 +195,7 @@ class AccountDialog(QDialog):
         for lbl, w in self._inv_rows:
             lbl.setVisible(t == AccountType.INVESTMENT)
             w.setVisible(t == AccountType.INVESTMENT)
-        entry = " Type digits as cents: 1234 becomes $12.34."
+        entry = ""
         tips = {
             AccountType.CHECKING: "Money you have, ready to spend. Import this "
                                   "account's CSV so history and habits can be "
@@ -215,8 +219,8 @@ class AccountDialog(QDialog):
         }
         self.balance_hint.setText(tips[t])
         if t.is_cashlike:
-            self.balance_hint.setText('Use the end-of-day posted balance for this date. Exclude pending charges and holds; '
-                                      'do not use Available balance. If today is not closed, use the last closed date. ' + entry)
+            self.balance_hint.setText('Use the balance your bank shows at the end of that day (the posted balance). Leave out pending '
+                                      'charges and holds, and do not use Available balance. If today is not over, use the last full day. ' + entry)
         self.adjustSize()
 
     def _balance_changed(self, value: float) -> None:

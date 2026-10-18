@@ -1,0 +1,57 @@
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern,microtype}
+\usepackage[letterpaper,top=0.85in,bottom=0.85in,left=0.95in,right=0.85in,headheight=15pt]{geometry}
+\usepackage{amsmath,amssymb,booktabs,longtable,tabularx,array,graphicx}
+\usepackage{xcolor,tikz,pgfplots}
+\usetikzlibrary{arrows.meta,positioning,calc}
+\usepgfplotslibrary{fillbetween}
+\pgfplotsset{compat=1.18}
+\usepackage{enumitem,titlesec,fancyhdr,listings,makeidx}
+\usepackage[most]{tcolorbox}
+\usepackage[hyphens]{url}
+\usepackage{hyperref,bookmark}
+\definecolor{Ink}{HTML}{15232B}
+\definecolor{Teal}{HTML}{176B67}
+\definecolor{Blue}{HTML}{397BA2}
+\definecolor{Violet}{HTML}{7962AB}
+\definecolor{PaperTint}{HTML}{F1F6F5}
+\definecolor{Rule}{HTML}{CCD7D9}
+\definecolor{Muted}{HTML}{52646C}
+\definecolor{Gold}{HTML}{936E2C}
+\hypersetup{colorlinks=true,linkcolor=Teal,urlcolor=Blue,citecolor=Teal,
+  pdftitle={Financing with Doug: User's Manual and Calculation Guide},
+  pdfauthor={Dr. Caleb N. Harper},bookmarksnumbered=true,pdfdisplaydoctitle=true}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0.55em}
+\setlength{\emergencystretch}{2em}
+\renewcommand{\arraystretch}{1.18}
+\setlist{itemsep=0.25em,topsep=0.35em,leftmargin=*}
+\setlist[description]{leftmargin=0pt,labelindent=0pt,labelwidth=0pt,labelsep=0.5em}
+\setcounter{tocdepth}{1}
+\setcounter{secnumdepth}{2}
+\titleformat{\chapter}[display]{\sffamily\color{Ink}}{\large\chaptertitlename\ \thechapter}{6pt}{\Huge\bfseries}
+\titlespacing*{\chapter}{0pt}{0pt}{20pt}
+\titleformat{\section}{\large\sffamily\bfseries\color{Teal}}{\thesection}{0.7em}{}
+\titleformat{\subsection}{\normalsize\sffamily\bfseries}{\thesubsection}{0.6em}{}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small\sffamily Financing with Doug}
+\fancyhead[R]{\small\sffamily User manual}
+\fancyfoot[L]{\small\color{Muted}Revision \ManualRevision\quad\textbullet\quad Doug \AppVersion}
+\fancyfoot[R]{\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+\fancypagestyle{plain}{\fancyhf{}\fancyfoot[L]{\small\color{Muted}Financing with Doug\quad\textbullet\quad Revision \ManualRevision}\fancyfoot[R]{\thepage}\renewcommand{\headrulewidth}{0pt}}
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}
+\newcommand{\ui}[1]{\textsf{\textbf{#1}}}
+\newcommand{\money}[1]{\$\,#1}
+\newcommand{\file}[1]{\path{#1}}
+\newcommand{\code}[1]{\texttt{\detokenize{#1}}}
+\newcommand{\source}[1]{\par\smallskip{\small\color{Muted}\raggedright\textsf{Implementation reference:}\ \file{#1}\par}}
+\newcommand{\seeref}[1]{\S\ref{#1}, p.\,\pageref{#1}}
+\newtcolorbox{notebox}[1]{enhanced,breakable,colback=PaperTint,colframe=Rule,
+  boxrule=0.5pt,arc=2pt,title={#1},coltitle=Ink,colbacktitle=PaperTint,fonttitle=\sffamily\bfseries}
+\lstset{basicstyle=\small\ttfamily,breaklines=true,columns=fullflexible,
+  keepspaces=true,showstringspaces=false,backgroundcolor=\color{PaperTint},
+  frame=single,rulecolor=\color{Rule},framesep=6pt}
+\makeindex

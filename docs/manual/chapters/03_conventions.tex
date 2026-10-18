@@ -1,0 +1,55 @@
+\chapter{Navigation and conventions}\label{ch:conventions}
+\index{navigation}\index{fixed-decimal entry}\index{Simple view}\index{appearance}\index{light theme}
+\section{Find a page by its task}
+The inspected interface groups related pages into five sidebar sections. A path such as \ui{Plan > Goals} names a section and then a tab; it does not imply that a second application window opens.
+
+\begin{tabularx}{\textwidth}{@{}lYY@{}}
+\toprule Section & Pages & Main purpose\\\midrule
+Home & Overview; Spending & Review balances, outlook, and spending.\\
+Accounts & Balances; Transactions & Maintain accounts and inspect their ledgers.\\
+Bills \& payday & Calendar; Detected bills \& pay & Review schedules and their account assignments.\\
+Plan & Goals; Monthly budget & Set goals, order priorities, and allocate monthly amounts.\\
+Forecast & Projection; Track record & Compare assumptions and examine earlier forecasts.\\
+\bottomrule
+\end{tabularx}
+
+Older editions may show Dashboard, Goals, Plan, or Progress as separate sidebar entries. In this manual, Home corresponds to the overview; Monthly budget corresponds to the spending-plan editor; Track record corresponds to saved comparisons. The task and tab names provide the route when a layout differs.
+
+The header's \ui{View} control selects Simple or Everything. Simple hides advanced controls and some tabs without deleting their data or saved settings. A link to a hidden page can reveal it. If a control described later is absent, first check the selected view and the current tab.
+
+The same choice is under \ui{View} in the menu bar, which also holds \ui{View > Appearance}: Dark (the default), Light, or Match my computer, which follows the operating system's light or dark setting and changes with it. A new appearance applies at once and changes only the colors on screen; the current page, an open panel, typed text, and the scroll position are retained, and the choice is remembered. Each color keeps the same meaning in both appearances, so a description in this manual applies to either.
+
+Choose \ui{Help > User manual (PDF)} to open the complete manual in the computer's PDF reader. It opens separately so that it can remain beside the application while following a task. F1 opens the shorter Getting started guide. If Doug cannot launch a PDF reader, its message gives the manual's file location for opening directly.
+
+\section{Enter money deliberately}
+Currency controls use fixed-decimal entry: digits enter cents from the right. The displayed value is the amount that will be stored, so inspect it before accepting a dialog.
+
+\begin{center}\begin{tabular}{@{}ll@{}}\toprule Digits & Displayed amount\\\midrule
+\texttt{1} & \money{0.01}\\
+\texttt{1234} & \money{12.34}\\
+\texttt{123400} & \money{1,234.00}\\\bottomrule
+\end{tabular}\end{center}
+
+Clicking into a money field selects its existing amount. Backspace removes a digit; Delete clears the value. A pasted formatted amount such as \texttt{\$1,234.56} retains its dollar value, whereas pasted bare digits follow fixed-decimal entry. Changes are committed when the field accepts them, normally on Enter or when focus leaves it. Percentages and relative shares use ordinary decimal entry; they are not entered as cents.
+
+The scroll wheel is reserved for navigation rather than changing entry values. Use the keyboard, explicit step buttons, or a selection to alter a field. A dropdown list that has been opened remains a list through which the user can navigate.
+
+\section{Signs, balances, and dates}
+Posted transaction amounts are positive for money entering an account and negative for money leaving it. The account form accepts a loan or card amount owed as a positive number. Internally, a card debt is represented by a negative ledger balance, while a loan stores a positive amount owed. A negative card balance in the transaction view therefore means debt.
+
+A dated balance is an observation at the end of that date. A transaction's posting or balance date identifies when it belongs to the ledger. The purchase date can differ, particularly across weekends or holidays. Use the bank's supplied posting date when available; the program does not infer a bank's posting rules from the day of the week.
+
+Dates on screen are written as \textit{Oct 20, 2026}, or as \textit{Tue, Oct 20} where the weekday matters and the year is evident.
+
+\section{Selection, scrolling, and charts}
+Select an entry before using an action that applies to a row. In Goals, selecting a savings goal in the funding map also selects it in the priority ladder. Selecting a loan or balance milestone retains that target in the ladder and clears the savings highlight, since those items do not represent a separate savings-account allocation.
+
+Charts can be panned or zoomed for inspection. Routine changes to layers or graph contents preserve the current view. \ui{Reset axes} restores the current default extent; \ui{Reset scenario} changes forecast controls instead. These commands have different purposes.
+
+Use Tab and Shift+Tab to move through controls and Escape to leave a dialog without accepting its change. Within a table or list, the arrow keys move between entries and Tab moves on to the next control. The control that has the keyboard shows a visible outline. Charts are read with the pointer (rest on a chart for exact values, scroll to zoom, double-click to reset) and are not Tab stops; the sentence beside a chart states its main result in words. Native keyboard operation does not by itself establish compatibility with every screen reader or display-scaling setting.
+
+\section{Stored changes and temporary changes}
+Account edits, imported transactions, goals, recorded activity, recurring settings, saved events, and saved budgets affect the database. A temporary forecast multiplier changes an assumption in the current scenario. Saved what-if events remain until managed explicitly. View preferences can be stored separately from the financial database. Before interpreting a result, identify which of these kinds of change was made.
+
+\source{finfore/ui/main_window.py; finfore/ui/manual.py; finfore/ui/widgets.py; finfore/ui/input_behavior.py; finfore/ui/charts.py}
+

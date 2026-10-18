@@ -484,13 +484,13 @@ def compare_periods(before: np.ndarray, after: np.ndarray,
         out.direction = "unchanged"
 
     if out.significant and out.diff < 0:
-        out.note = (f"Discretionary spending is down about "
+        out.note = (f"Spending on wants is down about "
                     f"${abs(out.diff):,.0f}/week — around "
                     f"${abs(out.monthly_diff):,.0f}/month. Larger than this "
-                    f"sample's noise, so it is a real change in behaviour, not "
+                    f"sample's noise, so it is a real change in behavior, not "
                     f"a quiet fortnight.")
     elif out.significant:
-        out.note = (f"Discretionary spending is up about ${out.diff:,.0f}/week "
+        out.note = (f"Spending on wants is up about ${out.diff:,.0f}/week "
                     f"(${out.monthly_diff:,.0f}/month), by more than the "
                     f"week-to-week variation explains.")
     else:
@@ -507,7 +507,7 @@ def significance_since(store: Store, cp: Checkpoint,
     """Compare weekly spending since a checkpoint against everything before it."""
     s = weekly_discretionary(store)
     if s.empty:
-        return Significance(note="No discretionary spending recorded yet.")
+        return Significance(note="No spending on wants recorded yet.")
     cut = pd.Timestamp(cp.when)
     before = s[s.index < cut].to_numpy(dtype=float)
     after = s[s.index >= cut].to_numpy(dtype=float)
@@ -584,7 +584,7 @@ def score_move(a: Checkpoint, b: Checkpoint) -> ScoreMove:
                   from_grade=a.grade, to_grade=b.grade,
                   delta=0.0, improved=False)
     if a.score is None or b.score is None:
-        m.note = ("One of these checkpoints predates having enough categorised "
+        m.note = ("One of these checkpoints predates having enough categorized "
                   "history to score.")
         return m
     m.delta = b.score - a.score

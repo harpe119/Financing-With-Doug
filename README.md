@@ -37,8 +37,8 @@ The app's **Check for updates** command checks for newer releases.
 2. Download transaction history from your bank in CSV format.
 3. Use **File → Import CSV…**, select the account, and check the preview.
    Spending should be negative and income positive.
-4. Review categories in **Transactions** and patterns in
-   **Bills & payday → Recurring patterns**.
+4. Review categories in **Accounts → Transactions** and patterns in
+   **Bills & payday → Detected bills & pay**.
 5. Open **Forecast** to see the projection and test changes.
 
 Currency fields use fixed-decimal entry: typing `1234` gives **$12.34**;
@@ -48,42 +48,50 @@ Percentages use normal decimal entry.
 
 The [getting-started guide](docs/getting-started.md) has the full walkthrough.
 It is also available under **Help → Getting started**.
+**Help → User manual (PDF)** opens the complete manual in your computer's PDF reader.
 
 ## Navigation
 
 | Section | Contents |
 |---|---|
-| Dashboard | Overview and Spending |
-| Accounts | Balances and account settings |
-| Transactions | Search, categories, and imported entries |
-| Bills & payday | Calendar and Recurring patterns |
-| Goals | Savings targets and priorities |
-| Forecast | Projection and Progress |
+| Home | Overview and Spending |
+| Accounts | Balances, and Transactions (search, categories, imported entries) |
+| Bills & payday | Calendar and Detected bills & pay |
+| Plan | Goals (goals, priorities, monthly allowance) and Monthly budget |
+| Forecast | Projection and Track record |
+
+The **View** switch in the header chooses Simple or Everything. Simple shows
+Balances and Projection only; Transactions and Track record appear in Everything,
+and whenever a link elsewhere leads to them.
+
+**View → Appearance** switches between Dark (the default) and Light, or follows
+your computer's setting. The switch is instant and keeps your place.
 
 The calendar lists scheduled items, not all future spending. Account balances
 include only items with a payment account supported by the imported ledger.
 Everyday spending, future transfers, and unassigned items are excluded.
 Check the **Unassigned items** filter before relying on an account total.
 
-On the Forecast tab, **Watch explanation** opens a silent visual explanation
-in your computer's video player. Animated spending weeks build possible futures,
-which become the shaded chart bands. It also shows a scenario comparison and
-a cash dip, using short labels and amounts, and closes by recalling that the
-forecast replays your real recorded history. There are no caption strips.
-**How this works** opens the written explanation. Progress has its own
-**Watch explanation** video for saved forecasts and measured spending changes.
-On Dashboard → Spending, **How this works** opens the monthly breakdown. Expand
-Necessities or another group, then a category, to inspect its transactions,
+On the Forecast tab, **Explain → Watch the video** opens a silent visual
+explanation in your computer's video player. Animated spending weeks build
+possible futures, which become the shaded chart bands. It also shows a scenario
+comparison and a cash dip, using short labels and amounts, and closes by
+recalling that the forecast replays your real recorded history. There are no
+caption strips. **Explain → How this works** opens the written explanation.
+Track record has its own **Explain** menu: a video for saved forecasts and
+measured spending changes, what a checkpoint is, and how the page works.
+On Home → Spending, **How this works** opens the monthly breakdown. Expand
+Needs or another group, then a category, to inspect its transactions,
 refunds, and contributions to the monthly average.
 Use **Reset scenario** to undo temporary forecast adjustments.
-The Goals page shows how **Spare /mo** is calculated; **Use detected** keeps it
+The Goals tab (under Plan) shows how the monthly allowance is calculated; **Use Plan / history** keeps it
 updated after imports. In Transactions, **Business (reimbursable)** excludes
 company expenses and repayments from personal analytics. Right-click a
 paycheck's **Business reimbursement…** action to separate a bundled repayment.
 In Everything view, **Forecast history** selects recent spending weeks or a
 start date after a move or job change. You can also re-estimate paydays and
 bills from that period; the choice is saved separately for each database.
-The **Data quality** panel flags records to verify before interpreting the
+The **Data quality** line flags records to verify before interpreting the
 projection. **Review data** explains each flag and links to the relevant page.
 These checks identify possible gaps; they do not measure forecast accuracy.
 
@@ -91,7 +99,7 @@ These checks identify possible gaps; they do not measure forecast accuracy.
 
 **File → Load demo dataset** opens a separate database with fictional data.
 Choose Balanced, Struggling, Thriving, Turnaround, or Spiralling.
-**File → Return to my own data** returns to your database.
+The **Return to my own data** button on the demo banner (or **File → Return to my own data**) returns to your database.
 
 ## Your data and backups
 

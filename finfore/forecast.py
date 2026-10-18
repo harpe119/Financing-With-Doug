@@ -95,6 +95,8 @@ class ForecastResult:
     monthly_income_reference: float = 0.0
     monthly_spending_reference: dict[str, float] = field(default_factory=dict)
     goal_plan_budget: float | None = None
+    spending_plan_applied: bool = False
+    scheduled: list["ScheduledFlow"] = field(default_factory=list)
 
 
 def token_set(s: str) -> set[str]:
@@ -522,6 +524,7 @@ def run_forecast(store: Store, horizon_days: int, n_paths: int,
     n = H + 1                                  # index 0 = today
     dates = [today + timedelta(days=i) for i in range(n)]
     end = dates[-1]
+    scheduled: list[ScheduledFlow] = []
 
     def idx(d: date) -> int:
         return (d - today).days
@@ -555,27 +558,31 @@ def run_forecast(store: Store, horizon_days: int, n_paths: int,
             warnings.append(
                 f"“{it.name}” looks like a loan payment but isn't linked to a "
                 f"loan account, so it was left out of the cash projection to "
-                f"avoid counting it twice. Link it under Bills & payday → Recurring patterns."
+                f"avoid counting it twice. Link it under Bills & payday → Detected bills & pay."
             )
         else:
             flow_items.append(it)
 
-    # ---- 1. deterministic recurring flows ------------------------------
-    base_flow = np.zeros(n)
-    for it in flow_items:
-        if it.kind == "income":
-            amt = it.amount * scenario.income_multiplier
-        else:
-            cat = categorize(it.name, it.amount)
-            amt = it.amount * scenario.category_multipliers.get(cat, 1.0)
-        for d in occurrences(it, today, end):
-            base_flow[idx(d)] += amt
-    monthly_net = sum(
-        (it.amount * scenario.income_multiplier if it.kind == "income"
-         else it.amount * scenario.category_multipliers.get(
-             categorize(it.name, it.amount), 1.0)) * (30.44 / _cad_days(it))
-        for it in flow_items
-    )
+    # Establish unscaled monthly inputs before applying a saved budget. Budget
+    # ratios scale both recurring bills and sampled weeks, preserving their
+    # dates and historical variation. Never apply today's plan to a backtest.
+    spending_plan = None
+    if follow_goals and store.get_setting('spending_plan') is not None:
+        from .spending_plan import calculate_plan
+        spending_plan = calculate_plan(store)
+    exclude = known_keys | {it.key for it in all_items}
+    W, irr_inc = store.cached(('forecast_weeks', today, history, frozenset(exclude)),
+        lambda: weekly_category_matrix(
+            tx, exclude_keys=exclude,
+            max_weeks=78 if history.mode == "auto" else None,
+            start_date=history.start(today),
+            end_date=today if history.mode != "auto" else None))
+    wts = None
+    if len(W) >= 4:
+        original_mvec = np.array([scenario.category_multipliers.get(c, 1.0) for c in W.columns])
+        obs = (irr_inc.values - W.values.sum(axis=1) if spending_plan else
+               irr_inc.values * scenario.income_multiplier - W.values @ original_mvec)
+        wts = _behaviour_weights(obs, seed=seed)
     monthly_income_reference = sum(
         it.amount * (30.44 / _cad_days(it)) for it in flow_items if it.kind == "income")
     monthly_spending_reference: dict[str, float] = {}
@@ -584,6 +591,55 @@ def run_forecast(store: Store, horizon_days: int, n_paths: int,
             cat = categorize(it.name, it.amount)
             monthly_spending_reference[cat] = (monthly_spending_reference.get(cat, 0.0)
                                              - it.amount * (30.44 / _cad_days(it)))
+    if wts is not None:
+        monthly_income_reference += float(np.dot(wts, irr_inc.values)) * (30.44 / 7)
+        for cat, amount in zip(W.columns, wts @ W.values):
+            monthly_spending_reference[cat] = (monthly_spending_reference.get(cat, 0.0)
+                                             + float(amount) * (30.44 / 7))
+    income_factor = scenario.income_multiplier
+    category_factors = dict(scenario.category_multipliers)
+    base_flow = np.zeros(n)
+    if spending_plan is not None:
+        from .spending_plan import forecast_targets
+        planned = forecast_targets(spending_plan, monthly_spending_reference)
+        # Without tracked loans, a budgeted debt payment is a cash outflow;
+        # tracked loans are handled once by the amortization engine below.
+        if not loan_accounts:
+            planned['Debt payment'] = spending_plan.amounts['debt']
+        else:
+            planned['Debt payment'] = 0.0
+        desired_income = spending_plan.amounts['income']
+        if monthly_income_reference > 0:
+            income_factor *= desired_income / monthly_income_reference
+        else:
+            base_flow[1:] += desired_income * income_factor / 30.44
+        for cat in sorted(set(planned) | set(monthly_spending_reference)):
+            target = planned.get(cat, 0.0)
+            reference = monthly_spending_reference.get(cat, 0.0)
+            adjustment = scenario.category_multipliers.get(cat, 1.0)
+            if reference > 0:
+                category_factors[cat] = adjustment * target / reference
+            else:
+                category_factors[cat] = 0.0
+                base_flow[1:] -= target * adjustment / 30.44
+        monthly_income_reference = desired_income
+        monthly_spending_reference = planned
+        if spending_plan.remaining(store.get_setting('plan_surplus') or 0) < -.005:
+            warnings.append('The saved monthly Plan allocates more than its income. '
+                            'Goal allocations are intentions, not evidence that the cash is available.')
+
+    # ---- 1. deterministic recurring flows ------------------------------
+    monthly_net = 0.0
+    for it in flow_items:
+        factor = income_factor if it.kind == 'income' else category_factors.get(
+            categorize(it.name, it.amount), 1.0)
+        amt = it.amount * factor
+        monthly_net += amt * (30.44 / _cad_days(it))
+        for d in occurrences(it, today, end):
+            base_flow[idx(d)] += amt
+            if abs(amt) > _EPS:
+                source = 'loan' if it.kind == 'loan_payment' else 'recurring'
+                scheduled.append(ScheduledFlow(it.name, d, amt, source, item_id=it.id))
 
     # ---- 2. loans -------------------------------------------------------
     loan_daily_total = np.zeros(n)
@@ -617,7 +673,13 @@ def run_forecast(store: Store, horizon_days: int, n_paths: int,
         # saved allowance, order and allocation policy from Goals.
         required = tuple((f'loan:{l["acct"].id}', l['base']) for l in sim_loans)
         goal_plan = _goal_payment_plan(store, required, int(np.ceil(H / 28)) + 2)
+        if spending_plan is not None and spending_plan.amounts['debt'] + .005 < sum(l['base'] for l in sim_loans):
+            warnings.append('The Plan budgets less than the existing loan payments. '
+                            'The forecast keeps those loan obligations; revise the budget on Plan.')
         for l in sim_loans:
+            allocation = goal_plan.by_key(f'loan:{l["acct"].id}')
+            if allocation is not None:
+                l['base'] = allocation.target.required
             first = clamp_day(today.year, today.month, l['day'])
             if first <= today:
                 next_month = add_months(today.replace(day=1), 1)
@@ -634,6 +696,8 @@ def run_forecast(store: Store, horizon_days: int, n_paths: int,
                 pay = min(max(0.0, planned), l['bal'])
                 l['bal'] -= pay
                 base_flow[idx(when)] -= pay
+                if pay > _EPS:
+                    scheduled.append(ScheduledFlow(l['acct'].name, when, -pay, 'loan'))
                 l['events'].append((idx(when), l['bal']))
                 if l['bal'] <= _EPS:
                     l['payoff'] = when
@@ -664,6 +728,8 @@ def run_forecast(store: Store, horizon_days: int, n_paths: int,
                 l["bal"] -= pay
                 if pdate <= end:
                     base_flow[idx(pdate)] -= pay
+                    if pay > _EPS:
+                        scheduled.append(ScheduledFlow(l['acct'].name, pdate, -pay, 'loan'))
                     l["events"].append((idx(pdate), l["bal"]))
                 if l["bal"] <= _EPS and l["payoff"] is None:
                     l["payoff"] = pdate
@@ -692,6 +758,8 @@ def run_forecast(store: Store, horizon_days: int, n_paths: int,
     for ev in events:
         for when in event_occurrences(ev, today + timedelta(days=1), end):
             base_flow[idx(when)] += float(ev.amount)
+            scheduled.append(ScheduledFlow(ev.label, when, float(ev.amount), 'event',
+                                           event_id=getattr(ev, 'id', None)))
 
     # ---- 3. investments -------------------------------------------------
     inv_accounts = [a for a in accounts if a.type == AccountType.INVESTMENT]
@@ -705,8 +773,14 @@ def run_forecast(store: Store, horizon_days: int, n_paths: int,
     inv_det_daily = np.zeros(n)
     inv_paths_daily = np.zeros((n_paths, n))
     total_extra = scenario.extra_investing
+    observed_contributions = sum(max(0.0, a.monthly_contribution) for a in inv_accounts)
     for k, a in enumerate(inv_accounts):
-        contrib = a.monthly_contribution + (total_extra if k == 0 else 0.0)
+        planned_contrib = a.monthly_contribution
+        if spending_plan is not None:
+            share = (max(0.0, a.monthly_contribution) / observed_contributions
+                     if observed_contributions else float(k == 0))
+            planned_contrib = spending_plan.amounts['investing'] * share
+        contrib = planned_contrib + (total_extra if k == 0 else 0.0)
         V0 = float(a.balance)
         mu, sig = a.annual_return, a.volatility
         # deterministic (sigma = 0)
@@ -730,6 +804,8 @@ def run_forecast(store: Store, horizon_days: int, n_paths: int,
         # debit contributions from cash
         for j in range(n_ev):
             base_flow[ev_idx[j]] -= contrib
+            if abs(contrib) > _EPS:
+                scheduled.append(ScheduledFlow(f'{a.name} contribution', firsts[j], -contrib, 'investment'))
         # step-expand month values onto the daily grid
         ptr = np.searchsorted(ev_idx, np.arange(n), side="right")  # 0..n_ev
         det_ext = np.concatenate(([V0], det_vals))
@@ -739,25 +815,21 @@ def run_forecast(store: Store, horizon_days: int, n_paths: int,
     if not inv_accounts and total_extra > 0:
         warnings.append("Extra investing is set but no investment account exists; "
                         "it was ignored.")
+    if not inv_accounts and spending_plan is not None and spending_plan.amounts['investing'] > 0:
+        warnings.append('The Plan includes investment contributions but no investment account '
+                        'exists. Add one on Accounts; these contributions were not applied.')
 
     # ---- 4. discretionary behavior (bootstrap) --------------------------
     # Every *known* pattern is withheld from the behavioral sample, not just the
     # active ones. Excluding only active items meant deactivating a pattern (or
     # marking it 'ignore') quietly readmitted its history as variable spending,
     # so the control had almost no effect on the forecast.
-    exclude = known_keys | {it.key for it in all_items}
-    W, irr_inc = store.cached(('forecast_weeks', today, history, frozenset(exclude)),
-        lambda: weekly_category_matrix(
-            tx, exclude_keys=exclude,
-            max_weeks=78 if history.mode == "auto" else None,
-            start_date=history.start(today),
-            end_date=today if history.mode != "auto" else None))
     n_weeks = int(np.ceil(H / 7))
     if len(W) >= 4:
         cats = list(W.columns)
-        mvec = np.array([scenario.category_multipliers.get(c, 1.0) for c in cats])
+        mvec = np.array([category_factors.get(c, 1.0) for c in cats])
         Wv = W.values
-        Iv = irr_inc.values * scenario.income_multiplier
+        Iv = irr_inc.values * income_factor
         # Weeks are drawn by recency, not uniformly. Sampling all of history
         # with equal probability assumes habits are stationary, and when they
         # are not it projects an average of the person you were and the person
@@ -767,11 +839,6 @@ def run_forecast(store: Store, horizon_days: int, n_paths: int,
         # reported a surplus. The two halves of the app now answer the question
         # the same way, with the same half-life.
         obs_net = Iv - Wv @ mvec
-        wts = _behaviour_weights(obs_net, seed=seed)
-        monthly_income_reference += float(np.dot(wts, irr_inc.values)) * (30.44 / 7)
-        for cat, amount in zip(cats, wts @ Wv):
-            monthly_spending_reference[cat] = (monthly_spending_reference.get(cat, 0.0)
-                                             + float(amount) * (30.44 / 7))
         pick = rng.choice(len(W), size=(n_paths, n_weeks), p=wts)
         net_w = Iv[pick] - Wv[pick] @ mvec                     # (paths, weeks)
         # Parameter uncertainty, not just sampling noise. Resampling weeks
@@ -883,6 +950,8 @@ def run_forecast(store: Store, horizon_days: int, n_paths: int,
         history_last=W.index[-1].end_time.date() if len(W) else None,
         recurring_refitted=history.refit_recurring,
         goal_plan_budget=goal_plan.surplus if goal_plan is not None else None,
+        spending_plan_applied=spending_plan is not None,
+        scheduled=sorted(scheduled, key=lambda flow: (flow.when, flow.amount)),
         monthly_income_reference=monthly_income_reference,
         monthly_spending_reference=monthly_spending_reference,
     )
@@ -944,6 +1013,15 @@ def scheduled_flows(store: Store, start: date, end: date,
     would suggest the two are equally addressable.
     """
     scenario = scenario or Scenario()
+    if scenario.follow_goal_plan:
+        # Use the engine's actual schedule, including budget scaling, planned
+        # loan extras, payoff caps and investment contributions. Reconstructing
+        # it separately from Accounts used to contradict the plotted cash dip.
+        horizon = (end - date.today()).days
+        if horizon <= 0:
+            return []
+        result = run_forecast(store, horizon, 1, scenario)
+        return [flow for flow in result.scheduled if start <= flow.when <= end]
     accounts = store.accounts()
     loans = {a.id: a for a in accounts if a.type == AccountType.LOAN}
     out: list[ScheduledFlow] = []

@@ -132,14 +132,14 @@ class OneOffEvent:
 
 @dataclass
 class Scenario:
-    """What-if knobs applied on top of observed behavior."""
+    """What-if knobs applied to observed behavior or the selected monthly Plan."""
     category_multipliers: dict[str, float] = field(default_factory=dict)  # 1.0 = as-is
     income_multiplier: float = 1.0
     extra_loan_payment: float = 0.0      # $/month toward highest-APR unpaid loan
     extra_investing: float = 0.0         # $/month additional contribution
     snowball: bool = True                # roll freed loan payments into next loan
     events: list = field(default_factory=list)   # list[OneOffEvent]
-    follow_goal_plan: bool = False      # apply the saved Goals funding ladder
+    follow_goal_plan: bool = False      # apply saved Plan budget and Goals ladder
 
     def is_baseline(self) -> bool:
         return (

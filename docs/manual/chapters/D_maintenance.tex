@@ -1,0 +1,51 @@
+\chapter{Maintaining the manual}\label{app:maintenance}
+\index{manual maintenance}\index{source baseline}
+\section{Keep a task-based source}
+The editable book lives under \file{docs/manual/}. Its main TeX file controls chapter order; individual chapters contain the task procedures and methods. Instructional figures are original TikZ or PGFPlots sources. The illustrated cover is retained separately with its reference description and generation prompt in \file{figures/cover-doug-v6-provenance.md}. The generated tables and plot data come from fictional temporary databases. The PDF is bundled with the application and opens through \ui{Help > User manual (PDF)}. It also remains independently readable.
+
+The maintenance objective is a usable description of the current behavior. When a control changes, update its procedure, expected result, and relevant recovery steps together. When a calculation changes, update its explanation and worked evidence as well as its displayed label. A changed screenshot alone cannot establish that the described workflow still works.
+
+\section{Use the source map}
+\file{source_map.json} connects chapters with their main implementation and verification files. It is an impact map, not a claim that the named tests were run while preparing this document. The chapter-end references let a maintainer locate the inspected behavior without requiring users to read source code to follow the task.
+
+The generated manifest records SHA-256 hashes for the inspected Python package and selected supporting files. The generator copies application Python files to a temporary snapshot before importing them, then records the exact bytes used. The recorded commit is useful context, but cannot identify uncommitted changes. If files change during copying, the manifest identifies the individual copied bytes; it does not certify that the entire working tree was one atomic revision.
+
+\section{Build and check an edition}
+From \file{docs/manual}, with the application's Python dependencies and a suitable TeX installation available, run:
+
+\begin{lstlisting}
+make                  # examples, PDF, and document checks
+make check-source     # compare current app files with the manifest
+\end{lstlisting}
+
+The example generator opens temporary fictional databases only. It publishes new generated evidence after its assertions finish and retains the diagnostic comparison even when that comparison identifies a model limitation. A failed assertion leaves the previous generated directory in place. Read a failure instead of deleting the assertion to obtain a successful build.
+
+For editing prose without fresh application execution, use \code{make pdf}. The retained example date and manifest then remain the calculation baseline. \code{make check} checks chapter structure and references, retained output hashes, generator identity, source-map paths, and the PDF build log. \code{make clean} removes build intermediates while retaining the PDF and evidence. The README provides interpreter selection and direct commands for environments without Make.
+
+\section{Review what the checks cannot establish}
+\begin{enumerate}
+\item Read every changed task against the actual interface and expected result, using fictional data when practical.
+\item Check navigation labels, Simple and Everything visibility, both appearances (Dark and Light), dialog action names, signs, date conventions, and save-versus-draft behavior.
+\item Inspect the cover, contents, tables, equations, figures, links, and page breaks in the generated PDF at readable scale.
+\item Review diagnostic qualifications separately from pass assertions. Do not report a known discrepancy as an all-clear result.
+\item Run the relevant application checks separately when needed. Document build checks do not certify the GUI or replace repository verification.
+\item Run the source-drift check again after concurrent work settles. Review changed files through the source map and regenerate evidence only when the chapter descriptions are consistent with the new behavior.
+\end{enumerate}
+
+A source-drift report means that the current bytes differ from the recorded baseline. It does not automatically diagnose a documentation error, and a clean report does not establish that every sentence is correct. New or removed Python files are reported as well as changed ones.
+
+\section{Record revisions and preserve reproducibility}
+Change \code{ManualRevision} in the main TeX file and add a dated entry to the front-matter revision table. Record substantive behavior or scope changes in terms a user can recognize. Keep the application version separate from the manual revision. If the preparation date changes, update the cover date explicitly rather than allowing a PDF-only rebuild to imply a new review.
+
+Retain \file{generated/provenance.json}, \file{generated/results.json}, the data and table files, and the corresponding document sources with an edition. The manifest records Python and dependency versions, generation date, generator hash, application source hashes, and output hashes. A seed alone is insufficient to reproduce a run after its inputs, date, implementation, or numerical dependencies change.
+
+The first edition uses stable diagrams instead of screenshots because interface review was active. If screenshots are added later, use fictional records, identify the relevant edition, and crop them to the task being explained. Avoid including financial data, private paths, or writing-style reference documents in distributed artifacts.
+
+\section{Bundle the matching edition}
+The Help action resolves \file{docs/manual/financing_with_doug_manual.pdf} through the application's shared resource lookup. This supports both a source checkout and a frozen installation. The PDF opens in the system's reader; a missing file or a failed launch produces a visible explanation.
+
+The packaging specification includes the PDF through its \file{docs/} data files and stops if it is missing. Rebuild the document before packaging a revised edition. TeX sources and a Python example run are not required when a user opens the retained PDF. Its title page identifies the application version and manual revision, which should be reviewed together when preparing a release.
+
+A successful local PDF or application build does not publish a release or update an installed copy. Ship the rebuilt PDF with the corresponding application package so that an installed user receives the intended edition.
+
+Keep the manual readable independently of the program. Users should be able to find a task, understand its expected result, and investigate an unexpected amount without first learning implementation details. The calculation and maintenance parts provide the deeper explanation when it is needed.

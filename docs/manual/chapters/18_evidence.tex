@@ -1,0 +1,37 @@
+\chapter{Evidence and interpretation}\label{ch:evidence}
+\index{verification}\index{coverage}\index{permutation test}\index{bootstrap interval}
+\section{Distinguish four kinds of evidence}
+A bank statement supplies observations for reconciliation. A deterministic arithmetic check establishes whether specified records satisfy an equation. A software check establishes particular behavior for its tested inputs. A later forecast comparison provides evidence about agreement with subsequently reconstructed history. These forms of evidence answer related but different questions.
+
+For example, a correct opening balance does not establish complete future spending. A reproducible Monte Carlo run can reproducibly apply an unsuitable assumption. A clear interface can make an incomplete ledger easier to inspect without making it complete. The manual keeps those boundaries explicit so that a result can be checked at the appropriate level.
+
+\section{Retain forecasts before evaluating them}
+A saved checkpoint preserves the earlier claim. Later records provide the comparison history. Evaluation requires a meaningful overlapping interval, correctly dated observations, and an understanding of which accounts and flows were included. A corrected anchor can alter reconstructed history even when the earlier checkpoint remains unchanged.
+
+Retrospective checkpoints fit at an earlier boundary and can help inspect an existing ledger. They must remain identified as reconstructed. Excluding later rows and refitting patterns at that boundary reduces look-ahead, but it does not turn a retrospective run into a forecast actually saved at the time.
+
+\section{Interpret coverage descriptively}
+Track record can report the fraction of evaluated dates whose reconstructed values lie within an earlier pointwise band. Adjacent daily balances are dependent, and each comparison comes from a particular household interval. Coverage over those dates is therefore descriptive evidence, not a collection of independent trials establishing general calibration.
+
+Read coverage together with the median error, direction of misses, follow-up length, and source records. A narrow band that repeatedly misses, a wide band that covers nearly everything, and an opening offset caused by a missing liability require different investigations. The opening credit-card probe in Chapter~\ref{ch:forecast-methods} is an example of an implementation qualification that should not be interpreted as an investment outcome.
+
+\section{Compare weekly spending before and after}
+For eligible discretionary weekly spending, the reported change is
+\[
+ \widehat{\Delta}=\overline{x}_{\mathrm{after}}-
+ \overline{x}_{\mathrm{before}}.
+\]
+A negative value means lower spending in the after sample. At least four complete weeks are required on each side. The inspected implementation uses 20,000 random permutations of the pooled weekly labels, compares the absolute mean difference with the observed absolute difference, and uses a 0.05 significance threshold.
+
+The interpretation requires exchangeability under the null comparison. Strong temporal dependence, seasonality, changed recording practices, or unequal distribution shapes can complicate that premise. A label-permutation comparison of means should not be described as automatically valid for every combination of unequal variances and sample sizes.
+
+A separate 4,000-replicate bootstrap resamples within each period and takes the 2.5th and 97.5th percentiles of the mean difference as a nominal 95\% interval. This is an interval for the sampled comparison under its assumptions, not a bound on every future week's spending. The default random seed is 11. The dollar effect and interval usually matter more to a budgeting decision than the threshold alone.
+
+An inconclusive threshold result does not establish zero change. A statistically distinguishable change does not establish that a goal, a button, or the application caused it. Category changes are descriptive contributions rather than a family of independently confirmed causal effects. Review the period definitions and records before interpreting the wording of a result more strongly than its method supports.
+
+\section{Understand what the manual checks}
+The retained example checks verify dated-anchor arithmetic, conservation of the four-account allocation, custom-share normalization, purchase-progress behavior, absence of an automatic ledger posting from goal activity, budget arithmetic, the score's worked anchor calculation, forecast opening cash, ordered percentiles, saved-plan application, and seeded repetition. The diagnostic credit-card comparison is retained separately from those pass assertions.
+
+These examples do not replace the application's test suite or user review of statements. The document checker verifies references, included source files, generated artifact hashes, and PDF build results. Its optional source-drift check identifies application files changed since the examples were built. None of those document checks opens a real database or constitutes validation of future financial outcomes.
+
+\source{finfore/progress.py; finfore/history.py; docs/manual/examples/build_examples.py; docs/manual/examples/check_manual.py}

@@ -1,0 +1,65 @@
+\chapter{Quick reference}\label{app:reference}
+\index{CSV format}\index{keyboard shortcuts}
+\section{Minimum records for a useful first forecast}
+\begin{tabularx}{\textwidth}{@{}p{0.26\textwidth}Y@{}}
+\toprule Record & Supply and verify\\\midrule
+Cash account & Type, observed posted closing balance, observation date, and a complete relevant transaction interval.\\
+Credit card & Current debt or credit, posting dates, purchases, and payment transfers. Check the opening net-worth qualification in Chapter~\ref{ch:forecast-methods}.\\
+Loan & Current amount owed, APR, regular payment, payment day, and any recurring-payment link.\\
+Investment & Current observed value, date, annual return and volatility assumptions, and monthly contribution.\\
+Recurring item & Amount per occurrence, cadence, dates, active status, account assignment, and loan link if applicable.\\
+Saved budget & Explicit intended amounts, shared goal allowance, and evidence that the saved version is the one being tested.\\
+\bottomrule
+\end{tabularx}
+
+\section{Canonical signed transaction example}
+The importer maps bank-specific headings to ledger meanings. The following is a small example of a signed export, not a universal required bank schema. Positive amounts are deposits and negative amounts are withdrawals.
+
+\begin{lstlisting}
+Posting Date,Transaction Date,Description,Amount
+2026-01-02,2026-01-02,PAYROLL,3000.00
+2026-01-05,2026-01-03,GROCERIES,-72.48
+2026-01-06,2026-01-04,STORE REFUND,18.00
+\end{lstlisting}
+
+The January 3 purchase belongs to the January 5 posted ledger in this example. Map both date fields when available. Check the preview's date interpretation, especially for a date such as 03/04/2026. Do not infer day-first or month-first from an ambiguous row alone.
+
+Supported amount representations include a signed amount; a signed amount with its direction reversed; separate debit and credit columns; and an amount paired with an income/outflow indicator. Choose the mode that makes recognizable deposits positive and purchases negative in the preview. Currency symbols, grouping separators, parentheses, and other bank formatting still require successful parsing and review.
+
+Loan and investment imports instead use dated balances or supported activity around an anchor. A transaction export without valuations cannot establish daily investment market value. The selected account type determines the import route.
+
+\section{Signs in forms and stored records}
+\begin{tabularx}{\textwidth}{@{}p{0.31\textwidth}Y@{}}
+\toprule Item & Convention\\\midrule
+Transaction amount & Positive entering the account; negative leaving it.\\
+Card amount owed in the form & Normally entered as a positive debt; represented internally as a negative signed card balance.\\
+Loan amount owed & Positive magnitude of debt.\\
+Budget expense & Positive planned cost; the budget equation subtracts it.\\
+What-if event & Positive income or negative cost per occurrence.\\
+Custom goal share & Nonnegative relative weight; not dollars and not cents.\\
+Annual return, volatility, APR & Percentage inputs in the interface; review the displayed percentage before saving.\\
+\bottomrule
+\end{tabularx}
+
+\section{Actions that are easy to confuse}
+\begin{tabularx}{\textwidth}{@{}p{0.28\textwidth}Y@{}}
+\toprule Action & Result\\\midrule
+Reset axes & Restore the chart's default visible extent.\\
+Reset scenario & Restore temporary scenario controls; saved events are managed separately.\\
+Reload saved plan & Replace unsaved budget-row edits with the saved plan.\\
+Use Plan / history & Restore automatic selection of the Goals allowance.\\
+Locate savings & Assign already-recorded savings to an account without adding progress.\\
+Set aside money & Add a new earmark within existing holdings.\\
+Spend toward goal & Reduce savings held and retain the amount as completed purchase progress.\\
+Release savings & Reduce both savings held and progress.\\
+Update balance & Record an observed amount and date; it is not a missing bank posting.\\
+Back up data & Save a restorable database copy; a checkpoint is a different record.\\
+\bottomrule
+\end{tabularx}
+
+\section{Keyboard and location reference}
+F1 opens Getting started. Ctrl+Z invokes Undo; supported redo alternatives include Ctrl+Y and Ctrl+Shift+Z. Native menu shortcuts may differ by platform. Tab and Shift+Tab move among controls, while arrow keys navigate suitable lists. Escape leaves a dialog or keeps an item when its confirmation uses that default. Check the visible selected row before applying a row action.
+
+The default local database is \file{~/.ledgerline/ledgerline.db}. The current path is shown in the status bar; a source launch can select another path with \code{--db}. Separate view preferences are managed by the interface and are not a second financial ledger. A demonstration database remains distinct from the user's working database.
+
+\source{finfore/ingest.py; finfore/models.py; finfore/ui/main_window.py; finfore/ui/widgets.py; run.py}

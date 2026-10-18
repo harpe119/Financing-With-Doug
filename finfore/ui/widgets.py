@@ -4,11 +4,11 @@ from __future__ import annotations
 from decimal import Decimal, InvalidOperation
 from math import isfinite
 
-from PyQt6.QtCore import QEvent, QPoint, QRect, QRectF, QSize, Qt, QTimer
-from PyQt6.QtGui import QAction, QColor, QFont, QPainter, QPen, QValidator
-from PyQt6.QtWidgets import (QCheckBox, QDialog, QDoubleSpinBox, QFrame,
+from PyQt6.QtCore import QEvent, QPoint, QPointF, QRect, QRectF, QSize, Qt, QTimer
+from PyQt6.QtGui import QAction, QColor, QFont, QMouseEvent, QPainter, QPen, QValidator
+from PyQt6.QtWidgets import (QCheckBox, QDateEdit, QDialog, QDoubleSpinBox, QFrame,
                              QHBoxLayout, QLabel, QLayout, QMenu, QPushButton,
-                             QSizePolicy, QSpinBox, QSplitter, QTextBrowser,
+                             QScrollArea, QSizePolicy, QSpinBox, QSplitter, QTextBrowser,
                              QStyle, QStyleOptionButton, QStylePainter,
                              QVBoxLayout, QWidget)
 
@@ -106,6 +106,11 @@ class WrappedCheckBox(QCheckBox):
         inset = (style.pixelMetric(QStyle.PixelMetric.PM_IndicatorWidth, None, self)
                  + style.pixelMetric(QStyle.PixelMetric.PM_CheckBoxLabelSpacing, None, self))
         self._caption_layout.setContentsMargins(inset + 2, 2, 2, 2)
+        # A layout asks this layout, not heightForWidth below, how tall the box
+        # is, so the caption carries the indicator's height as its floor. Under the
+        # app stylesheet a one-line caption was three pixels shorter than the box.
+        self.caption.setMinimumHeight(
+            style.pixelMetric(QStyle.PixelMetric.PM_IndicatorHeight, None, self))
 
     def sizeHint(self) -> QSize:
         size = self._caption_layout.sizeHint()
@@ -135,6 +140,15 @@ class WrappedCheckBox(QCheckBox):
                 (QEvent.Type.StyleChange, QEvent.Type.FontChange)):
             self._update_caption_margin()
             self.updateGeometry()
+
+    def event(self, event) -> bool:
+        handled = super().event(event)
+        # The first polish under the app stylesheet sends no StyleChange, so the
+        # indicator's styled size would otherwise never reach the caption margins.
+        if event.type() == QEvent.Type.Polish and hasattr(self, "_caption_layout"):
+            self._update_caption_margin()
+            self.updateGeometry()
+        return handled
 
 
 class _SelectOnClickMixin:
@@ -299,6 +313,56 @@ class IntSpinBox(_SelectOnClickMixin, QSpinBox):
     pass
 
 
+class PopupDateEdit(QDateEdit):
+    """A date field whose calendar can be found and opened.
+
+    A plain QDateEdit with a calendar popup opens it only from a sixteen-pixel
+    arrow: clicking the date itself does nothing, and no key opens it at all, so
+    the calendar is out of reach for anyone not aiming a mouse at that arrow.
+    Here the whole field opens it, and so do Alt+Down and F4, the keys a combo
+    box uses. The popup's text is larger, so its days are easier to hit.
+
+    Qt has no public call to show the popup. It opens from a press on the arrow
+    sub-control, so ``open_calendar`` hands the base class one at that spot.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setCalendarPopup(True)
+        # The text area is a line edit with its own mouse handling, which is
+        # where a click on the date lands.
+        self.lineEdit().installEventFilter(self)
+        self.lineEdit().setCursor(Qt.CursorShape.PointingHandCursor)
+        self.calendarWidget().setStyleSheet(
+            "QCalendarWidget QAbstractItemView, QCalendarWidget QToolButton "
+            "{ font-size: 15px; } QCalendarWidget QToolButton { padding: 6px 10px; }")
+
+    def open_calendar(self) -> None:
+        pos = QPointF(self.width() - 8, self.height() / 2)
+        QDateEdit.mousePressEvent(self, QMouseEvent(
+            QEvent.Type.MouseButtonPress, pos, self.mapToGlobal(pos),
+            Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier))
+
+    def eventFilter(self, watched, event) -> bool:      # noqa: N802
+        if (watched is self.lineEdit() and self.isEnabled()
+                and event.type() == QEvent.Type.MouseButtonPress
+                and event.button() == Qt.MouseButton.LeftButton):
+            self.setFocus()
+            self.open_calendar()
+            return True
+        return super().eventFilter(watched, event)
+
+    def keyPressEvent(self, event) -> None:             # noqa: N802
+        alt_down = (event.key() == Qt.Key.Key_Down
+                    and event.modifiers() & Qt.KeyboardModifier.AltModifier)
+        if alt_down or event.key() == Qt.Key.Key_F4:
+            self.open_calendar()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+
 class DonutChart(QWidget):
     """A donut/pie chart drawn with QPainter (no plotting dependency).
 
@@ -340,7 +404,7 @@ class DonutChart(QWidget):
             start = 90 * 16                      # start at 12 o'clock
             for _lbl, val, col in self._slices:
                 span = -int(round(val / total * 360 * 16))
-                p.setBrush(QColor(col))
+                p.setBrush(theme.qcolor(col))
                 p.setPen(QPen(QColor(theme.BG), 2))
                 p.drawPie(outer, start, span)
                 start += span
@@ -537,6 +601,23 @@ def pane(*widgets, spacing: int = 12, margins=(0, 0, 0, 0)) -> QWidget:
     return w
 
 
+def tidy_scroll_focus(scroll: QScrollArea, name: str) -> None:
+    """Stop a page's scroll area being an unnamed, ringless Tab stop of its own.
+
+    A scroll area takes Tab focus so that a keyboard can scroll it, but a page
+    full of buttons and fields already does that: Tab to a control and the area
+    scrolls to show it. The area was a stop on top of that, with nothing drawn
+    to say where focus was. It keeps its stop only when there is nothing inside
+    to Tab to, and is named either way.
+    """
+    scroll.setAccessibleName(name)
+    content = scroll.widget()
+    if content is None:
+        return
+    if any(w.focusPolicy() != Qt.FocusPolicy.NoFocus for w in content.findChildren(QWidget)):
+        scroll.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+
+
 def hsep() -> QFrame:
     f = QFrame()
     f.setObjectName("hsep")
@@ -556,6 +637,19 @@ def form_row(form, text: str, widget) -> None:
     label = QLabel(text)
     label.setBuddy(widget)
     form.addRow(label, widget)
+
+
+class WrappingLabel(QLabel):
+    """Wrap long identifiers without forcing their parent wider than the page."""
+
+    def __init__(self, text='', parent=None):
+        super().__init__(text, parent)
+        self.setWordWrap(True)
+
+    def minimumSizeHint(self):
+        size = super().minimumSizeHint()
+        size.setWidth(0)
+        return size
 
 
 def hint(text: str) -> QLabel:
@@ -765,7 +859,7 @@ class InfoDialog(QDialog):
         lay.setSpacing(9)
 
         head = QLabel(title)
-        head.setStyleSheet("font-size: 17px; font-weight: 600;")
+        head.setObjectName("headline")
         head.setWordWrap(True)
         lay.addWidget(head)
         if subtitle:
@@ -800,6 +894,46 @@ class InfoDialog(QDialog):
         close.clicked.connect(self.accept)
         row.addWidget(close)
         lay.addLayout(row)
+
+
+def info_opener(label: str, provider, anchor, subtitle: str = ""):
+    """A callable that opens an :class:`InfoDialog` for ``provider``.
+
+    ``provider`` returns ``(title, html)`` at call time, so the window describes
+    the numbers on screen now. A provider that fails shows that in the window
+    instead of taking the page down with it.
+    """
+    def _open() -> None:
+        try:
+            title, html = provider()
+        except Exception as e:                       # noqa: BLE001
+            title, html = label, f"<p>Nothing to show yet — {e}</p>"
+        InfoDialog(title, html, anchor.window(), subtitle=subtitle).exec()
+    return _open
+
+
+def explain_button(entries, label: str = "Explain",
+                   tooltip: str = "Videos and written explanations for this page") -> QPushButton:
+    """One small button whose menu holds all of a page's explanations.
+
+    A page used to carry two or three separate buttons (a video, a written
+    explanation, what a checkpoint is). They answer the same question — how
+    does this work — so they share one control. ``entries`` are
+    ``(key, text, callback, tooltip)``; the actions are kept on
+    ``button.actions_by_key`` so a caller can disable one.
+    """
+    btn = QPushButton(label)
+    btn.setObjectName("small")
+    btn.setToolTip(tooltip)
+    menu = QMenu(btn)
+    btn.setMenu(menu)
+    btn.actions_by_key = {}
+    for key, text, callback, tip in entries:
+        action = menu.addAction(text)
+        action.setToolTip(tip)
+        action.triggered.connect(lambda _checked=False, cb=callback: cb())
+        btn.actions_by_key[key] = action
+    return btn
 
 
 def info_button(label: str, provider, tooltip: str = "",

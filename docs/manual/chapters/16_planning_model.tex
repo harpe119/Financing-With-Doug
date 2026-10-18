@@ -1,0 +1,52 @@
+\chapter{Goal allocation and the budget model}\label{ch:planning-methods}
+\index{allocation policy}\index{rollover}\index{goal progress}
+\section{Keep holdings, claims, and progress distinct}
+For savings goal \(g\), let \(s_g\) be money still held and \(p_g\) purchases recorded toward it. With target \(T_g\), displayed completion uses
+\[
+ c_g=\min\left(1,\frac{s_g+p_g}{T_g}\right)
+\]
+for a positive target. Locating an unassigned saved amount changes its account attribution without changing \(s_g\). A purchase moves an amount from \(s_g\) to \(p_g\); a release reduces \(s_g\) without increasing \(p_g\).
+
+Account holdings supply the assets. Earmarks are claims within them. Funding capacity therefore subtracts existing goal claims when determining what remains unassigned. It also respects each selected account's remaining capacity. The household check includes investment values and card liabilities; it is broader than the cash immediately available for a bill. A market decline or later transaction can create an overfunding warning even if an earlier contribution fit the recorded balances.
+
+Cash and net-worth milestones use separate household pots. Within each kind, higher-priority milestones consume progress before lower-priority milestones. Savings earmarks are not deducted from those milestone pots. Consequently, a cash milestone and a savings goal can refer to overlapping holdings. Adding their displayed progress would double count that overlap.
+
+\section{Build the monthly room}
+The budget calculation is Equation~\eqref{eq:budget}. Detected needs exclude the recorded debt component so that debt can be displayed separately. The detected debt amount is the larger of recorded debt spending and present regular loan commitments, rather than their sum. A user override replaces a detected line.
+
+Individual category overrides replace their signed weighted contributions inside the relevant group. The group is then floored at zero. A group-total override takes precedence over component overrides. This precedence keeps an edited category from being added above an already chosen total.
+
+The amount available before goals is \(I-(E+D+W+G+U+Q+V)\). The chosen allowance \(A\) is an independent decision. Automatic allowance uses the saved plan when available, or the historical personal surplus otherwise, floored at zero. A manually chosen allowance remains manual until automatic use is restored. The low-level allocation function also accepts an explicit pool; the interface supplies the resolved allowance. Saving a setting is not evidence that this amount is held today.
+
+\section{Divide the extra pool}
+Let \(P\) be the current month's discretionary pool and \(L\) the ordered unfinished targets. Regular loan obligations are outside \(P\).
+
+\begin{description}
+\item[Focus.] Offer the available pool to the first unfinished target.
+\item[Weighted.] Give target rank \(j\) weight \(1/j\), then normalize over unfinished targets:
+\[a_j=P\frac{1/j}{\sum_{k\in L}(1/k)}.\]
+\item[Custom.] Normalize nonnegative relative shares \(u_j\):
+\[a_j=P\frac{u_j}{\sum_{k\in L}u_k}.\]
+If all remaining shares are zero, use the first unfinished target.
+\end{description}
+
+An allocation is capped at the target's remaining need. Any amount left after a target finishes is redistributed among unfinished targets within that month. The first month's displayed extra allocation can therefore differ from its uncapped starting share. Multiplying all custom shares by the same positive constant leaves their normalized allocation unchanged.
+
+\section{Pay loans and release their commitments}
+For a loan with balance owed \(D_m\), annual percentage rate \(i\), and regular payment \(q\), the monthly ladder first applies interest and the regular payment:
+\[
+ D_m^{*}=D_m(1+i/12),\qquad
+ q_m=\min(q,D_m^{*}).
+\]
+Allocated extras then reduce the remaining debt. If the last regular payment requires less than \(q\), its unused part is available in that month. After payoff, the former regular commitment enters later months' pool. Completing a savings target releases its share for other targets; it does not create an additional recurring income stream.
+
+When a saved budget's debt line exceeds the ordinary loan minimums, the model can distribute the additional committed debt amount among loans before allocating the discretionary pool. The resulting required schedule remains part of the budgeted debt commitment. It should not also be entered as an independent extra-loan assumption.
+
+A regular payment below monthly interest can leave debt growing unless extras make up the difference. A missing payment or a conflicting linked recurring payment is therefore a model input to resolve, not a reason to assume rapid repayment. The ladder uses a monthly APR model; lender-specific daily accrual, fees, rate changes, and exact statement conventions require separate evidence.
+
+\section{Interpret completion dates}
+The deterministic ladder starts in the current month and searches up to 360 months by default. Its dates assume that the allowance, regular commitments, priority, and terms continue as modeled. A target already complete is distinguished from an unfinished target outside the horizon. ``Not reached within 30 years'' is a bounded model result, not proof that a target can never be reached.
+
+The schedule does not post future contributions to the saved goal history. Nor does it automatically buy the item when its goal completes. Forecast uses the loan schedule and, when enabled, the saved budget assumptions; actual savings contributions, account transfers, and purchases still need their corresponding records. This distinction keeps an intended allocation from being mistaken for an observed transaction.
+
+\source{finfore/goals.py; finfore/funding.py; finfore/spending_plan.py; finfore/store.py}

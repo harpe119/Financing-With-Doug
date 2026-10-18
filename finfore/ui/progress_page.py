@@ -18,15 +18,16 @@ from PyQt6.QtWidgets import (QComboBox, QHBoxLayout, QHeaderView, QLabel,
 from ..progress import (ALPHA, MIN_WEEKS, N_BOOTSTRAP, N_PERMUTATIONS, capture,
                         category_shifts, check_path, score_move,
                         significance_since)
+from ..data_quality import data_freshness
 from ..store import Store
-from ..util import fmt_money
+from ..util import fmt_money, fmt_day
 from . import charts, theme, video
-from .widgets import (Card, FlowLayout, StatCard, hint, hsplit, info_button, nerd_button,
-                      vsplit)
+from .widgets import (Card, FlowLayout, NERD_LABEL, NERD_TIP, StatCard, explain_button, hint,
+                      hsplit, info_opener, vsplit)
 
 _STATUS_COLOR = {
     "ahead": theme.ACCENT, "on-path": theme.BLUE,
-    "behind": theme.AMBER, "broken": theme.PURPLE,
+    "behind": theme.AMBER, "broken": theme.AMBER,
 }
 
 # Two words on this page are jargon nobody arrives already knowing, and both of
@@ -88,6 +89,7 @@ class ProgressPage(QWidget):
         bar = FlowLayout(controls, spacing=6)
         bar.addWidget(QLabel("Compare against"))
         self.pick = QComboBox()
+        self.pick.setAccessibleName("Compare against")
         self.pick.setMinimumWidth(220)
         self.pick.setToolTip("Which past checkpoint everything on this page is "
                              "measured against")
@@ -108,23 +110,24 @@ class ProgressPage(QWidget):
         self.fill_btn.clicked.connect(self._backfill)
         bar.addWidget(self.fill_btn)
         self.clear_btn = QPushButton("Clear checkpoints…")
-        self.clear_btn.setObjectName("danger")
+        self.clear_btn.setObjectName("dangerSmall")
         self.clear_btn.setToolTip(
             "Empty this page and start it over. Only the snapshots go — your "
             "accounts, transactions, goals and imported rows are untouched.")
         self.clear_btn.clicked.connect(self._clear)
         bar.addWidget(self.clear_btn)
-        bar.addWidget(info_button(
-            "What is a checkpoint?",
-            lambda: ("Checkpoints, and what this page compares", _WHAT_IS_THIS),
-            tooltip="What a checkpoint is, what reconstructing history does, "
-                    "and what neither of them touches"))
-        self.video_btn = QPushButton("Watch explanation")
-        self.video_btn.setObjectName("small")
-        self.video_btn.setToolTip("Watch a silent visual explanation of checkpoints, forecast accuracy, and spending changes.")
-        self.video_btn.clicked.connect(lambda: video.play(self, kind="progress"))
-        bar.addWidget(self.video_btn)
-        bar.addWidget(nerd_button(self._nerd_panel))
+        # Three explanations, one control: what a checkpoint is, a short silent
+        # video, and the statistics behind the page.
+        self.explain_btn = explain_button([
+            ("checkpoint", "What is a checkpoint?",
+             info_opener("What is a checkpoint?",
+                         lambda: ("Checkpoints, and what this page compares", _WHAT_IS_THIS), self),
+             "What a checkpoint is, what reconstructing history does, and what neither of them touches"),
+            ("video", "Watch the video", lambda: video.play(self, kind="progress"),
+             "Watch a silent visual explanation of checkpoints, forecast accuracy, and spending changes."),
+            ("how", NERD_LABEL, info_opener(NERD_LABEL, self._nerd_panel, self), NERD_TIP)])
+        self.video_action = self.explain_btn.actions_by_key["video"]
+        bar.addWidget(self.explain_btn)
         root.addWidget(controls)
 
         # Always on, not just when the page is empty. The buttons above it are
@@ -147,7 +150,7 @@ class ProgressPage(QWidget):
         cards.setSpacing(12)
         self.card_score = StatCard("Habits score")
         self.card_path = StatCard("Against the old projection")
-        self.card_spend = StatCard("Discretionary spending")
+        self.card_spend = StatCard("Spending on wants")
         self.card_worth = StatCard("Net worth")
         for c in (self.card_score, self.card_path, self.card_spend,
                   self.card_worth):
@@ -157,7 +160,7 @@ class ProgressPage(QWidget):
         # --- projection vs reality ---
         path_card = Card("Earlier forecast and recorded balances")
         self.plot = charts.new_plot(legend=True)
-        self.plot.setMinimumHeight(150)
+        self.plot.setMinimumHeight(150 + charts.AXIS_ALLOWANCE)
         path_card.body.addWidget(self.plot)
         self.path_note = hint("")
         self.path_note.setWordWrap(True)
@@ -179,12 +182,16 @@ class ProgressPage(QWidget):
         # --- score history + checkpoint table ---
         hist_card = Card("Score at every checkpoint")
         self.plot_score = charts.new_plot(money_left=False, legend=False)
-        self.plot_score.setMinimumHeight(120)
+        self.plot_score.setMinimumHeight(120 + charts.AXIS_ALLOWANCE)
         hist_card.body.addWidget(self.plot_score)
 
         table_card = Card("Checkpoints")
         self.table = QTableWidget(0, len(self.COLS))
         self.table.setHorizontalHeaderLabels(self.COLS)
+        self.table.setAccessibleName("Checkpoints")
+        # Tab moves on to the next control; the arrow keys move between cells. Left
+        # on, Tab walked every cell and never left the table.
+        self.table.setTabKeyNavigation(False)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.setAlternatingRowColors(True)
@@ -233,7 +240,7 @@ class ProgressPage(QWidget):
         # Everything except the newest: comparing the latest against itself
         # would report a change of exactly zero and mean nothing.
         for cp in reversed(self._cps[:-1]):
-            label = cp.when.strftime("%d %b %Y")
+            label = fmt_day(cp.when)
             if cp.label:
                 label += f" · {cp.label}"
             self.pick.addItem(label, cp.id)
@@ -449,7 +456,7 @@ class ProgressPage(QWidget):
             rows += [
                 "<h3>Was the old forecast calibrated?</h3>",
                 f"<p>Scored against the fan stored on "
-                f"{chk.made_on:%d %b %Y}, over {chk.days_elapsed} days "
+                f"{fmt_day(chk.made_on)}, over {chk.days_elapsed} days "
                 f"({chk.n_points} daily points).</p><table>"
                 f"<tr><th>Inside P10–P90</th>"
                 f"<td>{chk.inside_80 * 100:.1f}% <span class='m'>"
@@ -490,7 +497,7 @@ class ProgressPage(QWidget):
         if old is not None:
             rows.append(f"<p class='m'>Everything above compares the newest "
                         f"checkpoint against the one taken "
-                        f"{old.when:%d %b %Y}"
+                        f"{fmt_day(old.when)}"
                         f"{' (' + old.label + ')' if old.label else ''}. "
                         f"Pick a different one in the toolbar and every figure "
                         f"here changes with it.</p>")
@@ -565,17 +572,37 @@ class ProgressPage(QWidget):
         p.addItem(pg.FillBetweenItem(pg.PlotDataItem(x, lo2), pg.PlotDataItem(x, hi2),
                                      brush=pg.mkBrush(theme.qcolor(theme.BLUE, 62))))
         charts.line(p, x, mid, theme.BLUE, 1.6,
-                    f"Projected {old.when.strftime('%b %Y')} · P50", dashed=True)
+                    f"Projected {old.when.strftime('%b %Y')} · middle outcome", dashed=True)
         act = actual.reindex(idx).to_numpy(dtype=float)
-        charts.line(p, x, act, theme.TEXT, 2.4, "What actually happened")
+        # The recorded balance is only as recent as the newest transaction. After
+        # that the line is the balance carried forward, not something that
+        # happened, so it is drawn dashed and named for what it is.
+        demo = bool(getattr(self.main, "demo_key", None))
+        fresh = data_freshness(self.store.transactions(), demo=demo)
+        carried = np.array([not demo and fresh.last is not None and d.date() > fresh.last
+                            for d in idx])
+        if carried.any():
+            first = int(np.argmax(carried))
+            joined = max(first - 1, 0)
+            recorded = act.copy()
+            recorded[carried] = np.nan
+            forward = np.full_like(act, np.nan)
+            forward[joined:] = act[joined:]
+            if not carried.all():
+                charts.line(p, x, recorded, theme.TEXT, 2.4, "What actually happened")
+            charts.line(p, x, forward, theme.TEXT, 1.6,
+                        f"Carried forward · no transactions since "
+                        f"{fresh.last:%b} {fresh.last.day}", dashed=True)
+        else:
+            charts.line(p, x, act, theme.TEXT, 2.4, "What actually happened")
         charts.zero_floor(p)
         charts.lock_view(p, float(x[0]), float(x[-1]), [act, lo, hi],
                          include_y=[0.0])
 
-        col = _STATUS_COLOR.get(chk.status, theme.MUTED)
+        col = theme.live(_STATUS_COLOR.get(chk.status, theme.MUTED))
         self.card_path.set_text(
             {"ahead": "Ahead", "on-path": "On path", "behind": "Behind",
-             "broken": "Off the map"}.get(chk.status, chk.status),
+             "broken": "Outside the range"}.get(chk.status, chk.status),
             color=col,
             sub=f"{fmt_money(chk.delta, signed=True)} against the middle of "
                 f"that forecast")
@@ -614,7 +641,7 @@ class ProgressPage(QWidget):
             self.sig_body.setText(
                 f"<div>Comparing two stretches of spending needs at least "
                 f"{MIN_WEEKS} full weeks on each side of "
-                f"{old.when.strftime('%d %b %Y')}, and there are "
+                f"{fmt_day(old.when)}, and there are "
                 f"{sig.n_before} and {sig.n_after}. Keep importing — this fills "
                 f"in on its own.</div>")
             return
@@ -639,7 +666,7 @@ class ProgressPage(QWidget):
         self.sig_head.setStyleSheet(f"color: {col};")
 
         span = (f"the {sig.n_before} weeks before "
-                f"{old.when.strftime('%d %b %Y')} against the {sig.n_after} "
+                f"{fmt_day(old.when)} against the {sig.n_after} "
                 f"weeks since")
         rows = [
             f"<div style='margin-bottom:7px'>{sig.note}</div>",
@@ -699,7 +726,7 @@ class ProgressPage(QWidget):
     def _render_table(self) -> None:
         self.table.setRowCount(len(self._cps))
         for r, cp in enumerate(reversed(self._cps)):
-            when = cp.when.strftime("%d %b %Y")
+            when = fmt_day(cp.when)
             if cp.label:
                 when += f"  · {cp.label}"
             score = "—" if cp.score is None else f"{cp.score:.1f} {cp.grade}"

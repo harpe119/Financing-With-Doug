@@ -1,0 +1,54 @@
+\chapter{Troubleshooting}\label{app:troubleshooting}
+Start with the smallest known discrepancy. Preserve the original export and observed statement amounts so that a correction can be checked. The possible causes below are checks to perform, not a conclusion about who made an error.
+
+\section{Accounts and imports}
+\begin{longtable}{@{}>{\raggedright\arraybackslash}p{0.27\textwidth}p{0.66\textwidth}@{}}
+\toprule Symptom & Check and recovery\\\midrule\endhead
+Balance differs from the bank & Compare posted closing amounts on the same date. Reconcile one known interval; inspect pending holds, missing fees, reversed signs, and duplicates. See \seeref{sec:reconcile}.\\
+Transactions and Home differ & Confirm the account, selected date, full ledger, and anchor. Inspect future-dated observations and same-day order qualifications. A filtered transaction display does not redefine the balance.\\
+Same-day row appears negative & Check the day's close and bank posting order. An approximate intermediate balance does not establish an actual negative daily close.\\
+Paychecks decrease the account & Review the import amount mode. Undo the mistaken import or restore a safe copy, then import with the corrected sign convention.\\
+Dates are reversed or displaced & Review ambiguous date parsing and Posting Date versus Transaction Date. Use the explicit matching-date migration when available; inspect ambiguous matches.\\
+Updated export adds repeats & Compare original records and duplicate candidates, including occurrence counts and date differences. Preserve genuine identical purchases. Do not remove all repeated amounts automatically.\\
+Pending purchase is absent & Check whether the latest export contains it and whether it is marked pending. Doug cannot discover an unexported hold through a live bank connection.\\
+Investment history looks flat & Check dated observations, the account's known interval, and whether the export contains values or only activity. Flat fill and interpolation are not new valuations.\\
+Import reports an invalid row & Read its reason and original CSV value. Correct the mapping or obtain a clean export; do not discard a meaningful financial row merely to pass parsing.\\
+\bottomrule
+\end{longtable}
+
+\section{Goals and budgets}
+\begin{longtable}{@{}>{\raggedright\arraybackslash}p{0.27\textwidth}p{0.66\textwidth}@{}}
+\toprule Symptom & Check and recovery\\\midrule\endhead
+Saved goal has no account & Select it and use Locate savings. This assigns already-recorded money rather than adding another contribution.\\
+Goal funds exceed holdings & Review actual account values, earlier earmarks, and unlocated savings. A later withdrawal or value decline can invalidate earlier capacity.\\
+Funded goal does not mean cash is available & Inspect account locations and account type. Investment earmarks and a CD's tracked value do not establish immediate withdrawal availability.\\
+Purchase makes progress unexpected & Use Spend toward goal to retain purchase progress; use Release savings when the reserve should be rebuilt. Verify the separate actual account record.\\
+Two custom inputs of 100 give more than \money{100} each & They are relative shares. Inspect the allowance, unfinished targets, and completion caps. Equal shares split \money{350} into \money{175} each.\\
+Category cut does not change the budget & Check whether its Needs or Wants total is overridden. That total takes precedence over component categories. Save the intended plan after reviewing the final total.\\
+Available amount differs from allowance & The former is calculated room; the latter is the chosen allocation. Adopt the available amount explicitly or retain an intentional unassigned remainder.\\
+Allowance changes but draft rows do not & Goals can save the shared allowance independently. Save the budget-row draft separately; Forecast reads the saved plan.\\
+Goal completion is outside the horizon & Review priority, allowance, remaining amount, loan interest, and minimums. A 360-month search limit is not proof of impossibility.\\
+\bottomrule
+\end{longtable}
+
+\section{Forecasts and application state}
+\begin{longtable}{@{}>{\raggedright\arraybackslash}p{0.27\textwidth}p{0.66\textwidth}@{}}
+\toprule Symptom & Check and recovery\\\midrule\endhead
+Saved budget has no forecast effect & Enable Use Goals funding plan. Confirm the budget was saved, inspect warnings, and check that scenario multipliers do not offset the intended change.\\
+Goal earmark does not lower cash & An earmark changes purpose, not holdings. Model an actual future purchase with an event or the appropriate spending assumption.\\
+Opening net worth differs with card debt & Read the retained implementation qualification in Chapter~\ref{ch:forecast-methods}. Compare components with Accounts before interpreting the forecast.\\
+Forecast omits ordinary variable costs & Check for at least four usable complete weeks, the selected historical period, recurring exclusions, and personal/business classification.\\
+Forecast differs after changing history & Inspect the selected weeks, recurring refit option, detected change weighting, and retained warnings. A new training sample can change both center and width.\\
+Reset scenario leaves an expense & Check saved What-if events. They are persistent records and must be disabled, edited, or deleted explicitly.\\
+Historical comparison is unavailable & Check its origin, eligible complete weeks, selected start date, and follow-up overlap. Later data must not be used merely to fill an earlier training gap.\\
+Spending change is inconclusive & Inspect the dollar interval and number of weeks. More consistent follow-up can help; an inconclusive threshold does not establish no change.\\
+Control or tab is absent & Check Simple versus Everything, selected section, and installed version. Older releases use different navigation. On Forecast in Simple view, \ui{Try a change} opens the scenario controls.\\
+Screen is too bright or too dark & Choose \ui{View > Appearance}. Match my computer follows the operating system's light or dark setting.\\
+Chart keeps an old zoom & Use Reset axes to restore the current default extent. Ordinary graph changes preserve the inspection view.\\
+Save or refresh fails & Read whether the write failed or the write succeeded but display refresh failed. Retain entered values; avoid repeating an already saved activity. Check file access and retry the appropriate operation.\\
+Wrong data appears after reopening & Read the database path and demonstration banner. Open the intended working copy; do not merge or overwrite files before identifying them.\\
+Update check finds no new installer & Check About and the published release when connected. Source changes and draft releases do not by themselves update an installed application.\\
+\bottomrule
+\end{longtable}
+
+If the cause remains unknown, preserve a database backup and write down the version, page, dates, actions, and exact message. A fictional reproduction is preferable when it demonstrates the same issue. Review exported reports, logs, and descriptions before sharing them because they can contain financial information.

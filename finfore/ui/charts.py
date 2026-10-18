@@ -12,8 +12,9 @@ from html import escape
 import numpy as np
 import pandas as pd
 import pyqtgraph as pg
-from PyQt6.QtCore import QEvent, QObject, Qt
+from PyQt6.QtCore import QEvent, QObject, QRectF, Qt
 from PyQt6.QtGui import QFont
+from PyQt6.QtWidgets import QPushButton
 
 from . import theme
 
@@ -27,9 +28,102 @@ def to_ts(dates) -> np.ndarray:
     return idx.values.astype("datetime64[s]").astype(np.int64).astype(float)
 
 
+# Height of a plot's bottom axis. A plot's minimum height counts its axis, so
+# callers add this to the room they want for the data itself.
+AXIS_ALLOWANCE = 20
+
+
 class MoneyAxis(pg.AxisItem):
     def tickStrings(self, values, scale, spacing):
-        return [_short(v) for v in values]
+        # Whole thousands are enough until the ticks get closer than that: with
+        # ticks every $500, $20.5k and $21.5k both used to print as "$21k" or
+        # "$22k". Add precision only as far as it takes to tell them apart.
+        # Ticks closer than $100 (a nearly flat line) are spelled out in whole
+        # dollars at every level of the axis, rather than "$3.21k" on one tick and
+        # "$3,215" on the next, which pyqtgraph would otherwise decide level by level.
+        if spacing and spacing < 100 and any(abs(v) >= 1000 for v in values):
+            labels = [_short(v, "full") for v in values]
+            seen: set[str] = set()
+            return [label if not (label in seen or seen.add(label)) else "" for label in labels]
+        labels = [_short(v) for v in values]
+        for places in (1, 2, "full"):
+            if len(set(labels)) == len(labels):
+                break
+            labels = [_short(v, places) for v in values]
+        # If even whole dollars repeat, say each figure once rather than print the
+        # same label down the axis.
+        seen: set[str] = set()
+        return [label if not (label in seen or seen.add(label)) else "" for label in labels]
+
+
+class ChartPlot(pg.PlotWidget):
+    """Keep the current view through redraws, with an explicit way home."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._view_initialized = False
+        # A chart is read with the pointer (hover, wheel, drag) and has no keyboard
+        # action, so as a Tab stop it was an invisible place to get stuck. Its name
+        # and description are still there for a screen reader to read in turn.
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        # PlotWidget installs instance aliases for these PlotItem methods.
+        self.clear = self._clear
+        self.autoRange = self._auto_range
+        self.reset_axes_btn = QPushButton("Reset axes", self)
+        self.reset_axes_btn.setObjectName("small")
+        self.reset_axes_btn.setToolTip("Restore the default view of this chart.")
+        self.reset_axes_btn.clicked.connect(lambda: reset_axes(self))
+        self.reset_axes_btn.setEnabled(False)
+        # Reserve a toolbar strip, so the button never covers plotted data.
+        self._toolbar_height = self.reset_axes_btn.sizeHint().height() + 8
+        self.setViewportMargins(0, self._toolbar_height, 0, 0)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        # pyqtgraph lays the plot out at the widget's full size, but the toolbar
+        # strip makes the viewport shorter. The plot was therefore drawn taller
+        # than the window onto it, and its bottom edge, the date axis included,
+        # fell below the visible area on every chart. Size it to the viewport.
+        if self.autoPixelRange and self.centralWidget is not None:
+            size = self.viewport().size()
+            self.range = QRectF(0, 0, size.width(), size.height())
+            self.centralWidget.setGeometry(self.range)
+            self.updateMatrix()
+        if hasattr(self, "reset_axes_btn"):
+            self.reset_axes_btn.adjustSize()
+            self.reset_axes_btn.move(
+                max(0, self.width() - self.reset_axes_btn.width() - 4), 4)
+
+    def _clear(self):
+        if self._view_initialized:
+            self.disableAutoRange()
+        self.plotItem.clear()
+
+    def _auto_range(self, *args, **kwargs):
+        # Category/tornado charts use autoRange instead of lock_view.
+        if not self._view_initialized:
+            self.plotItem.autoRange(*args, **kwargs)
+            self.disableAutoRange()
+            self._view_initialized = True
+            self.reset_axes_btn.setEnabled(True)
+
+    def forget_view(self):
+        """A different database or chart type needs its own opening frame."""
+        self._view_initialized = False
+        unlock_view(self)
+        self.getViewBox()._window_ctx = None
+        self.reset_axes_btn.setEnabled(False)
+
+
+def reset_axes(plot):
+    """Restore the latest default frame without enabling continuous auto-fit."""
+    vb = plot.getViewBox()
+    rng = getattr(vb, "_home_range", None)
+    if rng is not None:
+        vb.setRange(xRange=rng[0], yRange=rng[1], padding=0)
+    else:
+        plot.plotItem.autoRange()
+        plot.disableAutoRange()
 
 
 def new_plot(date_axis: bool = True, money_left: bool = True,
@@ -41,7 +135,7 @@ def new_plot(date_axis: bool = True, money_left: bool = True,
         axes["bottom"] = MoneyAxis(orientation="bottom")
     if money_left:
         axes["left"] = MoneyAxis(orientation="left")
-    w = pg.PlotWidget(axisItems=axes)
+    w = ChartPlot(axisItems=axes)
     w.showGrid(x=True, y=True, alpha=0.16)
     w.getPlotItem().hideButtons()
     w.getPlotItem().setMenuEnabled(False)
@@ -58,6 +152,32 @@ def new_plot(date_axis: bool = True, money_left: bool = True,
         lg.setBrush(pg.mkBrush(theme.qcolor(theme.SURFACE, 210)))
         lg.setPen(pg.mkPen(theme.BORDER))
     return w
+
+
+def restyle_plot(plot: pg.PlotWidget) -> None:
+    """Move a chart's own chrome to the current palette after a theme switch.
+
+    The data is redrawn by its page; what a redraw does not touch is set once,
+    when the plot was built: the background, the axis lines and tick labels, and
+    the legend's box. Each is translated role for role, so a plot drawn on a
+    card's colour stays on the card's colour.
+    """
+    background = getattr(plot, "_background", None)
+    plot.setBackground(theme.live(background) if isinstance(background, str)
+                       else theme.BG)
+    for side in ("left", "bottom", "right", "top"):
+        axis = plot.getPlotItem().getAxis(side) if side in plot.getPlotItem().axes else None
+        if axis is None:
+            continue
+        axis.setPen(pg.mkPen(theme.live(axis.pen().color().name())))
+        axis.setTextPen(pg.mkPen(theme.live(axis.textPen().color().name())))
+    legend = plot.getPlotItem().legend
+    if legend is not None:
+        legend.setBrush(pg.mkBrush(theme.qcolor(theme.SURFACE, 210)))
+        legend.setPen(pg.mkPen(theme.BORDER))
+        chosen = legend.opts.get("labelTextColor")
+        legend.setLabelTextColor(theme.live(chosen.name()) if chosen is not None
+                                 else theme.MUTED)
 
 
 # --- view locking -----------------------------------------------------------
@@ -114,13 +234,20 @@ def _finite(arrays) -> np.ndarray:
 def _y_bounds(data: np.ndarray, include_y, pad_y: float) -> tuple[float, float]:
     """Padded low/high for a set of values, pulling in nearby reference lines."""
     lo, hi = float(data.min()), float(data.max())
-    span = max(hi - lo, 1.0)
+    # A perfectly flat series (one account and no history) used to get a frame a
+    # fraction of a cent tall, so every tick on the axis read the same "$3,200".
+    # Frame at least 1% of the level, which leaves ticks that tell apart.
+    floor = max(1.0, 0.01 * max(abs(lo), abs(hi)))
+    if hi - lo < floor:
+        mid = (lo + hi) / 2
+        lo, hi = mid - floor / 2, mid + floor / 2
+    span = hi - lo
     for v in include_y:
         if v is None or not np.isfinite(v):
             continue
         if lo - span <= v <= hi + span:
             lo, hi = min(lo, float(v)), max(hi, float(v))
-    span = max(hi - lo, 1.0)
+    span = max(hi - lo, floor)
     return lo - span * pad_y, hi + span * pad_y
 
 
@@ -157,7 +284,10 @@ def lock_view(plot: pg.PlotWidget, x_min: float, x_max: float, y_series,
               include_y=(), pad_y: float = _PAD_Y,
               min_span_days: float = MIN_SPAN_DAYS,
               initial_days: float | None = None, x_data=None,
-              zoom_y: bool = True, slack_right: bool = True) -> None:
+              zoom_y: bool = True, slack_right: bool = True,
+              y_limits: tuple[float, float] | None = None,
+              min_y_span: float | None = None,
+              lock_y: bool = False) -> None:
     """Bound a date chart in time, frame it in money, and show it.
 
     The two axes are deliberately not treated the same way.
@@ -192,11 +322,29 @@ def lock_view(plot: pg.PlotWidget, x_min: float, x_max: float, y_series,
     keeps the full vertical range instead, which is what a bar chart wants —
     scaling to the visible bars would clip the taller ones the moment you
     panned back to them.
+
+    ``y_limits`` is for the one kind of chart whose vertical range is known in
+    advance: a percentage that cannot leave 0 to 100. It bounds the y axis to
+    ``(low, high)`` — headroom included — and opens on exactly that band, so the
+    chart cannot be panned into blank space above or below, or zoomed out past
+    the band. ``min_y_span`` stops a zoom-in collapsing to a sliver. Pair it with
+    ``slack_right=False`` to also end the time axis just past the last point.
+    Money charts leave both unset: see the paragraph on money above.
+
+    ``lock_y`` is the one exception for a money chart: a bar chart read by the
+    height of its bars (monthly cash flow). Its vertical range is the data's own,
+    framed once, and the vertical axis cannot be dragged, stretched or scrolled:
+    only time moves. Without that a stray drag leaves bars off the top with
+    nothing to say which way they went.
     """
     data = _finite(y_series)
     if data.size == 0:
         return
     lo, hi = _y_bounds(data, include_y, pad_y)
+    if y_limits is not None:
+        lo, hi = float(y_limits[0]), float(y_limits[1])
+    elif lock_y:
+        y_limits, min_y_span = (lo, hi), hi - lo
 
     x_lo, x_max = float(x_min), float(x_max)
     x_span = max(x_max - x_lo, DAY)
@@ -227,41 +375,53 @@ def lock_view(plot: pg.PlotWidget, x_min: float, x_max: float, y_series,
                 view_y_lo, view_y_hi = lo, hi
 
     vb = plot.getViewBox()
+    previous = vb.viewRange() if getattr(plot, "_view_initialized", False) else None
+    if previous is not None:
+        # A shortened horizon or removed account must not clamp the old view.
+        # Retain enough travel for that view as well as the new data envelope.
+        x_lo = min(x_lo, previous[0][0])
+        x_hi = max(x_hi, previous[0][1])
+        full_x = x_hi - x_lo
     vb.setLimits(
         xMin=x_lo, xMax=x_hi,
         # maxXRange == the whole envelope: you can pull back to the margin, but
         # never into open space beyond it.
         maxXRange=full_x,
-        minXRange=min(min_span_days * DAY, full_x, frame_x_hi - view_x_lo),
-        # Explicitly cleared, not merely omitted — this plot may have been
-        # locked before, and setLimits only touches the keys it is given.
-        yMin=None, yMax=None, minYRange=None, maxYRange=None,
+        minXRange=min(min_span_days * DAY, full_x, frame_x_hi - view_x_lo,
+                      previous[0][1] - previous[0][0] if previous else full_x),
+        # Cleared explicitly unless bounded — this plot may have been locked
+        # before, and setLimits only touches the keys it is given.
+        **(dict(yMin=lo, yMax=hi, maxYRange=hi - lo,
+                minYRange=min(min_y_span, hi - lo) if min_y_span else None)
+           if y_limits is not None else
+           dict(yMin=None, yMax=None, minYRange=None, maxYRange=None)),
     )
-    _install_home(plot, (view_x_lo, frame_x_hi), (view_y_lo, view_y_hi))
-    vb._window_ctx = {"x_lo": x_lo, "x_hi": frame_x_hi, "y_series": y_series,
+    vb.setMouseEnabled(x=True, y=not lock_y)
+    _install_home(plot, (view_x_lo, frame_x_hi), (view_y_lo, view_y_hi), lock_y)
+    vb._window_ctx = {"x_lo": float(x_min) - x_span * _PAD_X,
+                      "x_hi": frame_x_hi, "y_series": y_series,
                       "x_data": x_data, "include_y": include_y, "pad_y": pad_y,
                       "zoom_y": zoom_y}
-    vb.setRange(xRange=(view_x_lo, frame_x_hi), yRange=(view_y_lo, view_y_hi),
+    vb.setRange(xRange=previous[0] if previous else (view_x_lo, frame_x_hi),
+                yRange=(previous[1] if previous and not lock_y
+                        else (view_y_lo, view_y_hi)),
                 padding=0)
+    if isinstance(plot, ChartPlot):
+        plot._view_initialized = True
+        plot.reset_axes_btn.setEnabled(True)
 
 
 def reframe(plot: pg.PlotWidget, y_series, include_y, days: float | None) -> None:
-    """Refit a locked date chart's vertical range to the series being shown.
-
-    The opening frame is computed from every layer, so a deep debt line or a
-    far-off reference floor stretches the axis and flattens the series people
-    actually read for trends. When a layer is hidden the frame should follow
-    the layers that are left, which is what this does.
-    """
+    """Update the reset frame for visible layers, keeping the current axes."""
     ctx = getattr(plot.getViewBox(), "_window_ctx", None)
     if not ctx:
         return
     ctx["y_series"] = y_series
     ctx["include_y"] = include_y
-    show_window(plot, days)
+    show_window(plot, days, apply=False)
 
 
-def show_window(plot: pg.PlotWidget, days: float | None) -> None:
+def show_window(plot: pg.PlotWidget, days: float | None, *, apply=True) -> None:
     """Reframe a locked date chart on its trailing ``days`` (None = all of it).
 
     This is what the 3 months / 1 year / All buttons call. The y-range is
@@ -287,10 +447,11 @@ def show_window(plot: pg.PlotWidget, days: float | None) -> None:
             return
         y_lo, y_hi = _y_bounds(data, ctx["include_y"], ctx["pad_y"])
     vb._home_range = ((view_lo, x_hi), (y_lo, y_hi))
-    vb.setRange(xRange=(view_lo, x_hi), yRange=(y_lo, y_hi), padding=0)
+    if apply:
+        vb.setRange(xRange=(view_lo, x_hi), yRange=(y_lo, y_hi), padding=0)
 
 
-def _install_home(plot: pg.PlotWidget, x_range, y_range) -> None:
+def _install_home(plot: pg.PlotWidget, x_range, y_range, lock_y: bool = False) -> None:
     """Remember where a chart opened, and put it back on a double-click.
 
     With the y axis unbounded there is no longer anything stopping a stray drag
@@ -305,7 +466,9 @@ def _install_home(plot: pg.PlotWidget, x_range, y_range) -> None:
     """
     vb = plot.getViewBox()
     vb._home_range = (x_range, y_range)
-    plot.setToolTip("Scroll to zoom · drag to pan · right-drag to stretch an "
+    plot.setToolTip("Scroll to zoom · drag to move through time · double-click to reset"
+                    if lock_y else
+                    "Scroll to zoom · drag to pan · right-drag to stretch an "
                     "axis · double-click to reset")
     if getattr(vb, "_home_installed", False):
         return
@@ -317,7 +480,7 @@ def _install_home(plot: pg.PlotWidget, x_range, y_range) -> None:
         if rng is None:
             fallback(ev)
             return
-        vb.setRange(xRange=rng[0], yRange=rng[1], padding=0)
+        reset_axes(plot)
         ev.accept()
 
     vb.mouseDoubleClickEvent = go_home
@@ -326,6 +489,7 @@ def _install_home(plot: pg.PlotWidget, x_range, y_range) -> None:
 def unlock_view(plot: pg.PlotWidget) -> None:
     """Drop any previously-set bounds so a redraw starts from a clean slate."""
     vb = plot.getViewBox()
+    vb.setMouseEnabled(x=True, y=True)
     vb.setLimits(xMin=None, xMax=None, yMin=None, yMax=None,
                  minXRange=None, maxXRange=None,
                  minYRange=None, maxYRange=None)
@@ -355,7 +519,7 @@ def line(plot: pg.PlotWidget, x, y, color: str, width: float = 2.0,
     series of similar hue can still be told apart without relying on colour."""
     style = (Qt.PenStyle.DotLine if dashed == "dot" else
              Qt.PenStyle.DashLine if dashed else Qt.PenStyle.SolidLine)
-    pen = pg.mkPen(color, width=width, style=style)
+    pen = pg.mkPen(theme.live(color), width=width, style=style)
     return plot.plot(nums(x), nums(y), pen=pen, name=name)
 
 
@@ -659,16 +823,21 @@ def money_floors(plot: pg.PlotWidget, starter: float = 1000.0,
                    theme.ACCENT, slot="emergency")
 
 
-def _short(v: float) -> str:
-    """$1.2k, -$10k: the sign leads, as it does everywhere else in the app."""
+def _short(v: float, places=None) -> str:
+    """$1.2k, -$10k: the sign leads, as it does everywhere else in the app.
+
+    ``places`` asks for more precision than the default when neighbouring axis
+    ticks would otherwise print as the same label; "full" spells the dollars out.
+    """
     av = abs(v)
     sign = "-" if v < 0 and round(av) != 0 else ""
+    if places == "full":
+        return f"{sign}${av:,.0f}"
     if av >= 1_000_000:
-        return f"{sign}${av / 1_000_000:.1f}M"
-    if av >= 10_000:
-        return f"{sign}${av / 1000:.0f}k"
+        return f"{sign}${av / 1_000_000:.{max(1, places or 1)}f}M"
     if av >= 1000:
-        return f"{sign}${av / 1000:.1f}k"
+        default = 0 if av >= 10_000 else 1
+        return f"{sign}${av / 1000:.{max(default, places or 0)}f}k"
     return f"{sign}${av:.0f}"
 
 
@@ -691,7 +860,7 @@ def tornado(plot: pg.PlotWidget, levers: list[str], lows: np.ndarray,
 
 def backtest_plot(plot: pg.PlotWidget, x, actual: np.ndarray,
                   pct: dict[int, np.ndarray]) -> None:
-    """What the model said (band) against what happened (solid white)."""
+    """What the model said (band) against what happened (solid, in the text colour)."""
     x = nums(x)
     lo = pg.PlotDataItem(x, nums(pct[10]))
     hi = pg.PlotDataItem(x, nums(pct[90]))
@@ -701,6 +870,6 @@ def backtest_plot(plot: pg.PlotWidget, x, actual: np.ndarray,
                                     brush=pg.mkBrush(theme.qcolor(theme.BLUE, 34))))
     plot.addItem(pg.FillBetweenItem(lo2, hi2,
                                     brush=pg.mkBrush(theme.qcolor(theme.BLUE, 62))))
-    line(plot, x, pct[50], theme.BLUE, 1.6, "Predicted · P50", dashed=True)
+    line(plot, x, pct[50], theme.BLUE, 1.6, "Predicted · middle outcome", dashed=True)
     line(plot, x, actual, theme.TEXT, 2.2, "What actually happened")
     zero_floor(plot)

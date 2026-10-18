@@ -1,0 +1,41 @@
+\chapter{What Doug records and estimates}\label{ch:introduction}
+\index{purpose}
+\section{The questions the application answers}
+Financing with Doug is a desktop application for reviewing account balances, imported transactions, spending, goals, and financial projections. Bank information enters through CSV exports or values entered by the user. Doug does not connect to a bank or initiate a payment, transfer, investment sale, or purchase.
+
+The application separates three kinds of information. \emph{Records} describe what has happened: a dated balance, a posted transaction, a purchase, or savings already set aside. \emph{Plans} describe intended monthly amounts and priorities. \emph{Scenarios} change assumptions in a projection so that their modeled consequences can be compared. Keeping these categories separate is necessary because entering a plan does not make the planned action occur.
+
+\begin{tabularx}{\textwidth}{@{}p{0.21\textwidth}YY@{}}
+\toprule Information & Example & Effect\\\midrule
+Recorded balance & Checking held \money{1,000} at the end of a stated date & Anchors the reconstructed account balance.\\
+Recorded goal activity & \money{300} already set aside for a computer & Records a purpose for existing holdings.\\
+Monthly budget & Reduce dining by \money{100}/month & Supplies a saved planning assumption.\\
+Temporary scenario & Increase income by 5\% & Changes the current forecast comparison.\\
+Saved what-if event & A \money{700} purchase next month & Adds a hypothetical dated cash flow until disabled or removed.\\
+\bottomrule
+\end{tabularx}
+
+\section{A useful working order}
+The account ledger is the starting point for the rest of the application. Enter dated balances, import transactions, and review their categories. Check recurring bills and income before interpreting the calendar or forecast. Then build goals and a budget from those records. This order makes an unexpected projection easier to trace: a changed assumption can be distinguished from a missing bill or a reversed amount sign.
+
+\begin{enumerate}
+\item Establish the balances and dates you can verify against statements.
+\item Import the corresponding transaction history and check the preview.
+\item Review uncertain categories, internal transfers, reimbursements, and recurring patterns.
+\item Record the savings already assigned to goals and where those savings are held.
+\item Build a monthly budget and choose an allowance for goals and extra debt payments.
+\item Compare forecasts, then save checkpoints and review them as new records arrive.
+\end{enumerate}
+
+\section{The meaning of local data}
+Doug's working data is stored in a local SQLite database. The status bar identifies the file currently open. A demonstration dataset uses a separate database and is marked by a banner. A backup copies the open database, so a backup made while a demonstration is open contains demonstration data.
+
+Local storage does not by itself provide encryption, an off-device backup, or protection against someone who can read files in the user account. Exported reports and reviewed-data files also contain financial information. The updater contacts GitHub to check for releases and download software; those requests do not include the financial database.
+
+\section{What the application does not establish}
+An internally consistent ledger can still be incomplete. A balance that matches one statement does not establish that an earlier export contains every transaction. A detected recurring item is an estimate from repeated records, rather than confirmation from a payee. A goal earmark records an intended purpose, rather than a restriction imposed by a bank. Investment holdings do not become immediately withdrawable cash because they appear in the goal map.
+
+The forecast uses a specific representation of scheduled payments, sampled spending, debt, investments, and hypothetical events. It cannot identify expenses or changes that are absent from those inputs. Consequently, its most useful application is comparison: inspect how a result changes when an explicit assumption changes, and check the records supporting that assumption.
+
+\source{finfore/models.py; finfore/store.py; finfore/forecast.py; finfore/update.py}
+

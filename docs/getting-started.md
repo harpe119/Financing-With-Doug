@@ -34,8 +34,9 @@ When running from source, you can open another database directly with
 ## Try a demo
 
 **File → Load demo dataset** opens fictional data in a separate database.
-The banner tells you when a demo is open. Your own database is not changed by
-edits made in the demo. **File → Return to my own data** returns to it.
+The banner tells you when a demo is open, with a **Return to my own data** button
+on it (also under **File**). Your own database is not changed by edits made in
+the demo.
 
 | Demo | What to look for |
 |---|---|
@@ -50,28 +51,48 @@ will predict your own finances accurately.
 
 ## Where to find things
 
-There are seven sections in the sidebar:
+There are five sections in the sidebar:
 
 | Section | What it contains |
 |---|---|
-| Dashboard | Overview of balances and history; Spending analysis |
-| Accounts | Account balances, dates, loan terms, and investment assumptions |
-| Transactions | Imported transactions, search, and category corrections |
-| Bills & payday | Calendar of scheduled items; Recurring patterns |
-| Plan | Monthly spending amounts and actual goal funding |
-| Goals | Savings targets and their order |
-| Forecast | Projection controls; Progress comparisons |
+| Home | An answer first (where your cash is heading); then your balances, your history, and anything that needs a look. Tabs: Overview, Spending |
+| Accounts | Balances: account balances, dates, loan terms, and investment assumptions. Transactions: imported transactions, search, and category corrections |
+| Bills & payday | Calendar of scheduled items; Detected bills & pay |
+| Plan | Goals: your goals, their order, and your monthly allowance. Monthly budget: monthly spending amounts and actual goal funding |
+| Forecast | Projection controls; Track record comparisons |
 
 The tabs across the top keep related functions together.
 Drag chart dividers to change how much space each panel gets.
-**Simple view** hides advanced controls; it does not delete settings or data.
+**Import CSV…** in the header opens the same import as **File → Import CSV…**.
+The **View** switch in the header chooses **Simple** or **Everything**. Simple
+hides advanced controls and two tabs, Transactions and Track record; it does not
+delete settings or data. A link that leads to one of them,
+such as **Review** under **Needs a look** on Home, shows the tab until you switch
+views. Everything shows every tab. The same choice is under **View** in the
+menu bar.
+
+**View → Appearance** chooses **Dark** (the default), **Light**, or **Match my
+computer**, which follows your system's light or dark setting. The change applies
+at once and keeps your place: the page, what you have typed, and how far you
+have scrolled all stay. Doug remembers the choice.
+
+**Help → User manual (PDF)** opens the complete manual, with worked examples and
+the calculations, in your computer's PDF reader. **F1** opens this guide.
+
+On a first run, **Bills & payday** and **Forecast** in the sidebar are dimmed and
+in italics: they fill in from your statements, so there is little to see until
+some are imported. Point at one to see why. They still open, and each page that
+has nothing yet says what it will hold and offers the next step: add an account,
+then import its statements. **Explore with a demo first** is on each of them.
 
 ## 1. Add your accounts
 
-Open **Accounts → Add account** for each account you want to track.
+Choose **Add an account** on Home (or **Accounts → Add account**) for each account
+you want to track. The dialog opens straight away.
 
-- Checking and savings: enter the **closing posted balance** and its date.
-  Leave **This account can be overdrawn** unchecked when the account cannot
+- Checking and savings: enter the **balance at the end of day** (the posted
+  balance your bank shows, without pending charges) and its date. Leave
+  **Allow this account to go below $0** unchecked when the account cannot
   go below zero; negative reconstructed closes will then be flagged for review.
 - Credit cards: enter the amount owed as a positive number. A negative amount
   means the card is in credit.
@@ -79,6 +100,8 @@ Open **Accounts → Add account** for each account you want to track.
 - Investments: enter the current value, expected annual return, volatility,
   and planned monthly contribution.
 
+Amounts fill in from the cents, so typing 3200 gives $32.00. Type 320000 for
+$3,200.00, or paste $3,200.00; the dialog says so under the field.
 Use the balance date from the statement, not necessarily today's date.
 Doug reconstructs balances from that dated amount and your transactions.
 An incorrect balance or date shifts the reconstructed history.
@@ -120,9 +143,17 @@ Transaction history on its website. A PDF statement is not a CSV.
 Use as much history as you can; several complete months are more useful than
 a few weeks for detecting patterns and estimating spending.
 
-Choose **File → Import CSV…**, select the account, and choose the file.
-For checking, savings, and credit cards, check the transaction preview before
-importing:
+Choose **File → Import CSV…** (or the **Import CSV…** button in the header),
+select the account, and choose the file. With no account yet, the button opens the
+add-account dialog first. After your first import Doug opens Home, which shows
+where you stand. You can take an import back with Ctrl+Z or the Undo button.
+Once a file is chosen, **What Doug read** says how many transactions it found,
+the dates they cover and how many are money out and money in, and shows the
+first few as they will be saved. If that matches your statement, press Import.
+If not, open **Adjust how the file is read**: it holds the separator, date
+order, amount signs and column choices, and opens by itself when the file could
+not be read. A file whose rows are almost all money in gets a warning, because
+some banks list purchases as positive numbers. When checking:
 
 - **Posting / balance date** should use Posting Date when supplied. Weekend
   and holiday purchases may post later; Doug uses the supplied date without
@@ -151,7 +182,7 @@ preselected for removal.
 
 Rows marked pending/unposted, or with a blank Posting Date and a valid
 Transaction Date, are kept outside balances, spending estimates and forecasts.
-**Transactions → Tools → Latest CSV import…** lists those entries from each
+**Accounts → Transactions → Tools → Latest CSV import…** lists those entries from each
 account's latest imported export. It is an export snapshot, not live bank data.
 A new export replaces that snapshot. Source Reference and Transaction Date are
 available in transaction details. A malformed row or invalid financial
@@ -165,7 +196,8 @@ close; an intermediate negative row alone does not establish a bank overdraft.
 
 ## 3. Review transactions and patterns
 
-In **Transactions**, search for entries and correct mistaken categories.
+In **Accounts → Transactions**, search for entries and correct mistaken categories.
+Selecting an account on **Accounts → Balances** offers **View transactions** to open just that account's entries.
 Use **Review → Needs attention** to find older categories without recorded
 evidence, general retailers, uncertain merchant matches, and possible transfer
 pairs. This filter identifies entries to check; it does not mean they are wrong.
@@ -231,7 +263,7 @@ and business or mixed-reimbursement entries. The export covers the whole ledger,
 independently of display filters. It contains financial descriptions; choose
 where you want to keep it. Exporting does not train a model or send data anywhere.
 
-Open **Bills & payday → Recurring patterns** to review detected bills and
+Open **Bills & payday → Detected bills & pay** to review detected bills and
 paychecks. Confirm each amount, cadence, and date. Deactivate a pattern that
 no longer applies. Use Ignore for repeated transactions that should not enter
 the projection.
@@ -251,6 +283,7 @@ year. The schedule begins tomorrow. Select a day to see its items, or press
 **Show whole month** to return to the monthly list.
 
 Green dates have income, red dates have payments, and blue dates have both.
+A white ring marks today, whichever day you have selected.
 The list includes recurring patterns, configured loan payments, investment
 contributions, and saved what-if event occurrences.
 
@@ -274,21 +307,23 @@ or move an actual bank payment.
 
 ## 5. Check spending and goals
 
-**Dashboard → Overview** opens with net worth history. Use its account selector,
+**Home → Overview** opens with the verdict and your figures, then net worth history, then anything under **Needs a look** at the bottom. Use its account selector,
 date ranges, and Layers menu to choose what to inspect; **Expand** gives the
-chart the page. Monthly cash flow and spending by category start folded below
-history. Balances and the cash outlook follow underneath. If a reconciliation
-notice appears, **Details** opens the full explanation.
+chart the page. If a reconciliation notice appears, **Details** opens the full
+explanation.
 
-**Dashboard → Spending** shows category totals and a spending score.
+**Home → Spending** shows category totals and a spending score.
 The score uses the 50/30/20 guideline as a benchmark, not a budget tailored
-to you. It compares discretionary spending with needs and savings with income.
+to you. It compares spending on wants with spending on needs, and savings with income.
 A high score does not guarantee that you have enough cash to pay a bill.
 Use the explanations alongside the actual amounts.
+Monthly cash flow and spending by category sit folded at the bottom of the
+page; open either one to see it. Clicking a category's bar opens that
+category's transactions for the last 90 days.
 
-Open **Goals → Add goal…** to enter a target.
+Open **Plan → Goals → Add goal…** to enter a goal.
 Choose **Savings** for a vacation, computer, emergency fund, or another purchase
-or reserve. Enter the target cost and **Already saved**: money you have actually
+or reserve. Enter the **Goal amount** and **Already saved**: money you have actually
 set aside for that goal. Use **Goal activity…** to record later changes. Each
 goal keeps its own progress when you change priorities; your checking balance
 does not automatically fund every purchase. Creating or funding a goal in Doug
@@ -301,30 +336,67 @@ calculated. That line uses the higher of recorded payments or current loan
 commitments. Investment contributions come from Accounts. The irregular-expense
 reserve is additional money for costs not already covered in the spending lines.
 Without complete history, explicitly override income and each spending line
-through Uncategorised spending, including $0 amounts, before saving a manual plan.
+through Uncategorized spending, including $0 amounts, before saving a manual plan.
 
-Set **To goals & extra debt / month** and press **Save spending plan**. Goals
-uses this same extra-money allowance and its existing priority order. The answer
-at the top shows what remains unassigned or how much the plan exceeds income.
-Changing the allowance on Goals updates it here when you return. Unsaved
-spending-line edits are kept; an allowance you have edited locally also remains
-a draft until you save or reload the spending plan.
+Expand **Adjust individual spending categories** to change dining, subscriptions,
+groceries or another category. These amounts update the essentials and wants
+totals. A total override takes precedence; turn it off to edit that group's
+individual categories. Category amounts are included in their totals once.
+
+There is one monthly allowance for goals and extra debt. You type it on the
+**Goals** tab, and it saves as you type. **Monthly budget** shows it, and shows what
+the budget leaves available; if they differ, **Use $X as my allowance** adopts the
+budget's figure. Press **Save spending plan** to save the budget rows. A chosen
+allowance is kept; with none chosen, saving makes it follow the budget. Goals uses
+this allowance and its existing priority order. The answer at the top shows what
+remains unassigned or how much the plan exceeds income. Unsaved spending-line
+edits are kept when you leave the tab; **Reload saved plan** discards them.
 **Inspect income & spending transactions…** traces detected amounts back to
 categories and ledger entries. Overrides are planning assumptions; they do not
 change imported transactions or Forecast's income and spending controls.
-Forecast's **Goals → Use Goals funding plan** applies the saved extra-money
-allowance, priority order and allocation policy to loan repayments in the graph.
-It starts enabled when goals or a saved funding allowance exist. Dashboard's
-outlook, reports and new Progress checkpoints use the same saved choice.
-Turn it off to use Forecast's separate extra-loan and rollover controls.
-Savings earmarks remain household cash; they are not automatically spent when
-a goal becomes fully funded. Record or schedule the purchase to model that outflow.
+Forecast's **Goals → Use Goals funding plan** applies the saved Plan's income,
+spending and investment contributions, together with the shared extra-money
+allowance, priority order and allocation policy for loan repayments. Existing
+bill dates and spending variation are scaled to the planned monthly amounts.
+Amounts without usable history are spread evenly across days. Forecast's
+scenario controls apply additional adjustments on top of the saved budget;
+they do not edit the plan. **Compare unchanged controls** shows a second curve
+without the saved budget or Goals funding, so you can assess their effect.
+It starts enabled when goals or a saved funding allowance exist. Home's
+outlook, reports and new Track record checkpoints use the same saved choice.
+Turn it off to project existing habits using Forecast's separate extra-loan
+and rollover controls. Unsaved Plan edits never enter the forecast.
+Irregular-expense reserves stay in cash. Goal earmarks keep their underlying
+cash or investment holdings; they are not automatically spent when a goal
+becomes fully funded. Record or schedule the purchase to model that outflow.
+
+At the top of **Plan → Goals**, **Where your goal savings live** connects each goal
+to its accounts. Account bars share a dollar scale; selecting a goal or an
+account segment highlights that goal's locations. Each goal's own bar shows
+progress toward its goal amount, alongside exact amounts held and still needed.
+Recorded purchases count toward progress but are no longer money held.
+
+Checking, savings and investment accounts appear separately. A CD entered as
+an Investment can hold a goal earmark at its tracked value. This does not sell
+the CD or make it spendable cash; maturity and withdrawal restrictions are not
+modeled. An earmark is a record of purpose, not a bank transfer.
+
+Saved money without a known source is shown as **Account not assigned**, with
+a patterned part of the goal bar. Select the goal and choose **Locate savings…**
+to assign all or part to an account. Doug does not guess the account or add
+more progress. Until it is located, an account's unassigned portion may contain
+that money. Negative balances and earmarks exceeding a balance remain visible.
+
+Balance milestones appear separately because they do not reserve an account.
+For a baseline you want to protect, use **Savings for a purchase or reserve**,
+record the amount actually set aside, then locate it in the appropriate account.
 
 Select a savings goal and open **Record / view goal activity…** on Plan, or
-**Goal activity…** on Goals:
+**Goal activity…** on the Goals tab:
 
-- **Set aside money** earmarks existing cash for the selected goal. Choose the
-  checking or savings account holding it, or leave it as unlocated cash.
+- **Set aside money** earmarks existing holdings for the selected goal. Choose
+  the checking, savings or investment account holding them, or leave their
+  account unassigned.
 - **Locate existing savings** assigns money already included in **Still saved**
   to an account. This adds no new progress.
 - **Spend toward goal** reduces savings held and records a purchase. Progress
@@ -339,17 +411,19 @@ be split between goals only within its available amount; business reimbursements
 are excluded. Removing an imported row retains the activity and its transaction
 reference. Goal activity and saved plans support Undo/Redo.
 
-New contributions must fit both unassigned net cash and the selected account's
-unassigned balance. These checks depend on current balances and complete imports.
-Previously entered savings are preserved as unlocated cash. After the first
+New contributions must fit both unassigned funding balances after credit-card
+balances and the selected account's unassigned balance. Investment values are
+included in this funding check; that total is not a measure of spendable cash.
+These checks depend on current balances and complete imports.
+Previously entered savings are preserved without an inferred account. After the first
 activity, use the activity controls rather than editing the saved total directly.
 Plan's monthly actual column shows recorded contributions minus releases;
 locating savings and purchases do not count as new contributions. If a purchase
 is already covered by a goal reserve, adjust its spending allowance to avoid
 budgeting it twice.
 
-**Add emergency fund…** creates a target based on essential spending.
-Review the amount and priority order yourself. These targets are not separate
+**Add emergency fund…** creates a goal based on your spending on needs.
+Review the amount and priority order yourself. These goals are not separate
 bank balances or automatic transfers.
 
 Existing **Cash balance milestone** and **Net worth milestone** goals retain
@@ -360,7 +434,7 @@ they do not represent additional money set aside. Savings goals show their
 contribution schedule on Goals; Forecast does not assume that this schedule is
 executed and directs you back to Goals for those dates.
 
-**Spare /mo** is the detected monthly personal income minus spending, floored
+**Monthly allowance** is the detected monthly personal income minus spending, floored
 at zero. It uses up to 24 recorded completed months, weighted toward recent
 ones with a three-month half-life. The current month is left out. The
 breakdown below the control shows the income, spending and calculation;
@@ -373,12 +447,16 @@ from active linked **loan payment** patterns on **Bills & payday**, falling back
 to the monthly payment entered on Accounts. Multiple linked payments are added
 at their monthly equivalent. **Total /mo** includes that existing payment plus
 the extra money allocated from spare income. Select a row to see the breakdown.
-With Custom splitting, **Extra /mo** edits the spare-money ratio; the selected
-row still shows the total. Lower-priority loans keep receiving existing payments.
+With **Custom**, **Share → Extra /mo** pairs a relative share with the resulting
+extra dollars for the first plan month. Shares are proportions, not dollar
+commitments: with a $350 allowance, shares of 100 and 100 allocate $175 each.
+Shares of 1 and 1 give the same result. All-zero shares fund the first unfinished
+goal. The selected row still shows existing payments plus extra funding.
+Lower-priority loans keep receiving existing payments.
 When a loan is paid off, its payment becomes available for the remaining goals.
 If no payment is configured or linked, the plan warns you instead of assuming one.
 
-Editing Spare /mo creates a manual override. **Use detected** clears it and
+Editing Monthly allowance creates a manual override. **Use Plan / history** clears it and
 keeps the estimate updated after future imports. Once you save a monthly Plan,
 the detected amount instead comes from that plan's income minus spending,
 reserves and investment contributions. Existing saved amounts may
@@ -394,8 +472,8 @@ new balance history. Keep account terms current as well as transactions.
 The center line is the median modeled outcome. Shaded bands show ranges
 across simulated paths, not guarantees about future balances.
 
-Check **Data quality** beside the chart before interpreting the projection.
-**Review data** shows the recorded dates, gaps and amounts behind each flag,
+Check the **Data quality** line above the chart before interpreting the
+projection. **Review data** shows the recorded dates, gaps and amounts behind each flag,
 with buttons to open Accounts, Transactions or the calendar. This stays visible
 in Simple view. It checks for balances and transactions older than 30 days,
 histories shorter than 90 days, months with no recorded activity, categories
@@ -406,15 +484,22 @@ be moved forward by newer transactions. These flags tell you what to verify
 against your statements; they do not establish that a forecast is accurate.
 The checks read your records without changing them or blocking a forecast.
 
-**Watch explanation** opens the animated video in your computer's video
-player. **How this works** gives the written explanation and assumptions.
-If the video cannot open, check that the computer has a player for MP4 files.
+**Explain → Watch the video** opens the animated video in your computer's
+video player. **Explain → How this works** gives the written explanation and
+assumptions. If the video cannot open, check that the computer has a player for
+MP4 files.
 
-Change income or category spending to test a scenario. Advanced controls
-include extra debt payments, investing, and planned expenses or income.
-The chart updates after you finish an adjustment.
+Change income or category spending to test a scenario. In Simple view the
+Forecast page opens on the answer and the chart, with one **Try a change**
+button; it opens the controls (length, cash buffer, income and the three biggest
+spending categories, with What-if events and Goals folded below), and **Hide
+changes** closes them. Everything view keeps the controls beside the chart, with
+the advanced ones too: extra debt payments, investing, and planned expenses or
+income. The chart updates after you finish an adjustment, so there is no refresh
+button in Simple view. The $1,000 starter buffer line is drawn in Everything view
+only; Simple view keeps the $0 line and your cash buffer.
 **Reset scenario** restores temporary controls; saved events remain in the
-database. Manage goal targets on Goals, not in a second forecast editor.
+database. Manage goals on Goals, not in a second forecast editor.
 
 Expand **What-if events** to add a planned purchase. Enter its name, the amount
 **per purchase** (negative for a cost), and a date. **Repeat** offers Once,
@@ -444,7 +529,7 @@ months through two years; **Since a date…** is useful after moving or changing
 jobs. **All available history** removes the usual 78-week sample cap. Automatic
 keeps the existing behavior: up to 78 recorded weeks. Your choice is saved
 with the current database and also applies to baseline comparisons, sensitivity
-analysis and Progress forecasts. Reset scenario keeps this history setting.
+analysis and Track record forecasts. Reset scenario keeps this history setting.
 
 Regular salary and rent normally come from your saved recurring patterns.
 Check **Re-estimate paydays and bills too** to detect schedules and amounts
@@ -464,7 +549,7 @@ assumptions and plans. This app is not financial advice.
 
 ## 7. Compare forecasts with history
 
-Open **Forecast → Progress** to compare checkpoints.
+Open **Forecast → Track record** to compare checkpoints.
 **Take a checkpoint now** saves the current balances, score, and forecast.
 Imports also save checkpoints automatically.
 
@@ -475,7 +560,7 @@ prove that the next forecast will be accurate.
 
 **Clear checkpoints…** deletes only the comparison snapshots. It leaves
 accounts, transactions, and goals unchanged.
-**What changed?** on Dashboard summarizes changes since the previous import.
+**What changed?** on Home summarizes changes since the previous import.
 
 ## Keep the data current
 
@@ -490,12 +575,12 @@ Check the open-database path and demo banner before exporting or backing up.
 
 ### Inspecting monthly spending
 
-On Dashboard → Spending, open **How this works**. The **Monthly breakdown** tab
-lists Income, Necessities, Wants, Giving, and Unknown. Expand a category to see
+On Home → Spending, open **How this works**. The **Monthly breakdown** tab
+lists Income, Needs, Wants, Giving, and Uncategorized. Expand a category to see
 the dates, descriptions, original ledger amounts, and weighted monthly
 contributions of its transactions. For example, rent appears under Housing;
 groceries, utilities, insurance, fuel, transport, debt payments, and health &
-fitness also enter Necessities. Categorized refunds reduce their group.
+fitness also enter Needs. Categorized refunds reduce their group.
 
 The figures are recency-weighted averages of complete months, rather than a
 single month's bills. **Months & exclusions** shows each month's share and
@@ -505,7 +590,7 @@ reimbursable business purchases are excluded. A marked reimbursement inside a
 paycheck is also excluded from personal income. **How the score works** retains
 the score calculation and assumptions.
 
-Forecast → Progress also has **Watch explanation**, a silent animation of
+Forecast → Track record also has **Explain → Watch the video**, a silent animation of
 checkpoints, recorded balances versus an earlier forecast, and weekly spending
 comparisons. It uses fictional data calculated by the program.
 
@@ -520,11 +605,11 @@ copy. Repeated identical purchases within an export remain separate entries.
 Importing transactions keeps the entered balance and its date as the anchor;
 use **Update balance…** when you have a newer balance to enter.
 
-Accounts, Dashboard totals, Goals balance milestones and the Forecast starting
+Accounts, Home totals, Goals balance milestones and the Forecast starting
 balances use the balance calculated through today from those dated observations
 and later transactions. Investment and loan snapshots also carry through to
 their forecast starting values. If you correct a balance on a date that already
-has a snapshot, both records use the corrected amount. Historical Progress
+has a snapshot, both records use the corrected amount. Historical Track record
 checkpoints remain records of what was saved on their original dates.
 
 On **Transactions**, select an account and enable **Tools → Running account balances**.
@@ -545,7 +630,7 @@ confirming removal. Undo restores removed entries; remembered removals stop
 them returning in later imports. Meaningful changes in a bank's descriptions
 or posting dates still need review.
 
-### Showing selected accounts on the Dashboard
+### Showing selected accounts on Home
 
 Above the history plot, choose **Chart view → Separate accounts**, then use
 the accounts menu to select the balances you want to compare. For example,

@@ -107,7 +107,7 @@ class GoalPlanningTests(unittest.TestCase):
     def test_over_reserved_savings_warn_and_do_not_create_cash(self):
         self.store.add_goal(Goal("Vacation", 2000, "savings", saved_amount=100))
         plan = build_plan(self.store, surplus=0)
-        self.assertTrue(any("exceed current net cash" in w for w in plan.warnings))
+        self.assertTrue(any("exceed current funding balances" in w for w in plan.warnings))
         self.assertEqual(plan.allocations[0].target.progress, 100)
         self.assertEqual(self.store.accounts(), [])
 

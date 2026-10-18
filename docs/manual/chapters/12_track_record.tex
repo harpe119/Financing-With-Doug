@@ -1,0 +1,36 @@
+\chapter{Track record and reports}\label{ch:track}
+\index{checkpoints}\index{Track record}\index{month in review}
+\section{Save the claim before the outcome is known}
+A checkpoint records balances, the spending score, and a forecast at a particular time. Imports create checkpoints automatically, and Take a checkpoint now records the current state explicitly. A later comparison can then distinguish an earlier saved projection from a newly fitted projection that already knows later spending.
+
+Open \ui{Forecast > Track record}. Select checkpoints according to the comparison of interest and read the dates, coverage, and source records. A checkpoint is a summary record, not a complete restorable financial database. Backups serve the latter purpose.
+
+\section{Compare an earlier forecast with later balances}
+The path comparison shows an earlier forecast fan alongside balances reconstructed from later records. The fraction of evaluated dates inside the earlier bands is descriptive evidence about that comparison. It is not the fraction of all possible future households covered, nor proof that the next projection is calibrated.
+
+Unexpected outcomes can have several sources: changed behavior, missing records, a corrected balance, different payments, or a model assumption that did not fit. Check which records and dates overlap before assigning the difference to forecasting error alone. Very short follow-up periods can be insufficient for a useful comparison.
+
+\section{Distinguish saved and reconstructed checkpoints}
+Reconstruct history builds retrospective checkpoints using the data and pattern fit available at each selected historical date. These can make an existing ledger useful for comparisons on a first session, but they are not forecasts that were actually saved at that earlier time.
+
+The historical boundary matters. Current saved goals and today's budget must not be treated as decisions known by an earlier household. A fixed history start date later than a historical refit date can leave no training data, in which case the comparison is unavailable rather than filled using later information.
+
+\section{Interpret a spending-change result}
+The program compares eligible weekly discretionary spending before and after a checkpoint. Recurring bills are excluded from this particular behavior comparison. The result concerns the weekly observations retained by the method, not every financial aspect of the household.
+
+Read the estimated dollar change and its uncertainty together. A statistically distinguishable difference indicates evidence under the comparison's assumptions, rather than proof of its cause. An inconclusive result means that the available weeks did not resolve the change at the chosen threshold; it is not evidence that nothing changed.
+
+The method uses a permutation comparison and a bootstrap interval. Weeks must be sufficiently comparable for exchanging their labels to be meaningful. Seasonality, long trends, missing intervals, or a changed mix of records can affect that interpretation. Category movements help locate changes but are not each presented as independent significance tests.
+
+\section{Export a month in review}
+Choose \ui{File > Save a month in review} and select the calendar month. The resulting self-contained HTML report describes that month directly. It is different from the recency-weighted monthly averages used to describe current spending habits.
+
+Open the report in a browser and use its print function when a paper copy or PDF is needed. The exported file contains financial information, even though its styling is self-contained and it makes no external requests. Verify the open database and demonstration banner before exporting.
+
+\section{Maintain useful comparisons}
+Import consistently, update observed balances, and keep notes about major changes in circumstances. Preserve a backup before broad corrections. Historical checkpoints remain records of what was saved; correcting a current account does not rewrite every earlier saved forecast.
+
+Clear checkpoints removes comparison snapshots rather than the account ledger. Read the confirmation carefully. Removing a checkpoint can eliminate the saved claim needed to compare an earlier forecast with a later outcome, so keep those records when they remain useful.
+
+\source{finfore/ui/progress_page.py; finfore/progress.py; finfore/report.py; finfore/pipeline.py}
+

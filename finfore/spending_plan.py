@@ -4,20 +4,26 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
-from .insights import monthly_breakdown
+from .insights import ESSENTIAL, FRIVOLOUS, bucket_of, monthly_breakdown
 from .models import AccountType
 from .cache import cached_read
 
 LABELS = {
     "income": "Take-home income",
-    "essential": "Essentials, excluding debt",
+    "essential": "Needs, excluding debt payments",
     "debt": "Regular debt payments",
     "frivolous": "Wants",
     "giving": "Giving",
-    "unknown": "Uncategorised spending",
+    "unknown": "Uncategorized spending",
     "reserve": "Irregular expenses reserve",
     "investing": "Investment contributions",
 }
+CATEGORY_LABELS = {f'category:{cat}': cat for cat in
+                   sorted(ESSENTIAL - {'Debt payment'}) + sorted(FRIVOLOUS)}
+
+
+def category_group(key):
+    return bucket_of(CATEGORY_LABELS[key]) if key in CATEGORY_LABELS else None
 
 
 def money(value) -> float:
@@ -31,7 +37,7 @@ def money(value) -> float:
 
 
 def validate_overrides(values: dict) -> dict[str, float]:
-    if not isinstance(values, dict) or set(values) - set(LABELS):
+    if not isinstance(values, dict) or set(values) - (set(LABELS) | set(CATEGORY_LABELS)):
         raise ValueError("The spending plan contains an unknown budget line.")
     return {key: money(value) for key, value in values.items()}
 
@@ -46,7 +52,7 @@ class SpendingPlan:
 
     @property
     def expenses(self) -> float:
-        return round(sum(v for k, v in self.amounts.items() if k != "income"), 2)
+        return round(sum(self.amounts[k] for k in LABELS if k != "income"), 2)
 
     @property
     def available(self) -> float:
@@ -78,4 +84,46 @@ def calculate_plan(store, overrides: dict | None = None) -> SpendingPlan:
             for a in store.accounts() if a.type == AccountType.INVESTMENT), 2))
     raw = store.get_setting('spending_plan', {}) if overrides is None else overrides
     values = validate_overrides(raw or {})
-    return SpendingPlan(detected, {**detected, **values}, values, required, details)
+    signed = {}
+    if details:
+        for group, rows in details.groups.items():
+            if group != 'income':
+                signed.update(rows.groupby('category')['contribution'].sum().to_dict())
+    for key, cat in CATEGORY_LABELS.items():
+        detected[key] = round(max(0.0, signed.get(cat, 0.0)), 2)
+    amounts = {**detected, **values}
+    for group in ('essential', 'frivolous'):
+        if group not in values and any(category_group(k) == group for k in values):
+            categories = [k for k in CATEGORY_LABELS if category_group(k) == group]
+            amounts[group] = round(max(0.0, sum(
+                values[k] if k in values else signed.get(CATEGORY_LABELS[k], 0.0)
+                for k in categories)), 2)
+    return SpendingPlan(detected, amounts, values, required, details)
+
+
+def forecast_targets(plan, references):
+    """Distribute monthly group totals across categories without counting twice.
+
+    Explicit total overrides take precedence over category amounts. Within a
+    total, use the plan's category mix (or the forecast mix without history).
+    """
+    result = {}
+    for group in ('essential', 'frivolous', 'giving', 'unknown'):
+        cats = {cat for cat in references if cat != 'Debt payment' and bucket_of(cat) == group}
+        cats.update(cat for key, cat in CATEGORY_LABELS.items() if category_group(key) == group)
+        if group == 'giving':
+            cats.add('Charitable donation')
+        weights = {cat: plan.amounts.get(f'category:{cat}', references.get(cat, 0.0)) for cat in sorted(cats)}
+        total = sum(weights.values())
+        if total <= 0:
+            weights = {cat: references.get(cat, 0.0) for cat in sorted(cats)
+                       if f'category:{cat}' not in plan.overrides}
+            total = sum(weights.values())
+        if total <= 0:
+            # A new category or a plan without usable forecast history needs
+            # an explicit daily flow rather than a division by zero.
+            label = next(iter(cats)) if len(cats) == 1 else f'Planned {LABELS[group].lower()}'
+            result[label] = plan.amounts[group]
+        else:
+            result.update({cat: plan.amounts[group] * value / total for cat, value in weights.items()})
+    return result

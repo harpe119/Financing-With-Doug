@@ -1,0 +1,71 @@
+\chapter{Ledger and spending calculations}\label{ch:ledger-methods}
+\index{balance reconstruction}\index{recency weighting}\index{spending score}
+\section{Reconstruct a cash ledger around an observation}
+Let \(a_i\) be the signed amount of a posted transaction on day \(d_i\), with deposits positive and withdrawals negative. Define cumulative posted flow through day \(t\) as
+\[
+ F(t)=\sum_{d_i\leq t}a_i.
+\]
+If an observed closing balance \(B_0\) belongs to day \(t_0\), the reconstructed close is
+\begin{equation}\label{eq:anchor}
+ B(t)=B_0+F(t)-F(t_0).
+\end{equation}
+At the anchor, the two cumulative-flow terms cancel and the result is exactly \(B_0\). Before the anchor, later flows are reversed; after it, new flows are added. The balance is exact arithmetic on the supplied records when the anchor and ledger are correct. That qualification does not establish that an export contains every posting.
+
+A later dated cash snapshot can supply the anchor instead of the original account observation. A future-dated observation is especially important to inspect because reconstructing today's balance around it requires future flows to be represented consistently. A date beyond today is not an additional source of observed current cash.
+
+The application uses daily net flows for closes. Transaction-by-transaction running balances additionally require an ordering within each day. Where the source does not supply a reliable order, an intermediate balance has an ordering qualification even though the day's closing sum can be determined. Display filters do not change the ledger used by this calculation.
+
+\section{Combine account histories}
+Checking and savings balances contribute to cash. A credit-card balance is signed internally: an amount owed is negative and contributes debt; a positive card credit contributes cash. Loan balances contribute debt, and investments contribute assets. Historical net worth is assembled from those components rather than treating a goal's saved amount as another asset.
+
+Loan and investment histories are interpolated between dated observations. Where the chart extends outside an account's known interval, an edge value may be carried flat. Similarly, cash history before its earliest known observation or transaction is filled at the edge rather than extrapolated through an unknown earlier ledger. A smooth or flat part of a chart can therefore be a reconstruction convention, not a sequence of measured balances.
+
+\section{Separate personal spending from ledger flow}
+Personal analysis excludes transfers and the business-paid portion of marked records. These exclusions do not remove the underlying ledger movement. A \money{3,500} deposit with \money{500} identified as business reimbursement increases the account by \money{3,500} while contributing \money{3,000} to personal income.
+
+Within known spending groups, refunds remain signed offsets. Unknown categories contribute negative personal flows to uncategorized spending. Income is drawn from positive personal amounts in the recognized income categories. These rules mean that reclassifying a transaction can change spending, the score, and the forecast sample without changing the account's posted balance.
+
+\section{Estimate a typical month}
+The monthly estimate considers up to 24 recorded complete months. The current partial month is excluded. A calendar month with no recorded personal rows is absent from this monthly sample; it is not automatically inserted as a complete zero month. This differs from the explicit weekly-window treatment used by Forecast.
+
+Let \(x_m\) be a signed monthly contribution to the group of interest, with outflows converted to positive spending and refunds retained as negative spending. If month \(m\) is \(k_m\) months before the newest included month, its weight is
+\[
+ w_m=2^{-k_m/3}.
+\]
+Thus a month three months older receives half the weight, and one six months older receives one quarter. The displayed nonnegative group estimate is
+\begin{equation}
+ \bar{x}=\max\left(0,\frac{\sum_m w_m x_m}{\sum_m w_m}\right).
+\end{equation}
+The zero floor is applied to the group, after signed contributions are combined. A category refund can offset another category in that group; flooring every category first would change the answer. The source-detail view traces individual weighted contributions and the included month shares.
+
+\section{Calculate the spending score}
+Let \(I\) be monthly personal income, \(S\) total personal spending, \(E\) needs, and \(W\) wants. The score uses the savings rate and wants-to-needs ratio,
+\[
+ r=\frac{I-S}{I},\qquad f=\frac{W}{E}.
+\]
+The implementation handles missing denominators rather than treating an undefined ratio as evidence of a good result. A wants-to-needs ratio alone cannot establish that spending is affordable: both needs and wants can be high relative to income.
+
+The habit component \(H(f)\) and means component \(M(r)\) are linearly interpolated through the following anchors, with inputs outside each range clamped to its endpoints.
+
+\begin{center}
+\begin{tabular}{@{}rrrr@{}}
+\toprule \(f\) & \(H(f)\) & \(r\) & \(M(r)\)\\\midrule
+0.00 & 10.0 & $-0.50$ & 0.0\\
+0.30 & 8.5 & $-0.20$ & 2.0\\
+0.60 & 5.0 & 0.00 & 4.0\\
+1.00 & 3.0 & 0.10 & 6.5\\
+2.00 & 1.0 & 0.20 & 8.5\\
+4.00 & 0.0 & 0.35 & 10.0\\\bottomrule
+\end{tabular}
+\end{center}
+
+The combined value is
+\begin{equation}
+ \mathrm{score}=\operatorname{clip}_{[0,10]}\left[
+ 0.6H+0.4M-2.5\left(1-\frac{H}{10}\right)\left(1-\frac{M}{10}\right)\right].
+\end{equation}
+For example, \(f=0.60\) and \(r=0.20\) give \(H=5\), \(M=8.5\), and a score of \(6.2125\) before display rounding. The interaction penalty is \(0.1875\). The formula is a chosen benchmark mapping; it is not a probability of financial success or a validated measure of personal behavior.
+
+The score is provisional when more than 25\% of spending remains uncategorized. Review the source records before using a category-sensitive result. Giving remains part of spending and the savings-rate calculation without being assigned to wants merely to complete a ratio. The application's descriptive wording and benchmark comparisons should be read with the actual amounts and the household's unmodeled commitments.
+
+\source{finfore/history.py; finfore/categorize.py; finfore/insights.py; tests/test_posted_ledger.py}

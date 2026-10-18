@@ -1,0 +1,30 @@
+{
+  "values": {
+    "GoalHeldBefore": "4,000.00",
+    "HouseHeldAfter": "1,300.00",
+    "BaseFinal": "17,684.20",
+    "PlanFinal": "18,698.15",
+    "ForecastWeeks": "53",
+    "ForecastPaths": "600"
+  },
+  "checks": [
+    "dated-anchor balances agree with independent statement arithmetic",
+    "located savings and account holdings each total $4,000",
+    "four-account allocation leaves no unassigned holdings",
+    "equal custom shares divide $350 into $175 and $175",
+    "purchase reduces held money but retains progress",
+    "goal activity creates no ledger transaction",
+    "budget reduction increases room by $200 with no category double counting",
+    "documented score example agrees with independent anchor arithmetic",
+    "forecast begins at the stated fictional balance and date",
+    "forecast percentiles are ordered at every date",
+    "repeated seeded plan run reproduces the saved percentile curves",
+    "saved budget mode is actually applied"
+  ],
+  "qualification": {
+    "check": "opening net worth with a $250 credit-card debt",
+    "ledger_networth": 750.0,
+    "forecast_networth": 1000.0,
+    "difference": 250.0
+  }
+}

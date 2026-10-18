@@ -1,0 +1,80 @@
+\chapter{A worked household example}\label{ch:examples}
+\index{worked examples}
+The following examples use fictional accounts and records. Their purpose is to connect the task steps with independently checkable amounts. The accompanying script runs the calculations in temporary databases and retains their inputs, results, and inspected source hashes. It does not open the user's database. The examples are separate small cases; the forecast case is not a reconstruction of the four-account case.
+
+\section{Check a dated balance}
+Suppose an account's posted closing balance on January 3 is \money{1,000}. Its ledger contains a \money{500} deposit on January 1, purchases of \money{100} and \money{50} on January 2 and 3, and a \money{25} purchase on January 4. The \money{50} purchase is already included in the January 3 closing observation.
+
+\input{generated/balance_table.tex}
+
+Moving one day forward gives \(1{,}000-25=975\). Moving one day backward reverses the January 3 outflow, giving \(1{,}000+50=1{,}050\). The January 1 close is therefore \(1{,}050+100=1{,}150\). Adding every transaction to the anchor again would double count flows that occurred on or before its date.
+
+To reproduce the interpretation in the interface, enter the January 3 observation, import those dated flows, and compare the reconstructed daily closes. Search filters may hide rows, but must not change those closes. The program-generated table above agrees with the independent arithmetic.
+
+\section{Locate four thousand dollars}\label{sec:example-goals}
+Checking, Savings, Money market, and a CD each hold \money{1,000}. The money market is entered as Savings and the CD as Investment. Create four savings goals, then record these locations:
+
+\begin{enumerate}
+\item Locate the \money{1,000} Baseline in Checking.
+\item Locate the \money{1,500} Funded purchase across Savings (\money{1,000}) and Money market (\money{500}).
+\item Locate \money{1,500} toward House across the remaining Money market (\money{500}) and CD (\money{1,000}).
+\item Leave Unfunded purchase with no money set aside.
+\end{enumerate}
+
+\input{generated/goal_table.tex}
+
+\begin{figure}[htbp]
+\centering\input{figures/funding.tex}
+\caption{One set of holdings, divided among purposes. Account bars share a dollar scale. The \money{10,000} House goal is 15\% funded even though its \money{1,500} occupies more account space than the fully funded Baseline.}
+\label{fig:funding}
+\end{figure}
+
+The account total and located savings both equal \money{\GoalHeldBefore}. No additional money has been created. There is no unassigned holding in this example. The progress fractions are 100\%, 100\%, 15\%, and 0\%, respectively. A full goal-progress bar measures its own target, so the two full bars do not imply equal amounts.
+
+If the initial \money{1,500} for House had been entered without locations, it would remain saved progress under Account not assigned. Use Locate savings to identify those sources; adding another contribution instead would count the same savings twice. Location does not make the CD withdrawable or change its Forecast account type.
+
+\section{Allocate a monthly allowance}
+Keep the first two goals complete and choose Custom for House and Unfunded purchase. With a \money{350} monthly allowance and equal shares of 100 and 100, the first month's allocation is
+\[
+ 350\frac{100}{100+100}=175
+\]
+for each unfinished goal. Shares of 1 and 1 give the same result. These inputs are relative weights; entering 100 does not cap the allocation at \money{100}. When the \money{500} target finishes, subsequent available money is redistributed among the remaining targets.
+
+Now suppose \money{200} is spent from the CD toward House and the expenditure is recorded as Spend toward goal. House has \money{\HouseHeldAfter} still held and \money{200} of recorded purchases. Its total progress remains \money{1,500}. This activity changes the goal record only; an actual withdrawal must also appear in the bank or investment records. For a reserve withdrawal that should reduce progress and be rebuilt, use Release savings instead.
+
+\section{Make room in the budget}
+The following monthly budget makes the connection between a spending decision and a goal allowance explicit.
+
+\input{generated/budget_table.tex}
+
+Before the change, expenses total \money{3,400}, leaving \money{600} before goals. An allowance of \money{350} leaves \money{250} unassigned. Reducing wants by \money{200} leaves \money{800} before goals. Choosing an allowance of \money{550} assigns the additional room while leaving the same \money{250} unassigned.
+
+Saving a lower wants amount does not itself prove that spending will fall. The budget records the intended assumption. Confirm that the income and other commitments are complete, save the plan, and then test that assumption in Forecast.
+
+\begin{figure}[htbp]
+\centering\input{figures/plan_flow.tex}
+\caption{The intended planning workflow. The allowance is shared between Goals and Monthly budget. Forecast uses the saved plan only when the corresponding option is enabled.}
+\label{fig:plan-flow}
+\end{figure}
+
+\section{Compare the conditional forecast}
+The forecast example begins with \money{8,000} of checking on \ExampleDate. Its fictional history contains monthly pay of \money{4,000}, rent of \money{2,000}, utilities of \money{200}, insurance of \money{100}, giving of \money{100}, and seeded weekly grocery and dining expenses. Pay and rent are saved monthly patterns. Their future dates remain in the forecast rather than being replaced by a straight monthly line.
+
+The retained run uses \ForecastWeeks\ usable historical weeks, \ForecastPaths\ simulated paths, a 365-day horizon, and seed 7. The historical grocery and dining generator uses seed 41. A second run enables the saved budget in the preceding table and its \money{550} allowance. There are no loans or investments in this small forecast case, so earmarking the allowance does not itself remove cash. The saved income and spending amounts are what change the cash path.
+
+\begin{figure}[htbp]
+\centering\input{figures/forecast.tex}
+\caption{Fictional cash projection. The light and darker bands are baseline P10--P90 and P25--P75 at each date. Lines show the baseline and saved-plan P50. These conditional model outputs are not measured prediction accuracy.}
+\label{fig:forecast-example}
+\end{figure}
+
+The final baseline P50 is \money{\BaseFinal}; the saved-plan P50 is \money{\PlanFinal}. These values come from the retained run, not from a general claim that a particular budget always produces that difference. The planned case is compared with the synthetic historical baseline, whose category totals differ from the illustrative ``Before'' budget. It is therefore not a controlled experiment of the \money{200} reduction alone.
+
+The generator checks the opening balance, percentile ordering, application of saved-plan mode, and exact repetition of the seeded planned P50. It also checks the account and goal arithmetic above. Those checks establish specific implementation properties. They do not establish that the synthetic history represents a household or that the forecast is accurate outside the model.
+
+\section{Repeat the examples}
+From \file{docs/manual}, run \code{make examples}, then \code{make pdf}. The generator records its date, dependency versions, source hashes, checks, and diagnostic comparisons under \file{generated/}. It uses the current date because the application's ordinary entry points use the present day. A later date or source version can therefore change the retained forecast values even with the same seeds. Preserve the old manifest if comparing editions.
+
+The separate credit-card opening comparison in Chapter~\ref{ch:forecast-methods} is retained whether it agrees or identifies a limitation. A successful example build must not be read as a claim that every possible account or forecast behavior passed.
+
+\source{docs/manual/examples/build_examples.py; docs/manual/generated/provenance.json}

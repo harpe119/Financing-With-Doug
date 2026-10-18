@@ -372,7 +372,7 @@ class PostedLedgerUITests(PostedLedgerTests):
         self.assertEqual(dialog.c_transaction_date.currentData(),'Transaction Date')
         self.assertEqual(dialog.c_reference.currentData(),'Reference')
         account=AccountDialog(account=self.store.account(self.aid))
-        self.assertEqual(account.balance_label.text(),'Closing posted balance')
+        self.assertEqual(account.balance_label.text(),'Balance at end of day')
         account.overdraft.setChecked(True)
         self.assertTrue(account.get_account().allow_overdraft)
         balance=UpdateBalanceDialog(self.store.account(self.aid))

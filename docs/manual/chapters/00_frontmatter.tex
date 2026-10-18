@@ -1,0 +1,90 @@
+\begin{titlepage}
+\thispagestyle{empty}
+\definecolor{CoverPaper}{HTML}{FBFAF7}
+\definecolor{CoverSage}{HTML}{62765A}
+\begin{tikzpicture}[remember picture,overlay]
+\fill[CoverPaper] (current page.north west) rectangle (current page.south east);
+\node[anchor=north,inner sep=0pt,text=Ink,align=center,text width=7.2in]
+  at ([yshift=-0.6in]current page.north)
+  {{\sffamily\fontsize{39}{45}\selectfont\bfseries Financing\hspace{0.25em}with\hspace{0.25em}Doug\par}};
+\node[anchor=north,inner sep=0pt,text=Ink,align=center,text width=7.2in]
+  at ([yshift=-1.33in]current page.north)
+  {{\sffamily\fontsize{15}{20}\selectfont User's Manual and Calculation Guide\par}};
+\node[anchor=north,inner sep=0pt,text=Muted,align=center,text width=7.2in]
+  at ([yshift=-1.78in]current page.north)
+  {{\sffamily\fontsize{10.2}{14}\selectfont Accounts, budgets, goals, and forecasts\par}};
+\draw[CoverSage,line width=1pt]
+  ([xshift=-0.4in,yshift=-2.08in]current page.north) --
+  ([xshift=0.4in,yshift=-2.08in]current page.north);
+\node[anchor=north,inner sep=0pt] at ([yshift=-2.25in]current page.north)
+  {\includegraphics[width=4.8in]{figures/cover-doug-v6.png}};
+\draw[Rule,line width=0.35pt]
+  ([xshift=-2.4in,yshift=-2.25in]current page.north) rectangle
+  ([xshift=2.4in,yshift=-8.65in]current page.north);
+\node[anchor=north,inner sep=0pt,text=Muted,align=center,text width=6.8in]
+  at ([yshift=-8.87in]current page.north)
+  {{\rmfamily\fontsize{10}{14}\selectfont\itshape Doug's self-portrait. Accuracy not independently verified.\par}};
+\node[anchor=north,inner sep=0pt,text=Ink,align=center,text width=7.2in]
+  at ([yshift=-9.42in]current page.north)
+  {{\sffamily\fontsize{14}{18}\selectfont Dr. Caleb N. Harper\par}};
+\node[anchor=north,inner sep=0pt,text=Muted,align=center,text width=7.2in]
+  at ([yshift=-9.98in]current page.north)
+  {{\sffamily\fontsize{9.5}{13}\selectfont Doug \AppVersion\quad\textbullet\quad Manual revision \ManualRevision\par}};
+\node[anchor=north,inner sep=0pt,text=Muted,align=center,text width=7.2in]
+  at ([yshift=-10.33in]current page.north)
+  {{\sffamily\fontsize{9.5}{13}\selectfont Prepared October 17, 2026\par}};
+\end{tikzpicture}
+\null\vfill
+\end{titlepage}
+
+\chapter*{About this manual}
+\addcontentsline{toc}{chapter}{About this manual}
+Doug records financial information supplied by its user and uses that information to describe history and estimate future outcomes. The purpose of this manual is to explain how to perform those tasks, what each result means, and which records or assumptions should be checked when the result is unexpected. Prior knowledge of accounting, statistics, or the application is not required.
+
+The first part provides a starting path and the conventions used throughout the application. The task chapters then explain individual activities, including importing statements, locating goal savings, building a monthly budget, and comparing forecasts. Worked examples connect these activities with amounts that can be checked independently. The calculation chapters develop the underlying methods for readers who want to understand why the application produces a particular result. Appendix D describes how to keep the manual aligned with the implementation.
+
+\begin{notebox}{Scope of this edition}
+This edition describes Doug \AppVersion\ and the working implementation inspected on \ExampleDate. GUI review was in progress during preparation. It follows the grouped navigation shown in Chapter~\ref{ch:conventions}; older installed releases may place the same pages directly in the sidebar. A source commit alone does not identify uncommitted GUI work. The recorded example manifest therefore includes the SHA-256 hashes of the inspected application files.
+\end{notebox}
+
+The text uses dollars because that is the currency convention implemented by the inspected application. It does not describe currency conversion or independent ledgers in multiple currencies. Figures and worked records are fictional. The diagrams illustrate relationships without depending on the exact position or color of a control in a transient GUI layout.
+
+\section*{How to use the book}
+Read Chapters~\ref{ch:setup}--\ref{ch:conventions} for a first session. For an immediate task, use the table below or the linked contents. A task chapter explains its purpose, the procedure, the expected result, and the checks to make when the result differs. The detailed calculation chapters can be read separately.
+
+\begin{tabularx}{\textwidth}{@{}YY@{}}
+\toprule
+I want to\ldots & Start here\\\midrule
+Set up accounts and import a statement & Chapters~\ref{ch:accounts} and \ref{ch:importing}\\
+Understand a balance difference & \seeref{sec:reconcile}; Appendix~\ref{app:troubleshooting}\\
+Correct a category or a reimbursement & Chapter~\ref{ch:transactions}\\
+See upcoming bills and paydays & Chapter~\ref{ch:calendar}\\
+See which accounts hold my goal savings & Chapter~\ref{ch:goals}\\
+Make room in a monthly budget & Chapter~\ref{ch:budget}\\
+Test a change in spending or income & Chapter~\ref{ch:forecast}\\
+Compare a saved forecast with later records & Chapter~\ref{ch:track}\\
+Back up or restore a database & Chapter~\ref{ch:data}\\
+Check a formula or maintain this document & Part IV and Appendix~\ref{app:maintenance}\\
+\bottomrule
+\end{tabularx}
+
+\section*{Interpretation of results}
+A forecast is conditional on the records, assumptions, and model used to construct it. Missing transactions, changed income, unrecorded commitments, unusual expenses, and different investment returns can produce outcomes outside the displayed bands. A data-quality check identifies records to inspect; passing it does not establish completeness or forecast accuracy. A spending score is a benchmark calculation rather than an assessment of a person's circumstances. The manual explains the program's behavior and does not prescribe a financial decision.
+
+\section*{Revision history}
+\begin{tabularx}{\textwidth}{@{}llY@{}}
+\toprule Revision & Date & Description\\\midrule
+1.0 & 2026-10-17 & First standalone edition: setup, task workflows, account and goal examples, calculation methods, troubleshooting, and reproducible maintenance instructions. Application integration is deferred.\\
+1.1 & 2026-10-17 & Illustrated textbook cover reflecting Doug's family backstory. Calculation evidence and application baseline are retained.\\
+1.2 & 2026-10-17 & Refined cover with a technical illustration, restrained palette, and serif title typography.\\
+1.3 & 2026-10-17 & Added Doug's buck-toothed grin, pen-filled shirt pocket, and bow tie while retaining the textbook illustration style.\\
+1.4 & 2026-10-17 & Revised Doug with curly hair, lankier proportions, and an awkward deadpan expression.\\
+1.5 & 2026-10-17 & Added exaggerated round glasses and thick magnifying lenses using the supplied expression reference.\\
+1.6 & 2026-10-17 & Replaced the cover with a fresh full-color portrait based directly on the supplied photograph.\\
+1.7 & 2026-10-17 & Centered title-page layout, portrait caption, and clearer author and edition details.\\
+1.8 & 2026-10-17 & Added Help > User manual (PDF), bundled-file opening, and packaging checks. Calculation evidence is retained.\\
+1.9 & 2026-10-17 & Updated for Doug 1.22.0: View > Appearance (light and dark), first-use panels, Home's new order and Needs a look, the Forecast panel in Simple view, What Doug read on import, the calendar's today ring, keyboard behavior, and the date convention. Examples regenerated.\\\bottomrule
+\end{tabularx}
+
+The examples were generated against Doug \AppVersion, commit \texttt{\SourceCommit}, with local modifications recorded in the provenance manifest. Their generation date is \ExampleDate. A PDF-only build reuses those retained calculations. It does not rerun the application or turn an earlier observation into a fresh verification result.
+

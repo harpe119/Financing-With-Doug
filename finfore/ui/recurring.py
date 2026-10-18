@@ -13,8 +13,10 @@ from ..models import AccountType, CADENCE_LABEL
 from ..pipeline import refresh_derived
 from ..recurrence import next_occurrence
 from ..store import Store
-from ..util import fmt_money
+from ..util import fmt_money, fmt_day
 from . import theme
+from .first_use import (NO_ACCOUNTS, NO_TRANSACTIONS, READY, FirstUsePanel,
+                        setup_stage)
 from .widgets import hint
 
 
@@ -37,7 +39,22 @@ class RecurringPage(QWidget):
         lay.setContentsMargins(18, 16, 18, 16)
         lay.setSpacing(10)
 
-        bar = QHBoxLayout()
+        self.first_use = FirstUsePanel(
+            main, "No bills or paychecks found yet",
+            "Bills and paychecks are the charges and deposits that repeat on a "
+            "schedule. Doug spots them in your statements, lists them on the "
+            "calendar and counts them in the forecast.",
+            {NO_ACCOUNTS: "Add an account, then import its statements.",
+             NO_TRANSACTIONS: "Import a CSV from your bank. About three months "
+                              "of statements show the repeats best.",
+             READY: "Nothing has repeated often enough yet: a bill or paycheck "
+                    "needs at least three matching entries at a regular "
+                    "interval. Look again after importing more history."},
+            ready_label="Re-detect from ledger", ready_action=lambda: self._redetect())
+        lay.addWidget(self.first_use, 0, Qt.AlignmentFlag.AlignTop)
+        self.toolbar = QWidget()
+        bar = QHBoxLayout(self.toolbar)
+        bar.setContentsMargins(0, 0, 0, 0)
         bar.addWidget(hint(
             "These patterns supply the calendar and forecast. Uncheck On to exclude an item. "
             "Delete patterns that have ended. Right-click to change the type or link a loan payment."), 1)
@@ -48,10 +65,14 @@ class RecurringPage(QWidget):
         delete.setObjectName("danger")
         delete.clicked.connect(self._delete)
         bar.addWidget(delete)
-        lay.addLayout(bar)
+        lay.addWidget(self.toolbar)
 
         self.table = QTableWidget(0, len(self.COLS))
         self.table.setHorizontalHeaderLabels(self.COLS)
+        self.table.setAccessibleName("Detected bills and pay")
+        # Tab moves on to the next control; the arrow keys move between cells. Left
+        # on, Tab walked every cell and never left the table.
+        self.table.setTabKeyNavigation(False)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.setAlternatingRowColors(True)
@@ -71,6 +92,11 @@ class RecurringPage(QWidget):
     def refresh(self) -> None:
         self._loading = True
         items = self.store.recurring()
+        self.first_use.setVisible(not items)
+        self.toolbar.setVisible(bool(items))
+        self.table.setVisible(bool(items))
+        if not items:
+            self.first_use.sync(setup_stage(self.store))
         loans = [a for a in self.store.accounts() if a.type == AccountType.LOAN]
         today = date.today()
         self.table.setRowCount(len(items))
@@ -95,7 +121,7 @@ class RecurringPage(QWidget):
             mo.setTextAlignment(Qt.AlignmentFlag.AlignRight
                                 | Qt.AlignmentFlag.AlignVCenter)
             nxt = next_occurrence(it, today)
-            nx = QTableWidgetItem(nxt.isoformat() if nxt else "—")
+            nx = QTableWidgetItem(fmt_day(nxt) if nxt else "—")
             conf = QTableWidgetItem(f"{it.confidence * 100:.0f}%")
 
             for col, item in enumerate((on, name, cad, amt, mo, nx, conf)):
@@ -169,15 +195,16 @@ class RecurringPage(QWidget):
             return
         item_id = self.table.item(r, 0).data(Qt.ItemDataRole.UserRole)
         name = self.table.item(r, 1).text()
-        ok = QMessageBox.question(
+        from .accounts import confirm
+        if confirm(
             self, "Delete recurring pattern",
             f"Delete “{name}”?\n\n"
             "Use this only for patterns that no longer occur at all — if "
             "matching transactions are still in your ledger, re-detecting "
             "will simply find it again. To exclude a pattern that still "
             "happens but shouldn't count in the forecast, uncheck “On”, or "
-            "right-click it and choose “Not real — ignore it”, instead.")
-        if ok == QMessageBox.StandardButton.Yes:
+            "right-click it and choose “Not real — ignore it”, instead.",
+            yes_text="Delete pattern"):
             self.store.delete_recurring(item_id)
             self.refresh()
             self.main.refresh_header()

@@ -12,12 +12,14 @@ from PyQt6.QtWidgets import (QCheckBox, QComboBox, QDialog, QFileDialog,
                              QTableWidgetItem, QVBoxLayout, QDialogButtonBox, QHeaderView, QScrollArea, QWidget)
 from PyQt6.QtCore import Qt
 
-from ..ingest import ImportConfig, SIGN_MODES, guess_mapping, read_raw, sniff_delimiter
+from ..ingest import (ImportConfig, SIGN_MODES, guess_mapping, parse_transactions,
+                      read_raw, sniff_delimiter)
 from ..models import AccountType
 from ..pipeline import import_with_config, import_summary, refresh_derived
 from ..import_matching import PostingDateReviewRequired
 from ..store import Store
-from .widgets import Card, CollapsibleCard, form_row, hint
+from .widgets import Card, CollapsibleCard, WrappingLabel, form_row, hint
+from . import theme
 from ..util import fmt_money
 
 
@@ -100,13 +102,19 @@ class ImportDialog(QDialog):
                     "anything is imported.")
     _CHECK_PREVIEW = ('Use Posting Date for balance history; weekend purchases may post later. '
                       'Transaction Date is kept separately. Check amount signs: spending is negative and income positive.')
+    _LOOKS_RIGHT = ("Check that this reads the way your statement does. If it doesn't, "
+                    "open “Adjust how the file is read” and change it; nothing is "
+                    "imported until you press Import.")
 
     def __init__(self, store: Store, parent=None, account_id: int | None = None):
         super().__init__(parent)
         self.store = store
         self.result_counts: tuple[int, int] | None = None
         self.setWindowTitle("Import bank CSV")
-        self.setMinimumSize(720, 560)
+        # Width only: the height a dialog needs depends on whether the columns are
+        # open, and a fixed minimum height let the summary overlap the next card.
+        self.setMinimumWidth(640)
+        self.resize(720, 520)
 
         lay = QVBoxLayout(self)
         lay.setSpacing(10)
@@ -145,7 +153,42 @@ class ImportDialog(QDialog):
                          else self._CHOOSE_FILE)
         lay.addWidget(self.note)
 
+        # What Doug made of the file, in the terms a person checks a statement by:
+        # how many, from when to when, which way the money went, and the first few
+        # rows as they will be saved. The columns and separators that produced it
+        # are behind "Adjust how the file is read", and open by themselves only
+        # when the file could not be read.
+        self.read_card = Card("What Doug read")
+        self.read_summary = WrappingLabel("")
+        self.read_summary.setTextFormat(Qt.TextFormat.PlainText)
+        self.read_card.body.addWidget(self.read_summary)
+        self.read_table = QTableWidget(0, 3)
+        self.read_table.setHorizontalHeaderLabels(["Date", "Description", "Amount"])
+        self.read_table.setAccessibleName("First rows as Doug reads them")
+        self.read_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.read_table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
+        self.read_table.setTabKeyNavigation(False)
+        self.read_table.verticalHeader().setVisible(False)
+        self.read_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        self.read_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.read_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.read_table.setFixedHeight(40 + 3 * 30 + 6)
+        self.read_card.body.addWidget(self.read_table)
+        self.read_warning = WrappingLabel("")
+        self.read_warning.setObjectName("ledgerWarning")
+        self.read_warning.setTextFormat(Qt.TextFormat.PlainText)
+        self.read_warning.hide()
+        self.read_card.body.addWidget(self.read_warning)
+        self.read_card.setVisible(False)
+        lay.addWidget(self.read_card)
+
+        self.adjust = CollapsibleCard("Adjust how the file is read", expanded=False)
+        self.adjust.setVisible(False)
+        self.adjust.header.clicked.connect(self._grow)
+        lay.addWidget(self.adjust, 1)
+
         # options
+        self.technical_hint = hint(self._CHECK_PREVIEW)
         opts = QGridLayout()
         self.delim = QComboBox()
         for label, val in _DELIMS:
@@ -166,7 +209,7 @@ class ImportDialog(QDialog):
         sign_label.setBuddy(self.sign)
         opts.addWidget(sign_label,1,0)
         opts.addWidget(self.sign,1,1,1,2)
-        lay.addLayout(opts)
+        self.adjust.body.addLayout(opts)
 
         # column mapping
         map_card = Card("Column mapping")
@@ -213,7 +256,8 @@ class ImportDialog(QDialog):
         mapping_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
         mapping_scroll.setWidget(mapping_host)
         mapping_scroll.setMinimumHeight(160)
-        lay.addWidget(mapping_scroll,1)
+        self.adjust.body.addWidget(self.technical_hint)
+        self.adjust.body.addWidget(mapping_scroll, 1)
 
         # preview
         self.preview = QTableWidget(0, 0)
@@ -221,7 +265,15 @@ class ImportDialog(QDialog):
         self.preview.verticalHeader().setVisible(False)
         self.preview.setAlternatingRowColors(True)
         self.preview.setMinimumHeight(110)
-        lay.addWidget(self.preview, 1)
+        self.adjust.body.addWidget(self.preview, 1)
+
+        # An import is the first thing most people do that they are afraid to get
+        # wrong, so say that it can be taken back.
+        # Takes the spare height only while nothing else wants it: before a file is
+        # chosen the two cards above are hidden, and the space used to be shared out
+        # between the rows that were left, scattering them down the dialog.
+        lay.addStretch(0)
+        lay.addWidget(hint("You can take an import back: press Ctrl+Z, or use Undo in the header."))
 
         # actions
         actions = QHBoxLayout()
@@ -238,6 +290,13 @@ class ImportDialog(QDialog):
         lay.addLayout(actions)
 
         self.delim.currentIndexChanged.connect(self._reload)
+        # Every choice that changes what is read re-reads it, so the summary above
+        # is always about the settings below.
+        for control in (self.sign, self.c_date, self.c_desc, self.c_amount, self.c_indicator,
+                        self.c_debit, self.c_credit, self.c_transaction_date,
+                        self.c_reference, self.c_status):
+            control.currentIndexChanged.connect(self._refresh_read)
+        self.dayfirst.toggled.connect(self._refresh_read)
         self._columns: list[str] = []
 
     # ---------------------------------------------------------------
@@ -292,16 +351,63 @@ class ImportDialog(QDialog):
                 self.preview.setItem(r, c, QTableWidgetItem(str(df.iat[r, c])))
         self.preview.resizeColumnsToContents()
         self.go.setEnabled(self.account.count() > 0)
-        self.note.setText(self._CHECK_PREVIEW if self.account.count() > 0
+        self.note.setText(self._LOOKS_RIGHT if self.account.count() > 0
                           else self._NO_ACCOUNT)
+        self.read_card.setVisible(True)
+        self.adjust.setVisible(True)
+        self._refresh_read()
 
-    def _import(self) -> None:
-        if self.account.currentData() is None:
-            QMessageBox.information(
-                self, "No account to import into",
-                "Add a checking, savings or credit-card account first "
-                "(Accounts → Add account), then import again.")
+    def _grow(self) -> None:
+        """Give the columns and the raw preview room when they are opened."""
+        if self.adjust.expanded and self.height() < 700:
+            self.resize(max(self.width(), 720), 700)
+
+    def _refresh_read(self, *_args) -> None:
+        """Say what these settings would import, before anything is imported."""
+        if not self.path.text():
             return
+        self.read_warning.hide()
+        try:
+            df = parse_transactions(self._config())
+        except Exception as error:
+            self.read_summary.setText("Doug can't read this file with these settings yet.")
+            self.read_warning.setText(str(error))
+            self.read_warning.show()
+            self.read_table.setRowCount(0)
+            self.read_table.hide()
+            self.adjust.set_expanded(True)
+            self._grow()
+            return
+        n = len(df)
+        out_rows = int((df["amount"] < 0).sum())
+        in_rows = int((df["amount"] > 0).sum())
+        first, last = df["date"].min(), df["date"].max()
+        summary = (f"{n:,} transaction{'s' if n != 1 else ''}"
+                   f" · {first:%b} {first.day}, {first.year} to {last:%b} {last.day}, {last.year}"
+                   f" · {out_rows:,} money out, {in_rows:,} money in")
+        pending = len(df.attrs.get("import_report", {}).get("pending", []))
+        if pending:
+            summary += f" · {pending:,} still pending, left out"
+        self.read_summary.setText(summary)
+        shown = df.head(3)
+        self.read_table.setRowCount(len(shown))
+        for r, row in enumerate(shown.itertuples()):
+            amount = QTableWidgetItem(fmt_money(row.amount, signed=True))
+            amount.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            amount.setForeground(theme.qcolor(theme.NEGATIVE if row.amount < 0 else theme.POSITIVE))
+            for c, item in enumerate((QTableWidgetItem(f"{row.date:%b} {row.date.day}, {row.date.year}"),
+                                      QTableWidgetItem(row.description), amount)):
+                self.read_table.setItem(r, c, item)
+        self.read_table.show()
+        if n >= 5 and in_rows / n > 0.9:
+            self.read_warning.setText(
+                "Nearly every row reads as money in. If your bank lists purchases as "
+                "positive numbers, open “Adjust how the file is read” and set how "
+                "amount signs are read.")
+            self.read_warning.show()
+
+    def _config(self) -> ImportConfig:
+        """The settings as they stand, with the amount-sign style worked out."""
         sign = self.sign.currentData()
         if sign == "auto":
             if self.c_indicator.currentData() and self.c_amount.currentData():
@@ -311,7 +417,7 @@ class ImportDialog(QDialog):
                 sign = "debit_credit"
             else:
                 sign = "standard"
-        cfg = ImportConfig(
+        return ImportConfig(
             path=self.path.text(),
             account_id=self.account.currentData(),
             delimiter=self._delimiter(),
@@ -326,6 +432,15 @@ class ImportDialog(QDialog):
             col_transaction_date=self.c_transaction_date.currentData() or '',
             col_reference=self.c_reference.currentData() or '', col_status=self.c_status.currentData() or '',
         )
+
+    def _import(self) -> None:
+        if self.account.currentData() is None:
+            QMessageBox.information(
+                self, "No account to import into",
+                "Add a checking, savings or credit-card account first "
+                "(Accounts → Add account), then import again.")
+            return
+        cfg = self._config()
         try:
             # One press of Ctrl-Z has to take back the whole import. Without
             # the group this is four separate steps — rows, saved mapping,
@@ -352,5 +467,5 @@ class ImportDialog(QDialog):
             f"Doug found {n_rec} recurring bill or income "
             f"pattern{'s' if n_rec != 1 else ''}. Review "
             f"{'it' if n_rec == 1 else 'them'} under Bills & payday → "
-            f"Recurring patterns.")
+            f"Detected bills & pay.")
         self.accept()

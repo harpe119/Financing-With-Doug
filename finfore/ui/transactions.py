@@ -30,7 +30,7 @@ from ..history import transaction_balances
 from ..account_view import money_exact
 from .review_dialog import ReviewUncategorizedDialog
 from ..store import Store
-from ..util import fmt_date, fmt_money
+from ..util import fmt_date, fmt_money, fmt_day
 from . import theme
 from .widgets import FlowLayout, InfoDialog, hint
 from .account_dialog import _money_spin
@@ -155,7 +155,7 @@ def all_categories(store: Store | None = None, transactions=None) -> list[str]:
 
 def _review_time(value):
     stamp = pd.to_datetime(value, errors='coerce')
-    return stamp.strftime('%b %d, %Y at %H:%M') if pd.notna(stamp) else 'Unknown date'
+    return f"{fmt_day(stamp)} at {stamp:%H:%M}" if pd.notna(stamp) else 'Unknown date'
 
 
 class TransactionsPage(QWidget):
@@ -198,6 +198,9 @@ class TransactionsPage(QWidget):
         self.attention_btn = QPushButton('Review entries')
         self.attention_btn.setObjectName('primary')
         self.attention_btn.clicked.connect(self._open_attention)
+        self.attention_btn.setToolTip(
+            'Doug guessed these categories from the description, or could not place '
+            'them. Check each one, or select the right ones and press Mark reviewed.')
         self.tools_btn = QPushButton('Tools…')
         self.tools_menu = QMenu(self.tools_btn)
         self.tools_btn.setMenu(self.tools_menu)
@@ -218,7 +221,7 @@ class TransactionsPage(QWidget):
         self.f_since.setCurrentIndex(2)          # last 12 months
         self.since_date = QDateEdit(QDate.currentDate().addMonths(-3))
         self.since_date.setCalendarPopup(True)
-        self.since_date.setDisplayFormat("yyyy-MM-dd")
+        self.since_date.setDisplayFormat("MMM d, yyyy")
         self.since_date.setVisible(False)
         self.search = QLineEdit()
         self.search.setPlaceholderText("Search descriptions…")
@@ -525,6 +528,10 @@ class TransactionsPage(QWidget):
         self._clear_filters()
         self.f_review.setCurrentIndex(self.f_review.findData('attention'))
 
+    def show_attention(self) -> None:
+        """Open on the transactions whose category still needs a person's look."""
+        self._open_attention()
+
     def _sync_selection_controls(self, *_args) -> None:
         if self._suspend_cell_signal:
             return
@@ -804,6 +811,21 @@ class TransactionsPage(QWidget):
         self.search.clear()
         self._render()
 
+    def show_account(self, account_id: int) -> None:
+        """Open on one account's ledger, with every other filter cleared.
+
+        Used by Balances: choosing an account there and asking for its
+        transactions should show all of that account's rows, not whatever
+        category or review filter was left set the last time.
+        """
+        self.f_review.setCurrentIndex(0)
+        self.f_category.setCurrentIndex(0)
+        self.search.clear()
+        self.negative_only.setChecked(False)
+        i = self.f_account.findData(account_id)
+        self.f_account.setCurrentIndex(i if i >= 0 else 0)
+        self._render()
+
     def _since_cutoff(self) -> pd.Timestamp | None:
         """The oldest date to display, or None for no limit."""
         v = self.f_since.currentData()
@@ -955,7 +977,7 @@ class TransactionsPage(QWidget):
                  f"net cash flow {fmt_money(net, signed=True)}"]
         if cutoff is not None and older:
             parts.append(f"{older} older than "
-                         f"{cutoff.date().isoformat()} hidden")
+                         f"{fmt_day(cutoff)} hidden")
         if cutoff is not None and undated:
             parts.append(f"{undated} without a date hidden")
         self.count_lbl.setText(" · ".join(parts))

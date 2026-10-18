@@ -26,7 +26,7 @@ from ..import_matching import PostingDateReviewRequired
 from .import_dialog import confirm_posting_dates, ImportDetailsDialog
 from ..store import Store
 from ..history import current_accounts
-from ..util import fmt_money
+from ..util import fmt_money, fmt_day
 from . import theme
 from .account_dialog import AccountDialog, _money_spin
 from .widgets import form_row, hint
@@ -69,7 +69,7 @@ class SnapshotEntryDialog(QDialog):
         self.when = QDateEdit(QDate(when.year, when.month, when.day)
                               if when else QDate.currentDate())
         self.when.setCalendarPopup(True)
-        self.when.setDisplayFormat("yyyy-MM-dd")
+        self.when.setDisplayFormat("MMM d, yyyy")
         self.balance = _money_spin()
         self.balance.setValue(balance)
         form.addRow("Date", self.when)
@@ -297,11 +297,11 @@ class SnapshotImportDialog(QDialog):
             return
         d0, b0 = recs[0]
         d1, b1 = recs[-1]
-        note = (f"{len(recs)} balance points — {d0.isoformat()} at "
-                f"{fmt_money(b0)} → {d1.isoformat()} at {fmt_money(b1)}.")
+        note = (f"{len(recs)} balance points — {fmt_day(d0)} at "
+                f"{fmt_money(b0)} → {fmt_day(d1)} at {fmt_money(b1)}.")
         if self.mode.currentData() == self.ACTIVITY:
             note += (f"  Worked back from the {fmt_money(self.account.balance)} "
-                     f"balance on {self.account.balance_date.isoformat()}; "
+                     f"balance on {fmt_day(self.account.balance_date)}; "
                      f"principal only, so interest not itemised in the file "
                      f"isn't reflected. If the direction looks wrong, untick "
                      f"the box above.")
@@ -432,7 +432,7 @@ class SnapshotManagerDialog(QDialog):
         df = self.store.snapshots(self.account.id)
         self.table.setRowCount(len(df))
         for r, (_, row) in enumerate(df.iterrows()):
-            d_item = QTableWidgetItem(pd.Timestamp(row["date"]).date().isoformat())
+            d_item = QTableWidgetItem(fmt_day(row["date"]))
             d_item.setData(Qt.ItemDataRole.UserRole, int(row["id"]))
             b_item = QTableWidgetItem(fmt_money(row["balance"]))
             b_item.setTextAlignment(Qt.AlignmentFlag.AlignRight
@@ -443,7 +443,7 @@ class SnapshotManagerDialog(QDialog):
         self.count_note.setText(
             f"{len(df)} snapshot{'s' if len(df) != 1 else ''} · current balance "
             f"{fmt_money(self.account.balance)} as of "
-            f"{self.account.balance_date.isoformat()}")
+            f"{fmt_day(self.account.balance_date)}")
         if self.pre_row is not None:
             # With no snapshots there is no "before the first one" to describe,
             # and the balance is held flat regardless — offering the choice
@@ -755,11 +755,11 @@ class DuplicateDialog(QDialog):
         for rep in self._reports:
             for p in rep.pairs:
                 box = QCheckBox()
-                box.setAccessibleName(f"Remove “{p.drop_desc}” on {p.when.isoformat()}")
+                box.setAccessibleName(f"Remove “{p.drop_desc}” on {fmt_day(p.when)}")
                 box.setChecked(p.drop_id in rep.suggested)
                 box.stateChanged.connect(lambda _s: self._sync_effect())
                 self.table.setCellWidget(r, 0, box)
-                cells = [rep.account, p.when.isoformat() if p.when == p.other_when else f'{p.when} / {p.other_when}',
+                cells = [rep.account, fmt_day(p.when) if p.when == p.other_when else f'{fmt_day(p.when)} / {fmt_day(p.other_when)}',
                          f"{'+' if p.amount > 0 else '-'}${abs(p.amount):,.2f}",
                          p.keep_desc, p.drop_desc, f"{p.score:.2f}"]
                 for c, v in enumerate(cells, start=1):
@@ -847,7 +847,7 @@ class UpdateBalanceDialog(QDialog):
         self.balance = _money_spin(0 if owed else -1e9)
         shown = -account.balance if account.type == AccountType.CREDIT else account.balance
         self.balance.setValue(shown)
-        label = QLabel("Amount owed" if owed else 'Closing posted balance' if account.type.is_cashlike else "Balance")
+        label = QLabel("Amount owed" if owed else 'Balance at end of day' if account.type.is_cashlike else "Balance")
         label.setBuddy(self.balance)
         form.addRow(label, self.balance)
         self.when = QDateEdit(QDate.currentDate())
@@ -856,8 +856,8 @@ class UpdateBalanceDialog(QDialog):
         asof = QLabel("As of")
         asof.setBuddy(self.when)
         form.addRow(asof, self.when)
-        lay.addWidget(hint(('Use the end-of-day posted balance. Exclude pending charges and holds; do not use '
-                            'Available balance. If today is not closed, select the last closed date. '
+        lay.addWidget(hint(('Use the balance your bank shows at the end of that day (the posted balance). Leave out pending charges '
+                            'and holds, and do not use Available balance. If today is not over, select the last full day. '
                             if account.type.is_cashlike else 'Use the dated value from your statement. ') +
                            'Type digits as cents: 1234 becomes $12.34.'))
         lay.addStretch(1)
@@ -969,6 +969,13 @@ class AccountsPage(QWidget):
         info.addWidget(self.sel_name)
         self.sel_status = hint("")
         info.addWidget(self.sel_status)
+        # Navigation, not an action on the account, so it is a link and does not
+        # count against the four controls the bar allows.
+        self.view_btn = QPushButton("View transactions")
+        self.view_btn.setObjectName("link")
+        self.view_btn.setToolTip("Open this account's ledger on the Transactions tab")
+        self.view_btn.clicked.connect(self._view_transactions)
+        info.addWidget(self.view_btn, 0, Qt.AlignmentFlag.AlignLeft)
         sb.addLayout(info, 1)
         self.fix_btn = QPushButton("Check this account")
         self.fix_btn.clicked.connect(self._check_balances)
@@ -1200,7 +1207,7 @@ class AccountsPage(QWidget):
                 self._cell(money_exact(shown), right=True, font=mono,
                            color=amount_color, enabled=True),
                 self._cell(ago_text(st.age_days), enabled=True,
-                           tip=(st.anchor.isoformat() if st.anchor else None)),
+                           tip=(fmt_day(st.anchor) if st.anchor else None)),
                 self._cell(st.text, color=status_color, enabled=True,
                            tip=(f"{st.text}. {tip}" if tip else st.text)),
                 self._cell(terms_text(a), enabled=True, tip=terms_text(a)),
@@ -1254,6 +1261,11 @@ class AccountsPage(QWidget):
                 self.table.scrollToItem(it)
                 return
 
+    def _view_transactions(self) -> None:
+        aid = self._selected_id()
+        if aid is not None:
+            self.main.show_transactions_for(aid)
+
     def _set_primary(self, btn: QPushButton, on: bool) -> None:
         btn.setObjectName("primary" if on else "")
         btn.style().unpolish(btn)
@@ -1269,6 +1281,7 @@ class AccountsPage(QWidget):
         self.sel_status.setText(st.text)
         self.sel_status.setStyleSheet(
             f"color: {theme.AMBER};" if st.level == "caution" else "")
+        self.view_btn.setVisible(a.type.is_cashlike)
         self.fix_btn.setVisible(st.fix == "check")
         self._set_primary(self.fix_btn, st.fix == "check")
         self._set_primary(self.balance_btn, st.fix == "balance")
@@ -1293,6 +1306,9 @@ class AccountsPage(QWidget):
         self.main.refresh_header()
         nxt = (" Next: import its statement." if acct.type.is_cashlike else "")
         self.main.status(f"Added {acct.name}.{nxt}")
+        # Asked for from Home or a first-use card, the page the person is on has
+        # to notice: Home's welcome moves on to "Import a statement".
+        self.main.refresh_current()
 
     def _edit(self) -> None:
         a = self._selected()

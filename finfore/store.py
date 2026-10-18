@@ -600,6 +600,10 @@ class Store:
             f"SELECT id, account_id, date, description, amount, import_hash,transaction_date,posting_date,source_reference,date_basis FROM transactions "
             f"WHERE account_id IN ({marks})", self.con, params=ids)
 
+    def has_transactions(self) -> bool:
+        """Whether anything has been imported, without reading the ledger."""
+        return self.con.execute("SELECT 1 FROM transactions LIMIT 1").fetchone() is not None
+
     @cached_read
     def transactions(self, account_id: int | None = None) -> pd.DataFrame:
         q = ("SELECT t.id, t.account_id, t.date, t.description, t.amount, t.category, "
@@ -985,19 +989,31 @@ class Store:
             self.con.execute("DELETE FROM events WHERE id=?", (event_id,))
 
     @undoable("Add goal")
-    def add_goal(self, g: Goal) -> int:
-        cur = self.con.execute(
-            "INSERT INTO goals (name, amount, kind, saved_amount, spent_amount) VALUES (?,?,?,?,?)",
-            (g.name, g.amount, g.kind, g.saved_amount, g.spent_amount),
-        )
-        self.con.commit()
+    def add_goal(self, g: Goal, *, plan_order: list[str] | None = None,
+                 first: bool = False) -> int:
+        """Create a goal and, optionally, place it in the ladder atomically."""
+        with self.con:
+            cur = self.con.execute(
+                "INSERT INTO goals (name, amount, kind, saved_amount, spent_amount) VALUES (?,?,?,?,?)",
+                (g.name, g.amount, g.kind, g.saved_amount, g.spent_amount),
+            )
+            if plan_order is not None:
+                key = f'goal:{cur.lastrowid}'
+                order = [key, *plan_order] if first else [*plan_order, key]
+                self.con.execute(
+                    "INSERT INTO settings(key,value) VALUES ('plan_order',?) "
+                    "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (json.dumps(order),))
         g.id = cur.lastrowid
         return g.id
 
     @undoable("Delete goal")
     def delete_goal(self, goal_id: int) -> None:
-        self.con.execute("DELETE FROM goals WHERE id=?", (goal_id,))
-        self.con.commit()
+        order = [key for key in self.plan_order() if key != f'goal:{goal_id}']
+        with self.con:
+            self.con.execute("DELETE FROM goals WHERE id=?", (goal_id,))
+            self.con.execute(
+                "INSERT INTO settings(key,value) VALUES ('plan_order',?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (json.dumps(order),))
 
     def goals(self) -> list[Goal]:
         rows = self.con.execute("SELECT * FROM goals ORDER BY amount").fetchall()

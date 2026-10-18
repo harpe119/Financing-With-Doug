@@ -8,15 +8,17 @@ import tempfile
 import unittest
 
 import pandas as pd
+import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from finfore.categorize import BUSINESS_CATEGORY
 from finfore.funding import cash_capacity, goal_buckets
 from finfore.goals import build_plan, surplus_monthly, targets
-from finfore.models import Account, AccountType, Goal
+from finfore.models import Account, AccountType, Goal, RecurringItem, Scenario
+from finfore.forecast import run_forecast
 from finfore.spending_plan import calculate_plan
 from finfore.store import Store
-from finfore.util import add_months
+from finfore.util import add_months, month_firsts_between
 
 
 class SpendingPlanTests(unittest.TestCase):
@@ -97,6 +99,152 @@ class SpendingPlanTests(unittest.TestCase):
                 self.store.save_spending_plan(overrides, budget)
             self.assertIsNone(self.store.get_setting('spending_plan'))
             self.assertIsNone(self.store.get_setting('plan_surplus'))
+
+    def save_budget(self, **changes):
+        values = dict(income=4000, essential=2000, debt=0, frivolous=200,
+                      giving=100, unknown=0, reserve=100, investing=0)
+        values.update(changes)
+        self.store.save_spending_plan(values, 600)
+
+    def test_category_cuts_free_room_and_persist_without_changing_transactions(self):
+        prior = add_months(self.today.replace(day=1), -1)
+        for amount, cat in [(4000, 'Income'), (-2000, 'Housing'),
+                            (-300, 'Dining'), (-100, 'Subscriptions'), (-100, 'Charitable donation')]:
+            self.tx(amount, cat, prior)
+        before = self.store.transactions()
+        self.store.save_spending_plan({'income': 4200, 'category:Dining': 100,
+                                      'category:Subscriptions': 50}, 500)
+        plan = calculate_plan(self.store)
+        self.assertEqual(plan.amounts['frivolous'], 150)
+        self.assertEqual((plan.available, plan.remaining(500)), (1950, 1450))
+        pd.testing.assert_frame_equal(before, self.store.transactions())
+        self.store.close()
+        self.store = Store(self.path)
+        self.assertEqual(calculate_plan(self.store).amounts['category:Dining'], 100)
+        self.assertEqual(build_plan(self.store, surplus=500).surplus, 500)
+
+    def test_category_overrides_handle_refunds_and_total_override_takes_priority(self):
+        prior = add_months(self.today.replace(day=1), -1)
+        self.tx(-1000, 'Dining', prior)
+        self.tx(500, 'Shopping', prior)
+        self.assertEqual(calculate_plan(self.store, {'category:Dining': 200}).amounts['frivolous'], 0)
+        self.assertEqual(calculate_plan(self.store, {'category:Shopping': 0}).amounts['frivolous'], 1000)
+        self.assertEqual(calculate_plan(self.store, {'frivolous': 300, 'category:Dining': 200}).amounts['frivolous'], 300)
+
+    def test_saved_budget_changes_forecast_only_when_enabled_and_earmarks_stay_cash(self):
+        baseline = run_forecast(self.store, 90, 20)
+        self.save_budget(**{'category:Dining': 200})
+        unchanged = run_forecast(self.store, 90, 20)
+        np.testing.assert_array_equal(baseline.cash_det, unchanged.cash_det)
+        planned = run_forecast(self.store, 90, 20, Scenario(follow_goal_plan=True))
+        self.assertTrue(planned.spending_plan_applied)
+        # Reserves and the $600 goal allowance earmark cash, without spending it.
+        self.assertAlmostEqual(planned.cash_det[-1], 5000 + 1700 * 90 / 30.44)
+        self.assertEqual(planned.monthly_income_reference, 4000)
+        self.assertEqual(planned.monthly_spending_reference['Dining'], 200)
+        self.assertEqual(self.store.goals()[0].saved_amount, 0)
+        adjusted = run_forecast(self.store, 90, 20, Scenario(follow_goal_plan=True,
+            income_multiplier=1.1, category_multipliers={'Dining': .5}))
+        self.assertAlmostEqual(adjusted.cash_det[-1] - planned.cash_det[-1], 500 * 90 / 30.44)
+
+    def test_budget_scales_recurring_and_variable_spending_once(self):
+        for week in range(1, 13):
+            self.tx(-70, 'Dining', self.today - timedelta(weeks=week), f'Dining {week}')
+        self.store.merge_recurring([
+            RecurringItem('PAYROLL|+', 'Payroll', 'monthly', 3000, self.today, kind='income'),
+            RecurringItem('NETFLIX|-', 'Netflix', 'monthly', -60, self.today)])
+        self.save_budget(essential=0, frivolous=150, giving=0,
+                         **{'category:Dining': 100, 'category:Subscriptions': 50})
+        result = run_forecast(self.store, 90, 20, Scenario(follow_goal_plan=True))
+        self.assertGreaterEqual(result.history_weeks, 4)
+        self.assertEqual(result.monthly_income_reference, 4000)
+        self.assertAlmostEqual(result.monthly_spending_reference['Dining'], 100)
+        self.assertAlmostEqual(result.monthly_spending_reference['Subscriptions'], 50)
+        from finfore.recurrence import occurrences
+        count = len(occurrences(self.store.recurring()[0], self.today, result.dates[-1]))
+        self.assertAlmostEqual(result.cash_det[-1], 5000 + count * (4000 - 50) - 100 * 90 / 30.44)
+
+    def test_planned_investing_moves_cash_to_assets_once(self):
+        self.store.add_account(Account('Investing', AccountType.INVESTMENT, 1000,
+            self.today, monthly_contribution=100, annual_return=0, volatility=0))
+        self.save_budget(investing=250)
+        result = run_forecast(self.store, 90, 20, Scenario(follow_goal_plan=True))
+        count = len(month_firsts_between(self.today, result.dates[-1]))
+        self.assertAlmostEqual(result.cash_det[-1], 5000 + 1700 * 90 / 30.44 - 250 * count)
+        self.assertAlmostEqual(result.networth_det[-1], 6000 + 1700 * 90 / 30.44)
+
+    def test_manual_budget_retains_a_known_bill_date_without_monthly_history(self):
+        self.store.merge_recurring([RecurringItem('NETFLIX|-', 'Netflix', 'monthly', -60, self.today)])
+        self.save_budget(income=0, essential=0, frivolous=50, giving=0)
+        result = run_forecast(self.store, 90, 20, Scenario(follow_goal_plan=True))
+        from finfore.recurrence import occurrences
+        days = occurrences(self.store.recurring()[0], self.today, result.dates[-1])
+        changes = np.flatnonzero(np.diff(result.cash_det)) + 1
+        self.assertEqual([result.dates[i] for i in changes], days)
+        self.assertAlmostEqual(result.cash_det[-1], 5000 - 50 * len(days))
+
+    def test_zero_spending_budget_removes_its_historical_variation(self):
+        for week in range(1, 13):
+            self.tx(-10 * week, 'Dining', self.today - timedelta(weeks=week), f'Dining {week}')
+        self.save_budget(income=0, essential=0, frivolous=0, giving=0)
+        result = run_forecast(self.store, 90, 50, Scenario(follow_goal_plan=True))
+        for values in result.cash_pct.values():
+            np.testing.assert_allclose(values, 5000)
+
+    def test_planned_debt_matches_goals_and_forecast_without_double_payment(self):
+        loan = self.store.add_account(Account('Loan', AccountType.LOAN, 2000,
+            self.today, monthly_payment=100))
+        self.store.set_plan_order([f'loan:{loan}', f'goal:{self.gid}'])
+        self.save_budget(income=1000, essential=0, debt=200, frivolous=0, giving=0)
+        self.store.set_setting('plan_surplus', 100)
+        ladder = build_plan(self.store, surplus=100)
+        self.assertEqual(ladder.loan_payments[f'loan:{loan}'][0], 300)
+        result = run_forecast(self.store, 365, 20, Scenario(follow_goal_plan=True))
+        self.assertEqual(result.loans[0].payment, 200)
+        self.assertEqual(result.loans[0].interest_paid, 0)
+        self.assertAlmostEqual(result.cash_det[-1], 5000 + 1000 * 365 / 30.44 - 2000)
+        np.testing.assert_allclose(result.networth_det,
+            3000 + np.arange(366) * 1000 / 30.44)
+
+    def test_current_budget_never_changes_a_historical_forecast(self):
+        past = self.today - timedelta(days=60)
+        first = run_forecast(self.store, 30, 20, as_of=past)
+        self.save_budget(income=100000)
+        second = run_forecast(self.store, 30, 20, Scenario(follow_goal_plan=True), as_of=past)
+        self.assertFalse(second.spending_plan_applied)
+        np.testing.assert_array_equal(first.cash_det, second.cash_det)
+
+    def test_plan_cannot_reduce_loan_obligations_or_invent_an_investment_account(self):
+        loan = self.store.add_account(Account('Loan', AccountType.LOAN, 2000,
+            self.today, monthly_payment=100))
+        self.save_budget(debt=50, investing=250)
+        self.store.set_setting('plan_surplus', 0)
+        ladder = build_plan(self.store, surplus=0)
+        self.assertEqual(ladder.loan_payments[f'loan:{loan}'][0], 100)
+        result = run_forecast(self.store, 90, 20, Scenario(follow_goal_plan=True))
+        self.assertTrue(any('less than the existing loan payments' in w for w in result.warnings))
+        self.assertTrue(any('no investment account' in w for w in result.warnings))
+
+    def test_cash_dip_explanation_uses_the_same_planned_schedule_as_the_graph(self):
+        from finfore.forecast import scheduled_flows
+        self.store.merge_recurring([
+            RecurringItem('PAYROLL|+', 'Payroll', 'monthly', 3000, self.today, kind='income'),
+            RecurringItem('NETFLIX|-', 'Netflix', 'monthly', -60, self.today)])
+        loan = self.store.add_account(Account('Loan', AccountType.LOAN, 2000,
+            self.today, monthly_payment=100))
+        self.store.add_account(Account('Investing', AccountType.INVESTMENT, 1000,
+            self.today, monthly_contribution=100, annual_return=0, volatility=0))
+        self.store.set_plan_order([f'loan:{loan}', f'goal:{self.gid}'])
+        self.save_budget(essential=0, debt=200, frivolous=100, giving=0, investing=250)
+        self.store.set_setting('plan_surplus', 100)
+        scenario = Scenario(follow_goal_plan=True)
+        result = run_forecast(self.store, 90, 20, scenario)
+        flows = scheduled_flows(self.store, self.today, result.dates[-1], scenario)
+        self.assertEqual(flows, result.scheduled)
+        self.assertAlmostEqual(result.cash_det[-1] - result.cash_det[0], sum(f.amount for f in flows))
+        self.assertTrue(all(f.amount == -250 for f in flows if f.source == 'investment'))
+        self.assertTrue(all(f.amount == -100 for f in flows if f.label == 'Netflix'))
+        self.assertTrue(all(f.amount == -300 for f in flows if f.source == 'loan'))
 
     def test_funding_earmarks_cash_and_purchase_retains_progress_without_touching_ledger(self):
         self.tx(-400, 'Travel')

@@ -22,6 +22,35 @@ HISTORY_REMINDER_DAYS = 90
 CATEGORY_WINDOW_DAYS = 180
 GAP_WINDOW_MONTHS = 12
 SCHEDULE_WINDOW_DAYS = 30
+THIN_HISTORY_DAYS = 28      # four weeks: the least the forecast needs to include everyday spending
+
+
+@dataclass(frozen=True)
+class Freshness:
+    """How much ledger there is and how recent it is: what a confident sentence rests on."""
+    span_days: int              # first to last transaction, inclusive
+    last: date | None           # newest transaction
+    age_days: int | None        # days since it
+    thin: bool                  # under four weeks of statements: too early to forecast spending
+    stale: bool                 # newest transaction older than the balance reminder window
+
+
+def data_freshness(tx, today: date | None = None, demo: bool = False) -> Freshness:
+    """Measure the ledger itself, so headlines can say how far to trust them.
+
+    A demo is a fixed sample of fictional statements that ages on the shelf, so it
+    is measured against its own last day: staleness says nothing about made-up data.
+    """
+    today = today or date.today()
+    dates = pd.to_datetime(tx["date"], errors="coerce").dropna() if len(tx) else pd.Series(dtype="datetime64[ns]")
+    if dates.empty:
+        return Freshness(0, None, None, True, False)
+    first, last = dates.min().date(), dates.max().date()
+    if demo:
+        today = last
+    span = (last - first).days + 1
+    age = max(0, (today - last).days)
+    return Freshness(span, last, age, span < THIN_HISTORY_DAYS, age > BALANCE_REMINDER_DAYS)
 
 
 @dataclass(frozen=True)

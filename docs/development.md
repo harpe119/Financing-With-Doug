@@ -61,7 +61,7 @@ puts you back, and a banner marks demo data while you are in it.
 | **Balanced** | A− | The bundled 18-month ledger in two CSV dialects, a car loan, a brokerage and three goals — the only profile that also exercises the import mapper |
 | **Struggling** | D+ | A deficit with wants over guideline: money is tight *and* the spending is part of why |
 | **Thriving** | A+ | A 53% savings rate, investments compounding, debts nearly gone |
-| **Turnaround** | B+ | Discretionary spending halves five months in — built to give the Progress page a real, statistically significant change to detect |
+| **Turnaround** | B+ | Discretionary spending halves five months in — built to give Track record (Forecast → Track record) a real, statistically significant change to detect |
 | **Spiralling** | F | Three high-interest debts, spending at 1.7× income, cash projected to −$47k within a year at 100% shortfall probability and a runway of zero months |
 
 ## Building a release

@@ -1,0 +1,61 @@
+\chapter{Installation and a first session}\label{ch:setup}
+\index{installation}\index{demo data}
+\section{Install the Windows application}
+The Windows distribution is an installer named \file{FinancingWithDoug-<version>-Setup.exe}. Obtain it from the project's release page at \url{https://github.com/harpe119/Financing-With-Doug/releases/latest}, check that the source is the intended project, and follow the installer. This address identifies the distribution location; the manual does not certify which release is currently published there.
+
+An unsigned installer may produce a Windows SmartScreen warning. The warning is not a determination that the file is safe or unsafe. Check the source and the release information before deciding whether to continue. The application identifies its version in the header and under \ui{Help > About Doug}. Use \ui{Check for updates} to ask whether a newer packaged release is available.
+
+\section{Begin with fictional data}
+For a first examination of the controls, choose \ui{File > Load demo dataset}. The available demonstrations describe different financial situations: Balanced, Struggling, Thriving, Turnaround, and Spiralling. Their purpose is to make application behavior visible without changing the user's financial records.
+
+\begin{enumerate}
+\item Load a demonstration and confirm that its banner is visible.
+\item Open Home, Accounts, Plan, and Forecast. Select a goal and compare its saved amount with its account sources.
+\item Make a small temporary forecast adjustment, then use \ui{Reset scenario}.
+\item Choose \ui{Return to my own data} on the banner, or \ui{File > Return to my own data}, and confirm that the banner disappears and the status-bar path identifies the intended database.
+\end{enumerate}
+
+Demonstration results do not measure prediction accuracy for a real household. Their records were constructed to illustrate controls and particular model behaviors.
+
+\section{Set up an actual ledger}
+The minimum starting information is an account, a balance, and the date of that balance. Transaction history then explains the changes around the dated observation.
+
+An empty database opens on Home's welcome, which lists three steps (add accounts, import a statement, see where the money is headed) and offers the next one as a button. A page that fills in from statements shows a short panel in place of an empty chart or table: what the page will hold, what it needs, and one button for the next step. Until statements are imported, \ui{Bills \& payday} and \ui{Forecast} appear muted and in italics in the sidebar. They remain available, and each page states what it is waiting for. Choosing \ui{Import CSV} before any account exists opens the account form first.
+
+A useful first session is:
+
+\begin{enumerate}
+\item Add the accounts described in Chapter~\ref{ch:accounts}. Use the posted closing balance for a stated date.
+\item Save a backup before importing a large history or correcting an existing ledger.
+\item Import one account's CSV and inspect its signs, dates, and descriptions.
+\item Review the first and last imported dates and several individual entries against the bank export.
+\item Review categories and recurring patterns. Open Forecast only after checking the records on which it depends.
+\end{enumerate}
+
+Several complete months are more informative than a few days. The forecast requires at least four usable complete weeks before it includes sampled variable spending. An application that opens successfully with less history has not thereby obtained enough evidence to estimate that spending.
+
+\section{Run from source}
+This route is intended for users maintaining or examining the program. Python 3.10 or newer and the packages in \file{requirements.txt} are required. From the repository root:
+\begin{lstlisting}
+python -m venv .venv
+# Linux/macOS:
+source .venv/bin/activate
+# Windows PowerShell instead:
+# .venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+python run.py
+\end{lstlisting}
+
+Use an explicit database when examining a copy or experimenting:
+\begin{lstlisting}
+python run.py --db "path/to/working-copy.db"
+\end{lstlisting}
+The file is created if it does not exist. Verify the status-bar path before entering financial records. Launching a source checkout does not update a separately installed Windows application, and changing a source file does not publish an installer.
+
+\section{Know where the records are stored}
+The default database is \file{~/.ledgerline/ledgerline.db}; on Windows this corresponds to \file{C:\Users\<you>\.ledgerline\ledgerline.db}. The internal folder retains the earlier name \emph{Ledgerline}. It is the location shown by the application, rather than the folder name alone, that identifies the current file.
+
+Keep a regular backup of this database. The Undo stack is kept in memory and is not a replacement for a backup. Closing the application ends that undo history. Procedures for backup and restoration are given in Chapter~\ref{ch:data}.
+
+\source{run.py; requirements.txt; finfore/ui/main_window.py; finfore/demo.py}
+

@@ -12,8 +12,8 @@
 #   faster, because onefile unpacks the whole bundle to a temp directory on
 #   every launch. For handing to family, zip the folder — or flip ONEFILE to
 #   True below if a single icon matters more than startup speed.
-# * Data files are the sample CSVs, forecast video, and
-#   Getting started guide in docs/ — all resolved through
+# * Data files are the sample CSVs, explanation videos, Getting started guide,
+#   and user manual PDF in docs/ — all resolved through
 #   finfore.util.resource_path, which follows sys._MEIPASS, so they work in
 #   onedir and onefile alike. docs/ has to ship: Help → Getting started reads
 #   the Markdown at runtime rather than embedding a copy, so a build without it
@@ -36,6 +36,10 @@ ONEFILE = False
 APP_NAME = "Financing with Doug"
 
 SPEC_DIR = Path(SPECPATH)     # PyInstaller injects SPECPATH at spec eval time
+MANUAL = SPEC_DIR.parent / "docs" / "manual" / "financing_with_doug_manual.pdf"
+if not MANUAL.is_file():
+    raise SystemExit(f"The user manual PDF is missing: {MANUAL}\n"
+                     "Build or restore it before packaging Doug.")
 _icon_candidates = {
     "win32": SPEC_DIR / "icon.ico",
     "darwin": SPEC_DIR / "icon.icns",

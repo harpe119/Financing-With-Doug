@@ -1,0 +1,51 @@
+\chapter{Reviewing transactions and categories}\label{ch:transactions}
+\index{categories}\index{transfers}\index{business reimbursement}\index{merchant review}
+\section{Review the evidence behind a category}
+Open \ui{Accounts > Transactions}. Use the account, period, search, and review controls to find the records of interest. A category can be suggested by a keyword, a remembered merchant rule, or another automatic assignment. The existence of a category does not mean that the user has checked it.
+
+The review state alongside a description distinguishes confirmed entries from entries requiring attention or ordinary unreviewed assignments. \ui{Needs attention} identifies records worth examining; it is not a declaration that every displayed category is wrong. \ui{Not reviewed} is broader and includes apparently ordinary assignments that have not been individually confirmed.
+
+\begin{enumerate}
+\item Select a transaction and compare its description, account, amount, and date with the export.
+\item Open Transaction details to inspect the category source, review history, and balance information.
+\item If the category is correct, use \ui{Mark reviewed}. If it is incorrect, choose the appropriate category.
+\item Review whether the change should apply only to these records or become a rule for future imports.
+\end{enumerate}
+
+Changing a category or confirming it records a human review. Financial amounts and category changes are different operations; a correct category cannot compensate for an incorrect sign or a missing transaction.
+
+\section{Keep one-off decisions separate from merchant rules}
+By default, a correction applies to the selected entries. Enable the preference for remembering category changes only when the merchant should normally use that category in future imports. A grocery order from a general retailer does not establish that all purchases from that retailer are groceries.
+
+\ui{Mark reviewed} confirms the selected entries even when the remembering preference is enabled. It does not automatically turn every confirmation into a merchant-wide rule. Conflicting category choices for the same merchant cannot be remembered as one unambiguous rule in a single batch.
+
+Several rows can be reviewed or corrected together. Inspect the selection before applying an action, particularly when filters have changed. Category changes, their review evidence, and associated preferences are saved together and can be undone.
+
+\section{Review merchants in groups}
+The uncategorized-merchant review tool groups candidate records by merchant. Select a merchant to inspect the affected transactions and choose a category. Suggestions begin unselected; their presence is not an instruction to accept them.
+
+The default scope concerns unknown records in the chosen period. An option can extend the review to older matching entries. Known or human-reviewed entries are preserved by that flow. Check the proposed number of merchants and transactions before saving, and distinguish a purchase from an incoming payment with a similar description.
+
+Similarity scores measure the match produced by the method; they are not calibrated probabilities that a category is correct. A close name match with conflicting previous labels is a reason for further review.
+
+\section{Recognize internal transfers}
+Moving money between two accounts belonging to the same household changes the location of holdings. It is not new income or personal spending. Review transfer and card-payment pairs carefully, especially when only one side has been imported.
+
+Equal amounts alone do not establish an internal transfer. An external transfer can be a genuine payment. Conversely, categorizing both sides of a card payment as spending can count one economic purchase twice: once when the card purchase occurred and again when the card was paid.
+
+An internal transfer remains part of each account's actual ledger even when excluded from household spending. The account balance calculation needs both the inflow and the outflow at their respective accounts.
+
+\section{Separate reimbursable business activity}
+Use \ui{Business (reimbursable)} for expenses incurred for an organization and for a separate repayment of those expenses. These amounts are excluded from personal spending analytics and sampled behavior. They still change the actual bank balance until the repayment occurs.
+
+When repayment is included in a paycheck, retain the deposit's income category and use \ui{Business reimbursement} to identify the repaid portion. If a \money{3,500} deposit contains \money{500} of repayment, personal income is \money{3,000}. The bank ledger retains the full \money{3,500}; only the personal interpretation changes. Entering zero clears the reimbursement split.
+
+A business label does not create a future repayment date. If an expected repayment is to be included in a scenario, use an explicit future income event and review it when the real repayment is imported.
+
+\section{Export reviewed data deliberately}
+The reviewed-data export is a local CSV for subsequent examination. It contains current human-reviewed labels and their associated dates, amounts, descriptions, account types, and review evidence. It excludes automatic guesses, unverified old labels, unresolved categories, future records, and the business or mixed-reimbursement cases excluded by that export's rules.
+
+The export covers the relevant ledger rather than only the rows currently visible through display filters. Exporting does not train a model or send records to a service. The file still contains financial descriptions, so choose and protect its location accordingly.
+
+\source{finfore/ui/transactions.py; finfore/categorize.py; finfore/learning.py; finfore/store.py}
+

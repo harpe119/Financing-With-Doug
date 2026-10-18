@@ -1,7 +1,8 @@
-"""Goal earmarks: an auditable allocation of existing cash, never bank transfers."""
+"""Auditable goal earmarks of existing holdings, without transfers or sales."""
 from __future__ import annotations
 
 from datetime import date
+from dataclasses import dataclass, field
 
 from .models import AccountType
 from .categorize import BUSINESS_CATEGORY
@@ -9,6 +10,7 @@ from .spending_plan import money
 
 ACTIONS = {'contribute': 'Set aside money', 'assign': 'Locate existing savings',
            'purchase': 'Spend toward goal', 'release': 'Release savings'}
+FUNDING_TYPES = (AccountType.CHECKING, AccountType.SAVINGS, AccountType.INVESTMENT)
 
 
 def goal_buckets(store, goal_id: int) -> dict[int | None, float]:
@@ -28,20 +30,107 @@ def goal_buckets(store, goal_id: int) -> dict[int | None, float]:
 
 
 def cash_capacity(store) -> tuple[dict[int, float], float]:
+    """Cash capacity only; located investment earmarks do not consume cash."""
+    return _capacity(store, (AccountType.CHECKING, AccountType.SAVINGS))
+
+
+def funding_capacity(store) -> tuple[dict[int, float], float]:
+    """Unclaimed tracked assets, after card balances; not spendable cash.
+
+    An investment earmark classifies an existing holding without selling it.
+    Unlocated savings remain a household claim, without inventing an account.
+    """
+    return _capacity(store, FUNDING_TYPES)
+
+
+def _capacity(store, eligible):
     from .history import account_balance_history
     history = account_balance_history(store)
     balances = {a.id: float(history[a.id].iloc[-1]) for a in store.accounts()
-                if a.type in (AccountType.CHECKING, AccountType.SAVINGS)}
-    net_cash = sum(balances.values()) + sum(float(history[a.id].iloc[-1])
+                if a.type in eligible}
+    net_assets = sum(balances.values()) + sum(float(history[a.id].iloc[-1])
         for a in store.accounts() if a.type == AccountType.CREDIT)
     claims = {}
     goals = [g for g in store.goals() if g.kind == 'savings']
+    unlocated = 0.0
     for goal in goals:
         for aid, amount in goal_buckets(store, goal.id).items():
-            if aid is not None:
+            if aid is None:
+                unlocated += amount
+            elif aid in balances:
                 claims[aid] = claims.get(aid, 0.0) + amount
     return ({aid: round(balance - claims.get(aid, 0.0), 2) for aid, balance in balances.items()},
-            round(net_cash - sum(g.saved_amount for g in goals), 2))
+            round(net_assets - sum(claims.values()) - unlocated, 2))
+
+
+@dataclass
+class GoalHolding:
+    id: int
+    name: str
+    target: float
+    saved: float
+    spent: float
+    unlocated: float
+    accounts: dict[int, float] = field(default_factory=dict)
+
+    @property
+    def remaining(self):
+        return round(max(0.0, self.target - self.saved - self.spent), 2)
+
+    @property
+    def status(self):
+        if self.remaining <= .005:
+            return 'Completed' if self.spent >= self.target - .005 else 'Funded'
+        return 'Partially funded' if self.saved + self.spent > .005 else 'Not funded'
+
+
+@dataclass
+class AccountHolding:
+    id: int
+    name: str
+    kind: AccountType
+    balance: float
+    goals: dict[int, float] = field(default_factory=dict)
+
+    @property
+    def unassigned(self):
+        return round(self.balance - sum(self.goals.values()), 2)
+
+
+@dataclass
+class FundingOverview:
+    accounts: list[AccountHolding]
+    goals: list[GoalHolding]
+    cash: float
+    investments: float
+    card_balance: float
+    unassigned: float
+
+
+def funding_overview(store) -> FundingOverview:
+    """Current balances and recorded goal sources, with no inferred allocation."""
+    from .history import account_balance_history
+    history = account_balance_history(store)
+    accounts = [AccountHolding(a.id, a.name, a.type, round(float(history[a.id].iloc[-1]), 2))
+                for a in store.accounts() if a.type in FUNDING_TYPES]
+    by_id = {a.id: a for a in accounts}
+    rank = {key: i for i, key in enumerate(store.plan_order())}
+    goals = []
+    for g in sorted(store.goals(), key=lambda g: (rank.get(f'goal:{g.id}', len(rank)), g.name)):
+        if g.kind != 'savings':
+            continue
+        buckets = goal_buckets(store, g.id)
+        located = {aid: amount for aid, amount in buckets.items() if aid in by_id and abs(amount) > .005}
+        goals.append(GoalHolding(g.id, g.name, g.amount, g.saved_amount, g.spent_amount,
+                                 round(g.saved_amount - sum(located.values()), 2), located))
+        for aid, value in located.items():
+            by_id[aid].goals[g.id] = value
+    cash = round(sum(a.balance for a in accounts if a.kind != AccountType.INVESTMENT), 2)
+    investments = round(sum(a.balance for a in accounts if a.kind == AccountType.INVESTMENT), 2)
+    cards = round(sum(float(history[a.id].iloc[-1]) for a in store.accounts()
+                      if a.type == AccountType.CREDIT), 2)
+    return FundingOverview(accounts, goals, cash, investments, cards,
+                           round(cash + investments + cards - sum(g.saved for g in goals), 2))
 
 
 def validate_goal_edit(store, goal_id, amount, kind, saved):
@@ -71,20 +160,20 @@ def record_activity(store, goal_id, action, amount, when, account_id, transactio
         raise ValueError('Record money already set aside or spent, using today or an earlier date.')
     if account_id is not None:
         account = store.account(int(account_id))
-        if account is None or account.type not in (AccountType.CHECKING, AccountType.SAVINGS):
-            raise ValueError('Choose a checking or savings account that holds this money.')
+        if account is None or account.type not in FUNDING_TYPES:
+            raise ValueError('Choose a checking, savings or investment account that holds this money.')
     buckets = goal_buckets(store, goal_id)
     if action in ('purchase', 'release') and value > buckets.get(account_id, 0.0) + .005:
         raise ValueError('This goal does not have that much saved in the selected account.')
     if action == 'contribute' and value + goal.saved_amount + goal.spent_amount > goal.amount + .005:
         raise ValueError('This exceeds the goal target. Raise the target before adding more.')
     if action in ('contribute', 'assign'):
-        capacities, free = cash_capacity(store)
+        capacities, free = funding_capacity(store)
         if action == 'assign':
             if account_id is None or value > buckets.get(None, 0.0) + .005:
                 raise ValueError('Choose an account and an amount within existing unlocated savings.')
         elif value > max(0.0, free) + .005:
-            raise ValueError('Not enough unassigned net cash. Review balances and other goal savings.')
+            raise ValueError('Not enough unassigned funding balances. Review accounts and other goal savings.')
         if account_id is not None and value > max(0.0, capacities[account_id]) + .005:
             raise ValueError('This account does not have enough money left after its other goal earmarks.')
     tx_hash = None

@@ -1,0 +1,45 @@
+\chapter{Building the monthly budget}\label{ch:budget}
+\index{monthly budget}\index{overrides}\index{monthly allowance}
+\section{Separate the available amount from the chosen allowance}
+The Monthly budget tab estimates what income and commitments leave available. Goals chooses how much of that room to allocate through its priority ladder. An available amount and a chosen allowance can differ: money may remain unassigned, or the chosen allowance may exceed the budget's room.
+
+\begin{equation}\label{eq:budget}
+ R=I-(E+D+W+G+U+Q+V)-A,
+\end{equation}
+where \(I\) is take-home income; \(E\) is needs excluding regular debt; \(D\) is regular debt payments; \(W\) is wants; \(G\) is giving; \(U\) is uncategorized spending; \(Q\) is the irregular-expense reserve; \(V\) is investment contributions; and \(A\) is the goals and extra-debt allowance. A positive \(R\) remains unassigned. A negative \(R\) is an over-budget amount rather than extra available money.
+
+\section{Build a plan from recorded evidence}
+Open \ui{Plan > Monthly budget}. Start with the detected monthly amounts and their source explanation. Needs and regular debt payments are separated so that a loan payment already included in recorded spending is not added a second time. The detected debt line uses the larger of recorded debt spending and current regular loan commitments. Investment contributions begin from account settings.
+
+\begin{enumerate}
+\item Check take-home income, needs, debt payments, wants, giving, and uncategorized spending.
+\item Enable Override only for a line whose planned amount differs from its detected value.
+\item Add an irregular-expense reserve only for costs not already represented in the spending lines.
+\item Inspect the amount available before the goal allowance, then compare it with the allowance selected on Goals.
+\item Adopt the budget's available amount as the allowance only if that is the amount you intend to allocate.
+\item Save the spending plan and read the resulting unassigned or over-budget amount.
+\end{enumerate}
+
+Without sufficient complete history, enter explicit overrides for income and the spending lines, including genuine zero amounts. A missing history is not evidence that a spending category costs zero. The manual-plan requirements ensure that the user supplies the missing assumptions before saving.
+
+\section{Adjust categories without counting them twice}
+Expand \ui{Adjust individual spending categories} to alter dining, subscriptions, groceries, or another supported category. These lines are components of Needs or Wants. They are not additional expenses added above the group total.
+
+A group override takes precedence over its component category overrides. To plan through individual categories, turn off that group's total override. Review the resulting total after changing a category, especially where refunds affected the historical contribution. The detailed calculation replaces the selected signed contribution before flooring the group at zero; summing only positive category displays can therefore differ from the true group calculation.
+
+If dining is reduced by \money{100} and subscriptions by \money{50}, the intended change makes \money{150} more room only if those changes actually reduce the relevant group total by that amount and no other line changes. Inspect the final equation instead of adding a category reduction to an already overridden group total.
+
+\section{Use the shared allowance}
+Monthly allowance on Goals is shared with the budget. It is not a second unrelated number. A manual choice is retained; \ui{Use Plan / history} restores automatic use of the saved budget or, without a saved budget, the historical estimate. The budget can offer its available amount as an explicit choice when it differs from the current allowance.
+
+Budget-row edits remain a draft until Save spending plan. Reload saved plan discards those unsaved edits. Review the allowance separately because it can be saved from Goals without saving every budget-row draft. The calculation in Forecast uses the saved plan, not an unsaved draft that happens to be visible on another tab.
+
+\section{Connect the plan with Forecast}
+Enable \ui{Use Goals funding plan} in Forecast to use the saved budget's income, spending, and investment assumptions together with the shared allowance and priority-based loan funding. Scenario multipliers then apply additional changes on top of that plan.
+
+An earmark leaves its underlying holding unchanged. An irregular reserve remains in cash until an outflow is modeled. Fully funding a purchase goal does not cause the forecast to spend its target automatically. To test the purchase itself, add an appropriate future event or ensure that its expected spending is otherwise represented.
+
+If an imported historical purchase was paid from an already-built reserve, inspect whether its monthly budget treatment would reserve the same amount again. A reasonable adjustment depends on how that purchase is represented in the spending history and future plan; the application cannot infer the intended treatment from the goal's name.
+
+\source{finfore/ui/plan_page.py; finfore/spending_plan.py; finfore/goals.py; finfore/forecast.py}
+

@@ -6,7 +6,248 @@ intended to hand to someone else. The running version is shown in the app
 header and under **Help → About**, so a downloaded copy always identifies
 itself.
 
-## Unreleased — goal planning, CSV overlap and account balance debugging
+## 1.22.0 — five places, a first day that leads, and a light theme
+
+The navigation reorganisation and a series of design passes (distill, clarify,
+onboard, harden, polish, extract, colorize), each checked at the window's
+smallest size, and from this release in both themes. The full suite is 633
+tests; `tests/test_core.py` passes.
+
+- Add the user manual. **Help → User manual (PDF)** opens
+  `docs/manual/financing_with_doug_manual.pdf` (revision 1.9, 71 pages: setup,
+  task chapters, worked examples, the calculation methods, troubleshooting and
+  maintenance) in the system's PDF reader; `finfore/ui/manual.py` finds it in a
+  source checkout and in a frozen build, and says where the file is if no reader
+  opens. Its worked examples are regenerated from Doug's own calculations on
+  temporary fictional databases (`make` in `docs/manual`), with the version,
+  commit and SHA-256 of every inspected source file recorded in
+  `generated/provenance.json`. `packaging/doug.spec` bundles the PDF and stops if
+  it is missing, so rebuild it before packaging a changed edition.
+- Rewrite the Track record video (`assets/progress.mp4`,
+  `scripts/video/progress.py`) for a nontechnical adult and keep it under two
+  minutes: one question per scene, an example, and time to read a plain
+  explanation. It drops the permutation-test and bootstrap mechanics, explains a
+  checkpoint as a saved record of balances, score and forecast, and says the
+  minimum of four complete weeks on each side.
+- Add a light theme (colorize). **View → Appearance** offers Dark (still the
+  default), Light and Match my computer, and the choice is remembered. Light is the
+  same instrument in daylight ("Cool Daylight"): a cool off-white page, white cards,
+  slate text, and the five data hues darkened to read at 4.5:1 or better on white,
+  each keeping its one job. The switch repaints the open window in place, so the
+  page, an open drawer, typed text and the scroll position all stay. Every text pair
+  is checked at 4.5:1 and every edge at 3:1 in both themes. The View menu also
+  carries the Simple / Everything choice. Along the way: the today cell on the
+  calendar and the highlighted item in drop-down lists keep ordinary text instead of
+  the white meant for the strong selection green; the possible-spending-change cards
+  no longer draw a box around each label inside them; and the forecast's comparison
+  line is called "dashed" rather than "white dashed", which was only true in the dark.
+  A checkbox whose caption wraps (such as "Re-estimate paydays and bills too") is no
+  longer squeezed three pixels shorter than its own box under the app stylesheet.
+- Polish both themes. The possible-spending-change entries are one list parted by
+  hairlines instead of a card inside a card. Number fields' steppers sit inside the
+  rounded edge, are marked with the way they go and light up on hover; they were a
+  blank slab over the corner. A date with a calendar is drawn like a drop-down list.
+  The import dialog keeps its rows together at the top before a file is chosen,
+  instead of spreading them down the window.
+- Put every colour in one place (extract), the groundwork for a light theme.
+  `theme.py` now holds a `Palette` with a named role for each colour the app uses,
+  including the sixteen hover, pressed and wash shades that were written straight
+  into the stylesheet; the stylesheet, Qt's palette and the chart defaults are all
+  built from it, and `apply(app, palette)` takes a different one. The stylesheet
+  it produces for the dark theme is byte-for-byte the one before. The screens no
+  longer write any hex value of their own (the comparison line, two goal colours,
+  the spending-donut colours and five grey captions now come from the palette), and
+  the headline style is one `QLabel#headline` rule instead of nine inline copies.
+  Nothing looks different.
+- Keep the product's own rules where the second critique found them broken
+  (clarify). Reset all data and Delete pattern now ask with named buttons ("Delete
+  everything" / "Keep my data", "Delete pattern" / "Keep it") and Keep is what Enter
+  and Esc do; they were bare Yes/No boxes that defaulted to Yes. Needs a look says
+  "need a look" on every row instead of three verbs. Dates read one way everywhere
+  ("Oct 20, 2026", or "Tue, Oct 20" in the calendar list) instead of five, ISO dates
+  included. With no allowance chosen, Monthly budget says what it leaves ("$796.56 /
+  month available for goals and extra debt") instead of "$0.00 left unassigned"
+  measured against its own figure, and names the different amount Goals plans with
+  until one is chosen. The spending donut's legend says its percentages are shares
+  of spending (the score beside it speaks in shares of income). Forecast's high-risk
+  headline and Track record's "Outside the range" are amber, like every other
+  "look closer", instead of coral and violet.
+- Let Forecast lead with its answer in Simple view (distill). The page used to open
+  on about seventeen controls to the left of a one-line verdict. It now opens on
+  the verdict and the cash chart at full width, with one **Try a change** button
+  that opens the controls (and **Hide changes** that closes them); Home's "See
+  what could change this" opens them directly. In the drawer the Refresh forecast
+  button is gone, since changes apply as they are made, only the three biggest
+  spending categories are offered (any other one that is set away from 100% stays
+  visible), and the chart omits the $1,000 starter buffer line, whose label sat on
+  top of the $0 label on a short chart. Everything view is unchanged. "Review
+  recurring patterns" on the forecast history card now says "Review detected bills
+  and pay", and the two copies of the add-account command are one.
+- Smooth the first account and the first import (onboard, second pass). Every
+  "Add an account" (Home's first step, the empty-page cards, the Monthly budget
+  button, and header Import CSV… when there is no account) now opens the dialog
+  directly; they used to go to Accounts, which had another "Add your first account"
+  button. The balance field says under itself that digits fill in from the cents
+  (type 320000 for $3,200.00, or paste $3,200.00). The import dialog opens on
+  "What Doug read": the number of transactions, their dates, money out and in, and
+  the first three rows as they will be saved, with a warning when nearly every row
+  reads as money in (a common bank layout). The separator, date order, amount signs
+  and column choices moved behind "Adjust how the file is read", which opens by
+  itself when a file cannot be read, and the dialog says an import can be undone
+  with Ctrl+Z. With one account on Home the figures lead and the next step sits
+  under them instead of floating mid-page; the keyboard starts on the step to
+  take; and the demo banner has a Return to my own data button.
+- Make the keyboard reach everything and stop headlines outrunning their data
+  (harden). Tab from the sidebar no longer gets stuck on Accounts and Forecast in
+  Simple view (their hidden tab bars had left a stop in the Tab order), and Tab now
+  leaves the Calendar, Detected bills, Track record and Monthly budget tables
+  instead of walking their cells for ever. Sliders, tabs and chosen View/range
+  buttons show where focus is; charts and page scroll areas are no longer
+  invisible Tab stops; amount fields that cannot be edited look disabled; and the
+  calendar arrows, tables and chart pickers have names a screen reader can read.
+  Home and Forecast now say "Too early to say where your cash is headed" with
+  under four weeks of statements (bad news is never held back), and "Going by
+  older statements" with "Based on statements through Jul 17 · 92 days ago" when
+  the newest transaction is over a month old; demos, which are fictional and
+  fixed, are exempt. Track record draws the balance after the last transaction
+  dashed and says it is carried forward, and a flat line no longer prints the same
+  axis label down its side.
+- On Home the chart now comes before Needs a look, which moved to the bottom so the
+  graph leads. The Monthly cash flow chart's vertical axis is locked, so only time
+  moves. The Calendar rings today, whichever day is selected.
+- Final polish across the program, checked at the smallest window (980 by 620)
+  in both views. The Spending donut's legend is no longer cut off (the card keeps
+  room for it). The Calendar drops its empty "Choose an account" balance card, shows
+  In, Out and Balance without a sideways scrollbar by letting the Account column
+  give way on a narrow table (the item's tooltip names the account), and says what
+  its short headers mean when pointed at. The Forecast data quality line is one
+  tidy line again: the page was sizing it as if it were a stacked card, which
+  made it twice as tall as its text. Clear checkpoints and Delete goal are
+  compact danger buttons matching the buttons beside them. The result line of
+  each page (Home's verdict, Spending, Monthly budget, Forecast) is one size, and
+  the Forecast first-run title matches Home's. The first-run video button reads
+  Watch the video, as in the Explain menu.
+- Make the first day easier to follow (onboard). Spending, the calendar and
+  Detected bills & pay no longer open as a ghost donut, an empty month and an
+  empty table on a new database: each says what it will hold and shows one button
+  for the next step (Add an account, then Import a CSV…, then look again), with
+  Explore with a demo first beside it. The sidebar dims Bills & payday and Forecast,
+  in italics, until statements exist, and says why when pointed at. The header's
+  Import CSV… with no account now goes to Accounts instead of stopping at a
+  message, and the first import ends on Home, where the answer is. The Monthly
+  budget tab says once that it is waiting for a complete month (and offers Add an
+  account or Import a CSV…), and Review under Needs a look explains why those
+  transactions are flagged. Messages that still sent people to "Recurring
+  patterns" now say Detected bills & pay.
+- Say each thing once, in one word (clarify). Home's saved-from-income card now
+  uses the same typical-month figures as the Spending score and the Goals
+  allowance, so Home and Spending both say 22% where Home used to say 33% from
+  the raw last 90 days; the card names its basis ("A typical month") and falls
+  back to the last 90 days, labelled as such, until a complete month exists. The
+  header's one Simple view / Everything button, which read as an action named
+  after the state it was in, is a two-part View switch with the current view lit.
+  Spending groups are Needs, Wants, Giving and Uncategorized on every screen (not
+  Essential, Frivolous, Necessities or Unknown), and the donut's second slice
+  reads "Other wants" beside Subscriptions so its figures add up to the wants in
+  the score. Goals calls its rows goals (columns Goal and Type: Loan payoff,
+  Savings goal, Cash milestone, Net worth milestone; Edit goal…; Goal amount),
+  keeping "target" for target dates. Plain wording replaces Closing posted
+  balance (Balance at end of day), "can be overdrawn" (Allow this account to go
+  below $0), the Off the map status (Outside the range) and P50 in chart legends
+  (middle outcome). Detected bills & pay, Months & exclusions and Inspect income
+  & spending transactions… showed no ampersand and claimed Alt+Space as a
+  shortcut; they now display it and claim nothing. British spellings in the
+  interface are American.
+- Take clutter off the screen without taking anything away (distill). Home now
+  shows one chart; Monthly cash flow and Spending by category moved, still
+  folded, to the bottom of the Spending tab, and a category bar still opens that
+  category's transactions. Forecast and Track record each keep one **Explain**
+  menu (the video, the written explanation, and on Track record what a
+  checkpoint is) in place of two or three separate buttons. The Forecast data
+  quality card is a single line that turns into an amber strip only when
+  something needs review; the detail is in its tooltip and the Review data
+  dialog. The header no longer carries a tagline. In Simple view the Goals table
+  hides its Kind and Total columns and the split-the-money choice unless a
+  non-default split is in use. An opened Monthly cash flow card no longer
+  squeezes its chart away, and the data quality warning's text no longer sits
+  against its border.
+- Fix the missing date axis on every chart. The Reset axes strip made each chart's
+  viewport 30px shorter than the plot drawn into it, so the bottom edge, the date
+  axis included, fell outside the visible area; Home, Forecast, Track record and
+  Goals charts now show their dates. Minimum chart heights count the axis so
+  charts keep their data area. Money axis labels also add precision only when ticks
+  would otherwise repeat, so Track record no longer prints "$22k" three times.
+- Finish the navigation reorganisation (stage 4). Simple view now hides the
+  Transactions and Track record tabs; a section left with one tab shows no tab
+  bar, so Accounts and Forecast read as plain pages. Any link that leads to a
+  hidden tab (Review under Needs a look, View transactions on a balance, a data
+  check) shows it and keeps it until the view is switched, and switching to
+  Simple while on a hidden tab lands on the visible one. Progress is renamed
+  Track record and Recurring patterns is renamed Detected bills & pay (the old
+  names still open them). The README, the getting-started guide, the methodology
+  notes and PRODUCT.md now describe the five sidebar sections, the single
+  allowance and the header Import button; the screenshots under docs/images still
+  show the old sidebar.
+- Make Home answer first (stage 3 of the navigation reorganisation). Dashboard
+  is now Home in the sidebar (the old name still opens it). The Overview leads
+  with the 90-day verdict, then a Needs a look card, then the net worth figures,
+  with the history chart below at a more compact 280–300px (Expand still gives
+  it the whole page). Needs a look lists at most three things from across the
+  program, each with a link to where it is fixed: accounts that need a look,
+  transactions that need attention, and forecast checks that need review. It is
+  absent on a first run and when there is nothing to list. An Import CSV button
+  now sits in the header on every page, next to Undo.
+- Merge Transactions into Accounts (stage 2 of the navigation reorganisation).
+  Accounts opens on Balances, with Transactions as its second tab, so the
+  sidebar is down to five items. Selecting an account on Balances now offers
+  "View transactions", which opens that account's ledger with every other filter
+  cleared. Every earlier page name still opens the right tab, and the Import and
+  Add account entry points are unchanged.
+- Merge Plan and Goals into one Plan item in the sidebar (stage 1 of the
+  navigation reorganisation). Plan opens on Goals, with Monthly budget as its
+  second tab, so the monthly-planning loop is one sidebar change plus a tab
+  instead of three. There is now one monthly allowance: it is typed on Goals and
+  saved as you type, and the budget tab shows it, shows what the budget leaves
+  available, and offers "Use $X as my allowance" instead of keeping a second,
+  differently-saved field. Saving a budget keeps a chosen allowance and otherwise
+  adopts the budget's. The selected tab now has an underline as well as colour.
+  Every earlier page name (Goals, Plan, Progress and so on) still opens the
+  right page.
+- Make the Getting there sooner calendar reachable. The By field opens its
+  calendar from a click anywhere on it and from Alt+Down or F4 (it used to open
+  only from a sixteen-pixel arrow, and not from the keyboard), the popup's text is
+  larger, the field offers this month to thirty years out instead of 1752 to 9999,
+  and the By and Target labels are tied to their fields for screen readers.
+- Bound the Goals projection so it is hard to get lost in. The vertical axis is
+  held to 0–100% (with 8 points of headroom) and cannot be zoomed past a tenth of
+  that, the time axis ends just past the last point instead of a chart-width
+  beyond it, and the chart re-frames whenever the plan changes. Money charts keep
+  their unbounded y axis.
+- Polish Goals. Loans are drawn coral and dashed in the projection (teal means
+  good), the delete confirmation's destructive button is coral like the other
+  confirmations, Edit and Delete explain themselves for a loan, the amount
+  shortcut sits in the tab order between the table and the row actions, and the
+  goal and emergency-fund dialogs are wide enough for their own text.
+- Make Goals first runs say what is missing. Without a monthly amount, goals read
+  "Needs a monthly amount" with one sentence and an Enter an amount shortcut,
+  instead of "Not within 30 yrs" and two 30-year warnings; the rollover and
+  Getting there sooner panels wait with them. The start card previews an
+  emergency fund and how long the detected spare money would take, from the
+  person's own history, and offers the demo when there are no accounts. The map
+  explains itself until an account exists, a freed loan payment with no goal
+  waiting says so, and adding a goal reports its finish month in the status bar.
+- Distill the Goals page. Each verb now has one home: the map owns Goal
+  activity and Locate savings, the ladder owns Add goal, Add emergency fund and
+  the four actions on the selected row (Higher, Lower, Edit, Delete). The map
+  appears once a savings goal exists, lists balance milestones in one sentence
+  instead of repeating the ladder, and shows the investment caveat only when goal
+  money is held in an investment. The ladder table is sized to its rows, the
+  plan sentence sits under it, and "Getting there sooner" leads with the verdict
+  for the chosen date. An empty ladder shows a start card in place of the empty
+  table, chart and panels. The chart folds in Simple view, keeps its key under
+  the plot, and nothing on the page scrolls except the page.
+
+## 1.21.0 – 1.21.2 — goal planning, CSV overlap and account balance debugging
 
 - Use Posting Date for bank-ledger imports when available; retain Transaction
   Date and bank Reference. Review exact legacy date corrections before updating

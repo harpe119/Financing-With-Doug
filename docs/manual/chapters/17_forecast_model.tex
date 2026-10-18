@@ -1,0 +1,68 @@
+\chapter{Forecast construction}\label{ch:forecast-methods}
+\index{bootstrap}\index{investment model}\index{Student-t innovations}\index{parameter uncertainty}
+\section{Construct a daily path}
+The forecast creates a daily grid beginning at the selected origin. An ordinary run begins today; a historical comparison uses its specified earlier origin. Current reconstructed cash supplies the opening cash value. Future recurring flows, loan payments, investment contributions, and hypothetical events are applied to the appropriate future dates. Variable weekly net flows supply the remaining modeled behavior.
+
+In schematic form, for path \(k\),
+\[
+ C_{k,t}=C_0+\sum_{u=1}^{t}\left(f_u+b_{k,u}\right),
+\]
+where \(f_u\) contains the scheduled cash effects and \(b_{k,u}\) the sampled variable net flow. Investments and modeled loan balances then contribute to net worth. The calculation is conditional on which liabilities and flows the implementation actually represents.
+
+\input{generated/credit_qualification.tex}
+
+\section{Replay recurring items without sampling them twice}
+Active recurring pay and bills are scheduled using their saved cadences, amounts, and scenario adjustments. Monthly-family dates are clamped when the requested day does not exist. Linked loan payments are represented through the loan engine rather than also replayed as independent bills.
+
+Known recurring keys are withheld from the variable-spending sample, including disabled patterns. Otherwise disabling a bill could simply cause the same historical bill to reappear as sampled variable spending. Review the detected patterns and their active status before treating the separation as complete.
+
+An ordinary standalone loan model uses monthly APR interest, a payment day, and a payment capped at the remaining amount owed. A missing payment can lead to an assumed 60-month amortizing payment with a warning. This is a fallback model assumption, not a recovered lender term. With Goals funding enabled, the priority ladder supplies the loan-payment schedule, including committed debt amounts and extras. Separate extra-loan controls should not be used to duplicate it.
+
+\section{Sample complete behavioral weeks}
+Historical records are grouped into complete Monday--Sunday weeks after personal exclusions and removal of known recurring keys. Each retained row contains category spending and the corresponding irregular income. The engine samples whole rows so that categories and income from a given historical week remain together. It does not independently draw every category from a different week.
+
+Automatic history retains at most 78 eligible weeks. An explicit period respects its selected boundary and the recorded span, including quiet eligible weeks as zeros. At least four usable complete weeks are needed to model this variable component. A shorter sample produces a warning and no sampled variable flow; it does not establish that future variable spending will be zero.
+
+The weekly net amount is spread evenly over seven future days. Scheduled bills retain specific dates, while sampled weekly behavior does not preserve every original purchase's weekday. This resolution matters when interpreting a brief low balance.
+
+\section{Weight a sustained change and retain uncertainty in the mean}
+Weekly sampling is uniform unless a sustained-change gate is met. The inspected gate compares the recent third of weekly net flows with the earlier portion, requires at least 16 weeks on each side, a standardized mean difference of at least 0.8, and a permutation-test value below 0.01. When it engages, sampling weights decay with a 13-week half-life. This is separate from the always-weighted monthly estimate in Chapter~\ref{ch:ledger-methods}.
+
+The gate is an implementation choice for deciding when to favor recent observations. Detecting a past difference does not establish that it will persist. A changed export format, missing expenses, or seasonality can also change the observations.
+
+Independent resampling alone would treat the estimated weekly mean as increasingly certain over a long horizon. The engine therefore draws one additional normal offset for each path and retains it for that path's entire horizon. Its scale is based on the standard error of the weighted weekly mean. For normalized weights \(w_j\),
+\[
+ n_{\mathrm{eff}}=\frac{1}{\sum_j w_j^2},\qquad
+ \mathrm{SE}=\frac{s_w}{\sqrt{n_{\mathrm{eff}}}},
+\]
+where \(s_w^2\) is the weighted net-flow variance with the implemented effective-sample correction. This term broadens long-horizon uncertainty within the model; it cannot supply missing categories or unforeseen structural changes.
+
+\section{Apply a saved monthly plan}
+With Use Goals funding plan enabled, the saved budget establishes monthly income, category spending, and investment targets. Recurring and weekly reference amounts are scaled to those targets, preserving dates and sampled relative variation where a usable reference exists. When no reference exists, a monthly amount is represented by a daily flow using 30.44 days per month.
+
+Scenario multipliers apply on top of the saved plan. Debt is modeled once through tracked loans, or as a budgeted cash expense when no loan account exists. Investment contributions require an investment account; otherwise the unapplied amount is explained by a warning. The budget's reserve stays in cash rather than becoming a second automatic expense, and savings earmarks do not subtract their amounts from holdings.
+
+The plan is disabled at historical forecast origins so that today's saved budget and Goals decisions are not treated as knowledge available in the past. Current saved hypothetical events are likewise excluded from an ordinary historical reconstruction. Such a reconstruction still depends on the records and historical assumptions retained by the application.
+
+\section{Model investments at monthly boundaries}
+An investment begins at its tracked value \(V\). At each modeled month boundary, elapsed time \(\Delta t\) is measured in years using 365.25 days. With annual return input \(\mu\), annual volatility input \(\sigma\), contribution \(q\), and standardized innovation \(Z\), the implemented stochastic update is
+\begin{equation}\label{eq:investment}
+ V_{\mathrm{next}}=V\exp\left[(\mu-\sigma^2/2)\Delta t+
+ \sigma\sqrt{\Delta t}\,Z\right]+q.
+\end{equation}
+The default innovation is a Student-t draw with five degrees of freedom, divided by \(\sqrt{5/3}\) to give the innovation unit variance. The alternate configuration with degrees of freedom at or below two uses normal draws. The daily chart holds the monthly updated value between event dates, so this is a stepped model rather than a simulated daily market price.
+
+The deterministic reference instead uses
+\[
+ V_{\mathrm{next,ref}}=V\exp(\mu\Delta t)+q.
+\]
+The same contribution reduces cash on that date. It is a transfer into the modeled investment, not a simultaneous loss of net worth of the full contributed amount. Budget-mode contributions are distributed according to existing account contribution shares, or to the first investment if none are set; extra investing also goes to the first investment.
+
+The deterministic reference is not identified here as the exact stochastic expectation or median. In particular, the lognormal mean adjustment associated with normal innovations cannot simply establish the mean of an exponentiated Student-t model. Return and volatility inputs are user assumptions. The engine does not infer CD maturity restrictions, tax treatment, withdrawal penalties, or future allowed contributions from an account's name.
+
+\section{Summarize the paths}
+At each date, the engine calculates the 10th, 25th, 50th, 75th, and 90th percentiles across modeled paths. A percentile curve joins successive pointwise summaries; it is not necessarily one path that was simulated. The fan is conditional on this model and sample, and its nominal percentages are not measured forecast accuracy.
+
+Shortfall summaries use complete paths to estimate crossing, low-point depth, time below zero, and recovery. They answer a different question from whether one date's P10 is below zero. A common random seed makes comparable scenarios easier to inspect by reducing random-draw differences, but adding accounts or changing model branches can alter the draw sequence. Seeded repetition establishes reproducibility for the same inputs and implementation, not correctness for all inputs.
+
+\source{finfore/forecast.py; finfore/forecast_history.py; finfore/recurrence.py; finfore/events.py; finfore/goals.py}

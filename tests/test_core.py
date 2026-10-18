@@ -1499,8 +1499,8 @@ def main() -> None:
     _chq.type.setCurrentIndex(_TYPES_ORDER.index(AccountType.CHECKING))
     _chq.name.setText("Chq")
     _chq.balance.setValue(1500.0)
-    check("a cash account asks for a closing posted balance",
-          _chq.balance_label.text() == "Closing posted balance"
+    check("a cash account asks for the balance at the end of the day",
+          _chq.balance_label.text() == "Balance at end of day"
           and abs(_chq.get_account().balance - 1500.0) < 1e-9)
 
     # "Treat as" was a permanent column of combo boxes paying for a choice
@@ -2005,11 +2005,11 @@ def main() -> None:
                  "Reconstruct history…", "Load demo dataset",
                  "Return to my own data", "Take a checkpoint now",
                  "Save a month in review…", "What changed?",
-                 "What's causing this?", "Simple view"):
+                 "What's causing this?", "Everything"):
         check(f"guide and app agree on {_lbl!r}",
               _lbl in _gt and _lbl in _ui_src)
-    for _pg in ("Dashboard", "Accounts", "Transactions", "Bills & payday",
-                "Spending", "Goals", "Forecast", "Progress", "Recurring patterns"):
+    for _pg in ("Home", "Accounts", "Transactions", "Bills & payday",
+                "Spending", "Goals", "Forecast", "Track record", "Detected bills & pay"):
         check(f"the guide explains the {_pg} page", _pg in _gt)
     for _pr in _demo.PROFILES:
         check(f"the guide lists the {_pr.key} demo",
@@ -2469,39 +2469,24 @@ def main() -> None:
                               grade_detail="x")))
     _rp_store.close()
 
-    print("the dashboard can give the history the whole page")
+    print("the supporting spending charts live folded on the Spending tab")
     _dash = _win.pages[0]
+    _spend = _win.pages[4]
     _win.nav.setCurrentRow(0)
-    check("the supporting charts start folded so history leads",
-          not _dash.flow_card.expanded and not _dash.cat_card.expanded)
-    _dash.flow_card.set_expanded(True)
-    _dash.cat_card.set_expanded(True)
-    _dash._sync_split()
-    _open = list(_dash.split.sizes())
-    _dash.flow_card.set_expanded(False)
-    _dash.cat_card.set_expanded(False)
-    _dash._sync_split()
-    _folded = list(_dash.split.sizes())
-    check("folding both hides their plots",
-          not _dash.plot_flow.isVisibleTo(_dash)
-          and not _dash.plot_cat.isVisibleTo(_dash))
-    # The freed height has to go somewhere, or folding buys nothing: a splitter
-    # keeps the sizes it was given and would leave two strips floating in a
-    # full-height pane. Measured as a share of the page, because a splitter
-    # rescales its panes to whatever geometry it actually has and the absolute
-    # pixel counts are not comparable across a relayout.
-    _share = lambda s: s[0] / max(1, sum(s))
-    check("and hands the height to the net worth history",
-          _share(_folded) > _share(_open) and _share(_folded) > 0.85
-          and _folded[1] < _open[1])
-    _dash.flow_card.set_expanded(True)
-    _dash._sync_split()
-    check("reopening one gives the room back",
-          _dash.plot_flow.isVisibleTo(_dash)
-          and _dash.split.sizes()[1] > _folded[1])
-    _dash.refresh()
-    check("a redraw does not silently unfold them",
-          not _dash.cat_card.expanded)
+    check("home no longer carries the two supporting charts",
+          not hasattr(_dash, "flow_card") and not hasattr(_dash, "cat_card"))
+    _sc = _spend.charts
+    check("they start folded so the page leads with the score",
+          not _sc.flow_card.expanded and not _sc.cat_card.expanded)
+    check("folding hides their plots",
+          not _sc.plot_flow.isVisibleTo(_sc) and not _sc.plot_cat.isVisibleTo(_sc))
+    _sc.flow_card.set_expanded(True)
+    check("unfolding one shows its plot",
+          _sc.plot_flow.isVisibleTo(_sc) and not _sc.plot_cat.isVisibleTo(_sc))
+    _sc.refresh(_win.store.transactions())
+    check("a redraw does not silently unfold the other",
+          _sc.flow_card.expanded and not _sc.cat_card.expanded)
+    _sc.flow_card.set_expanded(False)
 
     print("simple view hides the machinery, not the answer")
     _pg_by_name = {type(p).__name__: p for p in _win.pages}
@@ -2521,20 +2506,23 @@ def main() -> None:
           not _insp.components.isVisibleTo(_insp))
     # The answer itself must never be what gets hidden.
     _fcp.refresh()  # Inspect a computed answer, rather than an empty placeholder.
-    check("but the cash chart, the verdict and For nerds all stay",
+    check("but the cash chart and the verdict stay, with the what-if controls one click away",
           _fcp.cash_card.isVisibleTo(_fcp) and _fcp.risk.isVisibleTo(_fcp)
-          and _fcp.horizon.isVisibleTo(_fcp))
+          and _fcp.try_btn.isVisibleTo(_fcp) and not _fcp.horizon.isVisibleTo(_fcp))
+    _fcp.open_controls()
+    check("and opening them brings the forecast length and the sliders",
+          _fcp.horizon.isVisibleTo(_fcp) and _fcp.income_slider.isVisibleTo(_fcp))
     _win._toggle_mode()
     check("toggling brings everything back",
           _win.simple_mode is False
           and _fcp.paths_row.isVisibleTo(_fcp)
           and _prp.clear_btn.isVisibleTo(_prp)
           and _insp.components.isVisibleTo(_insp))
-    check("and the header button says which face is on",
-          _win.mode_btn.text() == "Everything")
+    check("and the header switch lights the face that is on",
+          _win.mode_all.isChecked() and not _win.mode_simple.isChecked())
     _win._toggle_mode()
     check("and back again", _win.simple_mode is True
-          and _win.mode_btn.text() == "Simple view")
+          and _win.mode_simple.isChecked() and not _win.mode_all.isChecked())
 
     print("for nerds: the maths is one click away, not on the page")
     from finfore.ui.widgets import InfoDialog as _Info
@@ -3020,6 +3008,21 @@ def main() -> None:
     from test_posted_ledger import run_tests as run_posted_tests
     if not run_posted_tests().wasSuccessful():
         raise AssertionError('posted ledger regressions failed')
+
+    print("entry scrolling regressions")
+    from test_input_behavior import run_tests as run_input_tests
+    if not run_input_tests().wasSuccessful():
+        raise AssertionError("entry scrolling regressions failed")
+
+    print("goal funding location and visualization regressions")
+    from test_goal_funding_map import run_tests as run_funding_map_tests
+    if not run_funding_map_tests().wasSuccessful():
+        raise AssertionError("goal funding visualization regressions failed")
+
+    print("goal selection, keyboard and recovery regressions")
+    from test_goal_hardening import run_tests as run_goal_hardening_tests
+    if not run_goal_hardening_tests().wasSuccessful():
+        raise AssertionError("goal hardening regressions failed")
 
     print("\nall tests passed")
 

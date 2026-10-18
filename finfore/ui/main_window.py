@@ -3,29 +3,60 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PyQt6.QtCore import Qt, QSignalBlocker
-from PyQt6.QtGui import QAction, QKeySequence
-from PyQt6.QtWidgets import (QApplication, QHBoxLayout, QLabel, QListWidget,
+from PyQt6.QtCore import Qt, QSignalBlocker, QTimer
+from PyQt6.QtGui import QAction, QActionGroup, QColor, QGuiApplication, QKeySequence
+from PyQt6.QtWidgets import (QApplication, QButtonGroup, QFrame, QHBoxLayout, QLabel, QListWidget, QScrollArea,
                              QMainWindow, QMessageBox, QPushButton, QSizePolicy,
                              QStackedWidget, QTabWidget, QVBoxLayout, QWidget)
 
 from ..history import headline_stats
 from ..store import Store
 from ..util import fmt_money
-from . import prefs, theme
+from . import charts, prefs, theme
 from .accounts import AccountsPage
 from .dashboard import DashboardPage
 from .forecast_page import ForecastPage
 from .goals_page import GoalsPage
 from .insights_page import InsightsPage
+from .first_use import NO_ACCOUNTS, READY, setup_stage
+from .widgets import tidy_scroll_focus
 from .import_dialog import ImportDialog
+from .input_behavior import install_entry_wheel_guard
 from .progress_page import ProgressPage
 from .recurring import RecurringPage
 from .transactions import TransactionsPage
 from .calendar_page import CalendarPage
 from .plan_page import PlanPage
 
-_METHODOLOGY = """
+# The choices under View → Appearance, as they are stored. Dark is the default:
+# it is what the app has always been, and it is the room it was designed in.
+APPEARANCES = (("dark", "Dark"), ("light", "Light"), ("system", "Match my computer"))
+
+
+def _retint(widget) -> None:
+    """Move whatever colours a widget was given by hand to the current palette.
+
+    Most colour comes from the app stylesheet and follows a switch by itself.
+    A widget styled in place (a header, a swatch, a coloured word in a label)
+    holds the hex it was built with; each one is a palette role, so it is swapped
+    for the same role in the new palette.
+    """
+    sheet = widget.styleSheet()
+    if "#" in sheet:
+        moved = theme.live_stylesheet(sheet)
+        if moved != sheet:
+            widget.setStyleSheet(moved)
+    if isinstance(widget, QLabel) and widget.textFormat() != Qt.TextFormat.PlainText:
+        text = widget.text()
+        if "color" in text:
+            moved = theme.live_stylesheet(text)
+            if moved != text:
+                widget.setText(moved)
+    if isinstance(widget, charts.pg.PlotWidget):
+        charts.restyle_plot(widget)
+
+
+_METHODOLOGY = f"""
 <h3>How Doug models your money</h3>
 <p><b>History.</b> Cash-account balances are reconstructed from the ledger by
 anchoring at a closing posted balance, excluding pending holds: B(t) = B(t₀) + F(t) − F(t₀), where F is the
@@ -51,7 +82,7 @@ correlation), scaled by your scenario sliders, and spread daily. Percentile
 bands are computed across paths.</p>
 <p><b>Goals.</b> Arrival estimates report the deterministic crossing plus an
 optimistic–conservative range (P90/P10 band crossings).</p>
-<p style="color:#8B98A9">Projections are statistical estimates from your own
+<p style="color:{theme.MUTED}">Projections are statistical estimates from your own
 history — not financial advice.</p>
 """
 
@@ -59,6 +90,15 @@ history — not financial advice.</p>
 class MainWindow(QMainWindow):
     def __init__(self, store: Store, real_db_path=None):
         super().__init__()
+        install_entry_wheel_guard(QApplication.instance())
+        # The palette is chosen before anything is built, so every widget starts
+        # out in it rather than being repainted a moment after it appears.
+        self._settings = prefs.app_settings()
+        self.appearance = self._settings.value("appearance", "dark", type=str)
+        if self.appearance not in dict(APPEARANCES):
+            self.appearance = "dark"
+        theme.use(self._palette_for(self.appearance), QApplication.instance())
+        QGuiApplication.styleHints().colorSchemeChanged.connect(self._on_color_scheme)
         self.store = store
         # Remembered so a demo can be a detour rather than a destination: the
         # window can always find its way back to the file it started on.
@@ -93,8 +133,6 @@ class MainWindow(QMainWindow):
         from .. import __version__
         ver = QLabel(f"v{__version__}")
         ver.setObjectName("appTag")
-        tag = QLabel("local finance · history → forecast")
-        tag.setObjectName("appTag")
         self.header_nw = QLabel("")
         self.header_nw.setObjectName("appTag")
 
@@ -108,11 +146,29 @@ class MainWindow(QMainWindow):
         # It defaults to Simple. The app's whole stated purpose is to be
         # approachable to someone's family, and a default that has to be
         # discovered is a default that will not be. Flipping it is remembered.
-        self.mode_btn = QPushButton("")
-        self.mode_btn.setObjectName("small")
-        self.mode_btn.setCheckable(True)
-        self.mode_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.mode_btn.clicked.connect(self._toggle_mode)
+        #
+        # Two lit-when-chosen buttons rather than one that is named after the
+        # state it is in: a button reading "Simple view" while in Simple view
+        # reads as an action that would change nothing.
+        self.mode_box = QWidget()
+        self.mode_box.setAccessibleName("View")
+        mode_row = QHBoxLayout(self.mode_box)
+        mode_row.setContentsMargins(0, 0, 0, 0)
+        mode_row.setSpacing(4)
+        mode_label = QLabel("View")
+        mode_label.setObjectName("appTag")
+        mode_row.addWidget(mode_label)
+        self.mode_group = QButtonGroup(self)
+        self.mode_group.setExclusive(True)
+        self.mode_simple = QPushButton("Simple")
+        self.mode_all = QPushButton("Everything")
+        for btn, simple in ((self.mode_simple, True), (self.mode_all, False)):
+            btn.setObjectName("range")
+            btn.setCheckable(True)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.clicked.connect(lambda _c=False, s=simple: self._choose_mode(s))
+            self.mode_group.addButton(btn)
+            mode_row.addWidget(btn)
 
         # Undo lives in the header as well as on the menu. A menu item is
         # enough for someone who already knows the change can be taken back;
@@ -121,6 +177,15 @@ class MainWindow(QMainWindow):
         # mistyped a balance is looking at the screen wondering what they did.
         # Hidden when the stack is empty, so it never reads as a live control
         # that does nothing.
+        # Import is the one thing everyone does again and again, and it used to
+        # live only in the File menu and a Tools menu on one tab. Here it is on
+        # every page, and it opens the same flow the menu does.
+        self.import_btn = QPushButton("Import CSV…")
+        self.import_btn.setObjectName("small")
+        self.import_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.import_btn.setToolTip("Bring in a bank CSV (also under File → Import CSV…)")
+        self.import_btn.clicked.connect(self.open_import)
+
         self.undo_btn = QPushButton("Undo")
         self.undo_btn.setObjectName("small")
         self.undo_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -130,21 +195,34 @@ class MainWindow(QMainWindow):
         hl.addWidget(title)
         hl.addSpacing(6)
         hl.addWidget(ver)
-        hl.addSpacing(10)
-        hl.addWidget(tag)
         hl.addStretch(1)
+        hl.addWidget(self.import_btn)
+        hl.addSpacing(10)
         hl.addWidget(self.undo_btn)
         hl.addSpacing(10)
-        hl.addWidget(self.mode_btn)
+        hl.addWidget(self.mode_box)
         hl.addSpacing(10)
         hl.addWidget(self.header_nw)
         outer.addWidget(header)
 
+        # The way back from a demo is on the bar itself: it used to be a sentence
+        # saying where in the File menu to find it.
+        self.banner_bar = QFrame()
+        self.banner_bar.setObjectName("demoBannerBar")
+        self.banner_bar.setVisible(False)
+        banner_row = QHBoxLayout(self.banner_bar)
+        banner_row.setContentsMargins(0, 0, 14, 0)
         self.banner = QLabel("")
         self.banner.setObjectName("demoBanner")
         self.banner.setVisible(False)
         self.banner.setWordWrap(True)
-        outer.addWidget(self.banner)
+        banner_row.addWidget(self.banner, 1)
+        self.banner_back = QPushButton("Return to my own data")
+        self.banner_back.setObjectName("bannerButton")
+        self.banner_back.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.banner_back.clicked.connect(lambda: self.return_to_real())
+        banner_row.addWidget(self.banner_back, 0, Qt.AlignmentFlag.AlignVCenter)
+        outer.addWidget(self.banner_bar)
 
         body = QHBoxLayout()
         body.setContentsMargins(0, 0, 0, 0)
@@ -152,8 +230,7 @@ class MainWindow(QMainWindow):
         self.nav = QListWidget()
         self.nav.setObjectName("nav")
         self.nav.setFixedWidth(184)
-        names = ("Dashboard", "Accounts", "Transactions", "Bills & payday",
-                 "Plan", "Goals", "Forecast")
+        names = self._rail_names = ("Home", "Accounts", "Bills & payday", "Plan", "Forecast")
         for name in names:
             self.nav.addItem(name)
         self.stack = QStackedWidget()
@@ -174,30 +251,64 @@ class MainWindow(QMainWindow):
             CalendarPage(store, self),
         ]
         dashboard, accounts, transactions, recurring, insights, goals, forecast, progress, calendar = self.pages
+        self.dashboard_page = dashboard
         plan = PlanPage(store, self)
         self.pages.append(plan)
         self.dashboard_tabs = QTabWidget()
         self.dashboard_tabs.addTab(dashboard, "Overview")
         self.dashboard_tabs.addTab(insights, "Spending")
+        # An account and its transactions are one place: pick the account on
+        # Balances, read or fix its ledger on Transactions.
+        self.accounts_tabs = QTabWidget()
+        self.accounts_tabs.addTab(accounts, "Balances")
+        self.accounts_tabs.addTab(transactions, "Transactions")
         self.bills_tabs = QTabWidget()
         self.bills_tabs.addTab(calendar, "Calendar")
-        self.bills_tabs.addTab(recurring, "Recurring patterns")
+        self.bills_tabs.addTab(recurring, "Detected bills && pay")
         self.forecast_tabs = QTabWidget()
         self.forecast_tabs.addTab(forecast, "Projection")
-        self.forecast_tabs.addTab(progress, "Progress")
-        self.sections = [self.dashboard_tabs, accounts, transactions,
-                         self.bills_tabs, plan, goals, self.forecast_tabs]
+        self.forecast_tabs.addTab(progress, "Track record")
+        # Plan is one rail item for the whole monthly-planning loop: the goal
+        # ladder first, because it is the tab people come back to, and the
+        # budget that sizes its allowance second.
+        self.plan_tabs = QTabWidget()
+        self.plan_tabs.addTab(goals, "Goals")
+        self.plan_tabs.addTab(plan, "Monthly budget")
+        self.sections = [self.dashboard_tabs, self.accounts_tabs,
+                         self.bills_tabs, self.plan_tabs, self.forecast_tabs]
+        # Tabs a relative does not need day to day. Simple view hides them, and
+        # anything that links to one reveals it, so a "Review" button on Home
+        # never leads nowhere. Revealed tabs stay until the view is toggled.
+        self._simple_hidden = {transactions, progress}
+        self._revealed: set = set()
         self._destinations = {
             name: (i, None) for i, name in enumerate(names)
         }
+        # Pages are reached by name, never by rail position, so a link keeps
+        # working when the rail is rearranged. "Plan" stays an alias for the
+        # budget page it used to name; the rail item of that name opens the
+        # section on whichever of its tabs was used last.
         self._destinations.update({
+            "Dashboard": (0, None), "Overview": (0, dashboard),
             "Insights": (0, insights), "Spending": (0, insights),
-            "Recurring": (3, recurring), "Calendar": (3, calendar),
-            "Progress": (6, progress), "Projection": (6, forecast),
+            "Accounts": (1, accounts), "Balances": (1, accounts),
+            "Transactions": (1, transactions),
+            "Recurring": (2, recurring), "Calendar": (2, calendar),
+            "Plan": (3, plan), "Monthly budget": (3, plan), "Goals": (3, goals),
+            "Progress": (4, progress), "Projection": (4, forecast),
         })
         for p in self.pages:
             p.setSizePolicy(QSizePolicy.Policy.Ignored,
                             QSizePolicy.Policy.Ignored)
+        # Name each page's scroll area, and take it out of the Tab order when the
+        # page has controls to Tab to (see tidy_scroll_focus).
+        for page, label in zip(self.pages, (
+                "Overview", "Balances", "Transactions", "Detected bills and pay",
+                "Spending", "Goals", "Projection", "Track record", "Calendar",
+                "Monthly budget")):
+            for area in page.findChildren(QScrollArea):
+                tidy_scroll_focus(area, f"{label} page" if area.parentWidget() is page
+                                  else f"{label} panel")
         for section in self.sections:
             self.stack.addWidget(section)
         body.addWidget(self.nav)
@@ -207,7 +318,6 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
         self.nav.currentRowChanged.connect(self._on_nav)
 
-        self._settings = prefs.app_settings()
         self.simple_mode = self._settings.value("simple_mode", True, type=bool)
         self._apply_mode(refresh=False)
         # Recording starts here rather than in Store.__init__ so that the demo
@@ -218,21 +328,60 @@ class MainWindow(QMainWindow):
         # have to exist by then.
         store.enable_undo()
         self._build_menu()
-        for tabs in (self.dashboard_tabs, self.bills_tabs, self.forecast_tabs):
+        for tabs in (self.dashboard_tabs, self.accounts_tabs, self.bills_tabs,
+                     self.plan_tabs, self.forecast_tabs):
             tabs.currentChanged.connect(
                 lambda _index, host=tabs: self.refresh_current()
                 if self.stack.currentWidget() is host else None)
         self.nav.setCurrentRow(0)
         self.statusBar().showMessage(f"Database: {store.path}")
+        # On a first run the keyboard starts on the step to take. Left alone it
+        # starts on the header's Import button, which reads as step one even before
+        # there is an account to import into.
+        if setup_stage(store) != READY:
+            QTimer.singleShot(0, self.dashboard_page.focus_first_step)
 
     # ---------------------------------------------------------------
+    def _sync_tabs(self) -> None:
+        """Show each section's tabs for the current view.
+
+        A section left with a single tab shows no tab bar at all, so it reads as
+        a plain page rather than as one tab with nowhere to go.
+        """
+        hidden = set() if not self.simple_mode else self._simple_hidden - self._revealed
+        for tabs in (s for s in self.sections if isinstance(s, QTabWidget)):
+            if tabs.currentWidget() in hidden:
+                first = next(tabs.widget(i) for i in range(tabs.count())
+                             if tabs.widget(i) not in hidden)
+                with QSignalBlocker(tabs):
+                    tabs.setCurrentWidget(first)
+            shown = 0
+            for i in range(tabs.count()):
+                visible = tabs.widget(i) not in hidden
+                tabs.setTabVisible(i, visible)
+                shown += visible
+            tabs.tabBar().setVisible(shown > 1)
+            # A hidden tab bar left the QTabWidget itself in the Tab order, and
+            # Tab from the rail then never got past it: two sections in Simple view
+            # could not be entered from the keyboard.
+            tabs.setFocusPolicy(Qt.FocusPolicy.TabFocus if shown > 1
+                                else Qt.FocusPolicy.NoFocus)
+
+    def _choose_mode(self, simple: bool) -> None:
+        """A click on the view that is already on changes nothing."""
+        if simple != self.simple_mode:
+            self._toggle_mode()
+        else:
+            self._apply_mode(refresh=False)     # keep the lit button honest
+
     def _toggle_mode(self) -> None:
+        self._revealed.clear()
         self.simple_mode = not self.simple_mode
         self._settings.setValue("simple_mode", self.simple_mode)
         self._apply_mode()
-        self.status("Simple view. Use How this works for the calculations."
+        self.status("Showing the essentials. Each page's Explain menu has the calculations."
                     if self.simple_mode else
-                    "Advanced controls shown.")
+                    "Showing everything, including the advanced controls.")
 
     def _apply_mode(self, refresh: bool = True) -> None:
         """Tell every page which face to wear.
@@ -242,14 +391,15 @@ class MainWindow(QMainWindow):
         do not implement it.
         """
         on = self.simple_mode
-        self.mode_btn.setChecked(not on)
-        self.mode_btn.setText("Simple view" if on else "Everything")
-        self.mode_btn.setToolTip(
-            "Showing the essentials. Click for the advanced panels — path "
-            "counts, sensitivity, backtesting, checkpoint tables."
-            if on else
-            "Showing everything. Click to hide the advanced panels and keep "
-            "the pages to what most people need.")
+        self.mode_simple.setChecked(on)
+        self.mode_all.setChecked(not on)
+        self.mode_simple.setToolTip(
+            "Just the essentials: the pages kept to what most people need.")
+        self.mode_all.setToolTip(
+            "Everything, including the advanced panels: path counts, sensitivity, "
+            "backtesting and checkpoint tables.")
+        self._sync_view_menu()
+        self._sync_tabs()
         for p in self.pages:
             fn = getattr(p, "set_simple", None)
             if fn is not None:
@@ -259,6 +409,56 @@ class MainWindow(QMainWindow):
                     pass          # a page that cannot simplify must still work
         if refresh:
             self.refresh_current()
+
+    def _sync_view_menu(self) -> None:
+        if not hasattr(self, "a_simple"):
+            return                      # the menu is built after the first pass
+        self.a_simple.setChecked(self.simple_mode)
+        self.a_everything.setChecked(not self.simple_mode)
+        self.appearance_actions[self.appearance].setChecked(True)
+
+    # ---------------- appearance ----------------
+    @staticmethod
+    def _palette_for(appearance: str) -> theme.Palette:
+        if appearance == "system":
+            scheme = QGuiApplication.styleHints().colorScheme()
+            return theme.LIGHT if scheme == Qt.ColorScheme.Light else theme.DARK
+        return theme.PALETTES.get(appearance, theme.DARK)
+
+    def set_appearance(self, appearance: str) -> None:
+        """Dark, Light or Match my computer: remembered, and applied at once."""
+        self.appearance = appearance
+        self._settings.setValue("appearance", appearance)
+        self._sync_view_menu()
+        self._apply_palette()
+        self.status(f"{dict(APPEARANCES)[appearance]} appearance. "
+                    "Change it under View → Appearance.")
+
+    def _on_color_scheme(self, _scheme) -> None:
+        if self.appearance == "system":
+            self._apply_palette()
+
+    def _apply_palette(self) -> None:
+        """Repaint the open window in the chosen palette, in place.
+
+        Nothing is rebuilt: the page, its tab, a drawer left open, what is typed
+        into a field and how far a page is scrolled all stay as they were. The
+        stylesheet moves everything it styles; hand-set colours are translated
+        role for role; the page in view redraws its charts; every other page
+        redraws when it is next opened, as it always does.
+        """
+        palette = self._palette_for(self.appearance)
+        if palette is theme.current():
+            return
+        app = QApplication.instance()
+        theme.use(palette, app)
+        for widget in app.allWidgets():
+            _retint(widget)
+        for page in self.pages:
+            restyle = getattr(page, "restyle", None)
+            if restyle is not None:
+                restyle()
+        self.refresh_current()
 
     # ---------------------------------------------------------------
     def _build_menu(self) -> None:
@@ -327,11 +527,41 @@ class MainWindow(QMainWindow):
         # way open rather than trusting it was told.
         m_edit.aboutToShow.connect(self._sync_undo)
 
+        # View holds the two choices about how the app looks: how much of it to
+        # show (the same switch as the header's) and which palette to show it in.
+        m_view = self.menuBar().addMenu("&View")
+        modes = QActionGroup(self)
+        self.a_simple = QAction("Simple", self, checkable=True)
+        self.a_simple.setToolTip("Just the essentials")
+        self.a_everything = QAction("Everything", self, checkable=True)
+        self.a_everything.setToolTip("Every page and the advanced controls")
+        for act, simple in ((self.a_simple, True), (self.a_everything, False)):
+            act.triggered.connect(lambda _c=False, s=simple: self._choose_mode(s))
+            modes.addAction(act)
+            m_view.addAction(act)
+        m_view.addSeparator()
+        m_look = m_view.addMenu("Appearance")
+        looks = QActionGroup(self)
+        self.appearance_actions = {}
+        for key, label in APPEARANCES:
+            act = QAction(label, self, checkable=True)
+            act.triggered.connect(lambda _c=False, k=key: self.set_appearance(k))
+            looks.addAction(act)
+            m_look.addAction(act)
+            self.appearance_actions[key] = act
+        self.appearance_actions["system"].setToolTip(
+            "Light or dark, following your computer's own setting")
+        self._sync_view_menu()
+
         m_help = self.menuBar().addMenu("&Help")
         a_guide = QAction("Getting started", self)
         a_guide.setShortcut("F1")
         a_guide.triggered.connect(self.show_guide)
         m_help.addAction(a_guide)
+        a_manual = QAction("User manual (PDF)", self)
+        a_manual.setToolTip("Open the complete user manual in your PDF reader")
+        a_manual.triggered.connect(self.show_manual)
+        m_help.addAction(a_manual)
         m_help.addSeparator()
         a_meth = QAction("Methodology", self)
         a_meth.triggered.connect(self._methodology)
@@ -373,6 +603,34 @@ class MainWindow(QMainWindow):
         self.header_nw.setText(
             f"net worth  {fmt_money(st['networth'])}" if st["networth"] else "")
         self._sync_undo()
+        self._sync_rail()
+
+    def _sync_rail(self) -> None:
+        """Dim the sections that fill in from statements until some are imported.
+
+        They stay clickable, and each page says in words what it is waiting for;
+        the rail only says, before anyone clicks, which of them are not worth a
+        visit yet. The label is set apart by weight of colour and by italics, so
+        it does not rest on colour alone.
+        """
+        stage = setup_stage(self.store)
+        waiting = {} if stage == READY else {
+            "Bills & payday": "Fills in once your statements are imported: "
+                              "Doug finds the bills and paychecks that repeat in them.",
+            "Forecast": ("Add an account and import its statements to see where "
+                         "your cash is headed." if stage == NO_ACCOUNTS else
+                         "A first forecast can use your balances alone. Import "
+                         "statements to bring in your bills, paychecks and spending."),
+        }
+        for row, name in enumerate(self._rail_names):
+            item = self.nav.item(row)
+            tip = waiting.get(name, "")
+            font = item.font()
+            font.setItalic(bool(tip))
+            item.setFont(font)
+            item.setForeground(QColor(theme.MUTED if tip else theme.RAIL_TEXT))
+            item.setToolTip(tip)
+            item.setData(Qt.ItemDataRole.AccessibleDescriptionRole, tip)
 
     def status(self, msg: str) -> None:
         self.statusBar().showMessage(msg, 6000)
@@ -384,6 +642,10 @@ class MainWindow(QMainWindow):
             return
         row, page = destination
         section = self.sections[row]
+        if (page is not None and self.simple_mode and page in self._simple_hidden
+                and page not in self._revealed):
+            self._revealed.add(page)
+            self._sync_tabs()
         tab_changed = page is not None and section.currentWidget() is not page
         # Resolve the destination before emitting navigation signals. Otherwise
         # a link to Progress first calculates Projection, then loads Progress.
@@ -449,10 +711,29 @@ class MainWindow(QMainWindow):
 
     # ---------------------------------------------------------------
     def open_account(self) -> None:
-        """Create an account through the existing editor, then update the active page."""
-        row, _ = self._destinations["Accounts"]
-        self.sections[row]._add()
-        self.refresh_current()
+        """The Forecast page's own "Add an account" button: the same dialog as add_account."""
+        self.add_account()
+
+    def show_attention(self) -> None:
+        """Open the Transactions tab on what still needs a look."""
+        self.show_page("Transactions")
+        _row, transactions = self._destinations["Transactions"]
+        transactions.show_attention()
+
+    def show_transactions_for(self, account_id: int) -> None:
+        """Open the Transactions tab on one account's ledger."""
+        self.show_page("Transactions")
+        _row, transactions = self._destinations["Transactions"]
+        transactions.show_account(account_id)
+
+    def add_account(self) -> None:
+        """Open the add-account dialog from wherever the person is.
+
+        Every "Add an account" used to go to the Accounts page, which then had an
+        "Add your first account" button of its own before the dialog opened.
+        """
+        _row, accounts = self._destinations["Accounts"]
+        accounts._add()
 
     def open_import(self) -> None:
         """Single import entry point for every account type.
@@ -469,12 +750,10 @@ class MainWindow(QMainWindow):
         """
         accounts = self.store.accounts()
         if not accounts:
-            QMessageBox.information(
-                self, "Create an account first",
-                "Add an account on the Accounts page, then import its CSV "
-                "export. Checking, savings, and credit-card accounts take a "
-                "transaction export; loans and investments take a balance or "
-                "activity export.")
+            # An import needs an account to land in, so open the dialog that makes
+            # one rather than stopping to say so.
+            self.status("Add an account first, then import its statements.")
+            self.add_account()
             return
         target = accounts[0] if len(accounts) == 1 else \
             self._pick_import_account(accounts)
@@ -487,9 +766,15 @@ class MainWindow(QMainWindow):
         if not account.type.is_cashlike:
             self._import_balance_history(account)
             return
+        first = not self.store.has_transactions()
         dlg = ImportDialog(self.store, self, account_id=account.id)
         if dlg.exec():
             self.refresh_current()
+            if first and self.store.has_transactions():
+                # The first import is the point of the whole setup, so end on
+                # what it was for: where the person stands, on Home.
+                self.show_page("Overview")
+                self.status("Your statements are in. This is where you stand.")
 
     def _import_balance_history(self, account) -> None:
         from .accounts import SnapshotImportDialog
@@ -531,10 +816,10 @@ class MainWindow(QMainWindow):
             box = QMessageBox(self)
             box.setWindowTitle(prof.name)
             box.setText(f"<b>{prof.name}</b><p>{prof.detail}</p>"
-                        f"<p style='color:#8B98A9'>This opens in its own "
+                        f"<p style='color:{theme.MUTED}'>This opens in its own "
                         f"separate file. Your own data is untouched and one "
                         f"menu click away.</p>"
-                        f"<p style='color:#8B98A9'>Building it takes a few "
+                        f"<p style='color:{theme.MUTED}'>Building it takes a few "
                         f"seconds the first time.</p>")
             box.setTextFormat(Qt.TextFormat.RichText)
             box.setStandardButtons(QMessageBox.StandardButton.Ok
@@ -574,6 +859,8 @@ class MainWindow(QMainWindow):
         old = self.store
         self.store = store
         self.demo_key = demo_key
+        for plot in self.findChildren(charts.ChartPlot):
+            plot.forget_view()
         for p in self.pages:
             p.store = store
             reset = getattr(p, "reset_for_store", None)
@@ -601,13 +888,14 @@ class MainWindow(QMainWindow):
         """
         if self.demo_key is None:
             self.banner.setVisible(False)
+            self.banner_bar.setVisible(False)
             return
         from ..demo import profile
         self.banner.setText(
             f"  DEMO DATA — “{profile(self.demo_key).name}”. Nothing here is "
-            f"yours; your own data is untouched. "
-            f"File → Return to my own data.")
+            f"yours; your own data is untouched.")
         self.banner.setVisible(True)
+        self.banner_bar.setVisible(True)
 
     # ---------------- month in review ----------------
     def backup_data(self) -> None:
@@ -683,13 +971,15 @@ class MainWindow(QMainWindow):
         self.status(f"Month in review saved to {path}")
 
     def _reset(self) -> None:
+        from .accounts import confirm
         what = ("this demo" if self.demo_key else "your")
-        ok = QMessageBox.question(
-            self, "Reset all data",
-            f"Delete all accounts, transactions, patterns, and goals from "
-            f"{what} database?\n\nCtrl+Z will bring it all back while this "
-            f"window stays open — but once you close the app, it is gone.")
-        if ok == QMessageBox.StandardButton.Yes:
+        # Named buttons, and Keep is what Enter and Esc do: a bare Yes/No here
+        # made the destructive answer the default.
+        if confirm(self, "Reset all data",
+                   f"Delete all accounts, transactions, patterns, and goals from "
+                   f"{what} database?\n\nCtrl+Z will bring it all back while this "
+                   f"window stays open — but once you close the app, it is gone.",
+                   yes_text="Delete everything", no_text="Keep my data"):
             self.store.clear_all()
             self.refresh_current()
             self.status("Database cleared. Ctrl+Z undoes this.")
@@ -697,6 +987,10 @@ class MainWindow(QMainWindow):
     def show_guide(self) -> None:
         from .guide import show_guide
         show_guide(self)
+
+    def show_manual(self) -> None:
+        from .manual import open_manual
+        open_manual(self)
 
     # ---------------- updates ----------------
     def check_for_updates(self) -> None:
@@ -715,12 +1009,12 @@ class MainWindow(QMainWindow):
         box.setTextFormat(Qt.TextFormat.RichText)
         box.setText(
             f"<h3>Financing with Doug v{__version__}</h3>"
-            f"<p style='color:#8B98A9'>Created by <b>{__author__}</b></p>"
+            f"<p style='color:{theme.MUTED}'>Created by <b>{__author__}</b></p>"
             f"<p>A local, private personal-finance modeling tool. All data "
             f"stays in a SQLite file on this machine.</p>"
             f"<p>Import bank CSVs, review recurring bills, track goals, and "
             f"explore forecasts based on your own history.</p>"
-            f"<p style='color:#8B98A9'>Help → Getting started explains the "
+            f"<p style='color:{theme.MUTED}'>Help → Getting started explains the "
             f"workflow; Help → Methodology explains the model.</p>")
         box.exec()
 
@@ -728,5 +1022,5 @@ class MainWindow(QMainWindow):
         box = QMessageBox(self)
         box.setWindowTitle("Methodology")
         box.setTextFormat(Qt.TextFormat.RichText)
-        box.setText(_METHODOLOGY)
+        box.setText(theme.live_stylesheet(_METHODOLOGY))
         box.exec()

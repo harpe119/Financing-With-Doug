@@ -1,0 +1,42 @@
+\chapter{Bills, paydays, and the calendar}\label{ch:calendar}
+\index{recurring patterns}\index{calendar}\index{account assignment}
+\section{Review a detected schedule}
+Open \ui{Bills \& payday > Detected bills \& pay}. Doug groups repeated transactions and proposes amounts and cadences. Review the name, amount, frequency, most recent occurrence, and whether the pattern is still active. A recurring amount is normally based on the median observed payment, so an unusual recent bill may differ from it.
+
+The available cadences distinguish every two weeks from twice a month. Every-two-weeks payments follow a fourteen-day interval. Twice-monthly payments follow two positions within a month and do not necessarily remain fourteen days apart. Monthly-family dates are clamped to short months when the requested day does not exist.
+
+Deactivate a schedule that no longer applies. Use Ignore for a repeated item that should be withheld from the forward projection. Known pattern records, including disabled or ignored ones, are excluded from variable-spending sampling to avoid replaying the same historical item through a second route.
+
+\section{Link a loan payment}
+A loan-payment pattern must identify the loan to which it belongs. An unlinked pattern is excluded from direct scheduled replay to avoid counting a payment twice. When active linked patterns supply a loan's payment, their monthly equivalents replace the account's fallback payment; they are not added to the fallback again.
+
+Check both sides of this relationship: the recurring item should have the appropriate sign and cadence, and the linked account should be the correct loan. Several linked payments can contribute to one loan's monthly amount. When no linked payment is available, the account's configured payment provides the fallback. Missing payment information can produce a model assumption or a warning, rather than evidence that no payment is due.
+
+\section{Read the calendar as a schedule}
+The Calendar tab lists future scheduled items through the next year, starting tomorrow. Select a day to see its entries; use \ui{Show whole month} to restore the full monthly list. A date's color indicates income, payments, or both, while the entries supply the actual names and amounts. Today is marked by a ring inside its cell, whichever day is selected.
+
+The schedule combines recurring items, configured loan commitments, investment contributions, and active saved what-if event occurrences. These sources are not all bank-confirmed payments. A saved hypothetical expense appears because it is part of the scenario records, not because a bank has scheduled it.
+
+\section{Check the payment account}
+Choose an account to inspect scheduled items assigned to it. A recurring item is attributed to an account only when the matching imported ledger supports a unique assignment. A merchant used on several accounts can remain unassigned. A manually configured contribution or payment may also have no confirmed funding account.
+
+\begin{enumerate}
+\item Review the combined schedule for the selected month.
+\item Inspect \ui{Unassigned items}. Determine which commitments require a payment-account decision outside the application.
+\item Select a particular account and review the items attributed to it.
+\item Compare their timing and amount with actual arrangements at the bank or payee.
+\end{enumerate}
+
+For an account, the scheduled balance begins from its current recorded or reconstructed balance and applies assigned scheduled items through the selected month end. Later months include intervening scheduled items. A negative card position continues to represent money owed.
+
+\begin{notebox}{A calendar balance is not a safe-to-spend amount}
+The account-specific calendar excludes everyday variable spending, future transfers, and unassigned items. Loan commitments are listed as a schedule rather than stopped by the forecast's payoff calculation. A positive scheduled month-end amount therefore does not establish that the account can support all spending during that month.
+\end{notebox}
+
+\section{When circumstances change}
+Review schedules after a pay change, move, cancellation, loan payoff, or a change in which account pays a bill. Importing additional data can improve detection, but it does not remove the need to confirm that the detected arrangement still exists.
+
+The Forecast history option can re-estimate bills and paydays from a selected period without editing the saved pattern records. This forecast-specific refit does not rewrite the baseline calendar. Similarly, moving a payment date in a scenario changes the modeled cash flow; it does not contact a payee or change an actual bank instruction.
+
+\source{finfore/recurrence.py; finfore/calendar.py; finfore/ui/recurring.py; finfore/ui/calendar_page.py}
+

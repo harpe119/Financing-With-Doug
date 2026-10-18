@@ -19,7 +19,7 @@ from PyQt6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox, QH
 from ..learning import (feedback_key, scoring_window_months,
                         uncategorized_clusters, uncategorized_summary)
 from ..store import Store
-from ..util import fmt_money
+from ..util import fmt_money, fmt_day
 from .widgets import FlowLayout, hint
 
 # Trailing windows the queue can be narrowed to. The default matches the span
@@ -267,7 +267,7 @@ class ReviewUncategorizedDialog(QDialog):
         self.preview.setRowCount(min(100, len(rows)))
         accounts = {a.id: a.name for a in self.store.accounts()}
         for i, entry in enumerate(rows.head(100).itertuples()):
-            values = [entry.date.strftime('%Y-%m-%d') if pd.notna(entry.date) else 'Undated',
+            values = [fmt_day(entry.date) if pd.notna(entry.date) else 'Undated',
                 accounts.get(entry.account_id, '?'), entry.description, f'${entry.amount:,.2f}', entry.category]
             for j, value in enumerate(values):
                 item = QTableWidgetItem(value)

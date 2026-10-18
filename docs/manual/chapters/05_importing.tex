@@ -1,0 +1,56 @@
+\chapter{Importing statements}\label{ch:importing}
+\index{CSV import}\index{posting date}\index{pending transactions}\index{duplicate transactions}
+\section{Prepare the export}
+Download a CSV transaction export from the bank. A PDF statement is useful for reconciliation but is not the CSV input expected by the importer. Save the original export so that a later mapping or reconciliation question can be checked against the supplied records.
+
+Import each account into its corresponding Doug account. Before importing an extended history, back up the database. When checking an unfamiliar bank format, begin with one file and inspect its result before applying the same choices to several accounts.
+
+\section{Map the columns}
+Choose \ui{Import CSV} from the header or File menu, select the account, and choose the file. Doug proposes a mapping from column names and sample contents and summarizes the result under \ui{What Doug read}: the number of transactions, the first and last dates, how many are money out and money in, any pending rows left out, and the first three rows as they will be saved. Compare that summary with the statement. The column choices are behind \ui{Adjust how the file is read}. They open by themselves only when the file cannot be read, and an amber warning appears when the result looks implausible, for example when nearly every row reads as money in. The proposal requires review because banks use different signs, dates, delimiters, and headings.
+
+\begin{tabularx}{\textwidth}{@{}p{0.26\textwidth}Y@{}}
+\toprule Field & Check before importing\\\midrule
+Posting / balance date & Use Posting Date when supplied. Verify whether day-first parsing is appropriate.\\
+Transaction date & Preserve the purchase date separately when supplied; it need not equal the posting date.\\
+Description & Select the merchant, payee, or narrative rather than a numerical reference alone.\\
+Amount & Choose signed amounts, reversed signs, separate debit/credit columns, or an indicator column as appropriate.\\
+Status and reference & Retain supplied posting status and source reference when available.\\
+\bottomrule
+\end{tabularx}
+
+Inspect recognizable examples: a paycheck should increase the account; an ordinary purchase should decrease it. For a card export, do not infer the correct choice merely from its account type. The export may use positive purchases while Doug's canonical transaction amount is negative for an outflow.
+
+\section{Import and inspect the result}
+\begin{enumerate}
+\item Review the account and the \ui{What Doug read} summary. Open \ui{Adjust how the file is read} to check the mapped dates, amount mode, and preview rows when anything differs from the statement.
+\item Confirm the import only after recognizable amounts have the correct direction.
+\item Read the import result, including added and skipped records or any explanation requiring attention.
+\item Compare several imported rows and the date range against the original export.
+\item Open Transactions and check the account's reconstructed balance against a known statement interval.
+\item Review uncertain categories and detected recurring items before using the forecast.
+\end{enumerate}
+
+An approved import can be taken back with Ctrl+Z or \ui{Undo} in the header while the application remains open. An import also records a checkpoint for later comparison. This is a saved model state, rather than a substitute for inspecting the imported ledger.
+
+\section{Overlapping exports and identical purchases}
+An updated bank export commonly overlaps an earlier one. Doug uses import identities and transaction contents, including occurrence counts, to reduce repeated entries. Two genuinely identical purchases on the same day must remain two purchases; overlap detection therefore cannot be equivalent to dropping every repeated amount and description.
+
+Differences in posting dates or meaningful merchant descriptions can still require manual review. Use the duplicate-review tools to inspect candidates, rather than assuming either that every repeated row is wrong or that every overlapping import is perfect. A remembered removal can prevent an entry previously identified as a duplicate from returning.
+
+\section{Correct earlier date mappings}
+An older import may have used Transaction Date when a newer export supplies both Transaction Date and Posting Date. The update path can show exact matching records whose ledger dates would change. Review this table before accepting \ui{Update dates and import}. The purpose is to preserve the record's identity and associated review or goal information while changing its ledger date.
+
+Ambiguous matches require review. A row already present on both candidate dates cannot be migrated safely by guessing which copy is correct. Wider date comparisons in duplicate review are candidates to examine, rather than instructions to remove everything shown.
+
+\section{Pending entries and malformed rows}
+Rows identified as pending or unposted remain outside the posted balance and spending calculations. The latest-import view shows the pending information supplied by each account's most recent export. A new export replaces that snapshot; it is not a live bank feed.
+
+A malformed row or an invalid financial date or amount should be corrected rather than silently interpreted. Read the import explanation, check the original file, and obtain a clean export when necessary. Do not remove a financially meaningful row merely to make the importer proceed. If a mapping was wrong, Undo the approved import or work from a backup, then re-import with the corrected choices.
+
+\section{Loan and investment imports}
+For these account types, the same import route opens balance-history handling. A file can provide dated balances directly, or supported activity from which a history is reconstructed around the entered anchor. The two shapes answer different questions: observed balances report values; activity reports changes that may omit interest, price movements, or other adjustments.
+
+Inspect the balance history after import. An account whose latest observation is old may have a plausible interpolated chart without having a current valuation. Update the observation before treating that value as today's financial position.
+
+\source{finfore/ingest.py; finfore/pipeline.py; finfore/store.py; finfore/ui/import_dialog.py; finfore/dedup.py}
+

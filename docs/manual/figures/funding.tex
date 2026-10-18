@@ -1,0 +1,21 @@
+\begin{tikzpicture}[x=1cm,y=1cm,font=\small]
+\node[anchor=west,font=\sffamily\bfseries] at (0,0.6) {Account locations: each full bar is \money{1,000}};
+\foreach \name/\y in {Checking/0,Savings/-0.8,Money market/-1.6,CD (investment)/-2.4}{
+  \node[anchor=east] at (3.5,\y+0.18) {\name};
+  \draw[Rule] (3.7,\y) rectangle (10.7,\y+0.36);
+}
+\fill[Teal] (3.7,0) rectangle (10.7,0.36);
+\fill[Blue] (3.7,-0.8) rectangle (10.7,-0.44);
+\fill[Blue] (3.7,-1.6) rectangle (7.2,-1.24);
+\fill[Violet] (7.2,-1.6) rectangle (10.7,-1.24);
+\fill[Violet] (3.7,-2.4) rectangle (10.7,-2.04);
+\foreach \value/\x in {0/3.7,250/5.45,500/7.2,750/8.95,1000/10.7}
+  \node[anchor=north,font=\scriptsize] at (\x,-2.6) {\$\value};
+\fill[Teal] (0,-3.3) rectangle (0.25,-3.05);
+\node[anchor=west] at (0.4,-3.17) {Baseline: \money{1,000}};
+\fill[Blue] (5.1,-3.3) rectangle (5.35,-3.05);
+\node[anchor=west] at (5.5,-3.17) {Funded purchase: \money{1,500}};
+\fill[Violet] (0,-3.85) rectangle (0.25,-3.6);
+\node[anchor=west] at (0.4,-3.72) {House: \money{1,500}};
+\node[anchor=west] at (5.5,-3.72) {Unfunded purchase: \money{0}};
+\end{tikzpicture}

@@ -6,15 +6,15 @@ from PyQt6.QtWidgets import (QHeaderView, QTabWidget, QTextBrowser, QTreeWidget,
                              QTreeWidgetItem, QVBoxLayout, QWidget)
 
 from ..insights import MonthlyBreakdown
-from ..util import fmt_money
+from ..util import fmt_money, fmt_day
 from .widgets import InfoDialog, hint
 
 def _money(value: float, decimals=2) -> str:
     return f"{'-' if value < 0 else ''}${abs(value):,.{decimals}f}"
 
 
-GROUPS = [("income", "Income"), ("essential", "Necessities"),
-          ("frivolous", "Wants"), ("giving", "Giving"), ("unknown", "Unknown")]
+GROUPS = [("income", "Income"), ("essential", "Needs"),
+          ("frivolous", "Wants"), ("giving", "Giving"), ("unknown", "Uncategorized")]
 
 
 class SpendingDetailsDialog(InfoDialog):
@@ -53,7 +53,7 @@ class SpendingDetailsDialog(InfoDialog):
         self.months = QTextBrowser()
         self.months.setObjectName("infoBody")
         self.months.document().setDefaultStyleSheet(self.view.document().defaultStyleSheet())
-        self.tabs.addTab(self.months, "Months & exclusions")
+        self.tabs.addTab(self.months, "Months && exclusions")
         layout.insertWidget(position, self.tabs, 1)
         if details is None:
             box.insertWidget(1, hint("No complete months of personal transactions are available yet."))
@@ -105,12 +105,12 @@ class SpendingDetailsDialog(InfoDialog):
             "are used. Transfers and Business (reimbursable) never enter these figures. A reimbursement "
             "marked inside a paycheck is subtracted from income; hover its transaction to see "
             "the original deposit and the personal amount used.</p>"
-            "<p>Income counts positive entries in income categories. Unknown counts outflows in "
+            "<p>Income counts positive entries in income categories. Uncategorized counts outflows in "
             "categories that have not been assigned to a spending group. Negative income entries "
-            "and positive unknown entries are excluded. Categorized refunds offset spending in "
+            "and positive uncategorized entries are excluded. Categorized refunds offset spending in "
             "that group; a group's net spending cannot fall below zero.</p>"
             "<p>These figures use your transactions, rather than just recurring bills. "
-            "For example, Necessities also includes groceries, utilities, insurance, fuel, transport, "
+            "For example, Needs also includes groceries, utilities, insurance, fuel, transport, "
             "debt payments, and health &amp; fitness.</p>")
 
     @staticmethod
@@ -126,7 +126,7 @@ class SpendingDetailsDialog(InfoDialog):
             description = str(row.get("description", "Transaction"))
             account = self._accounts.get(int(row.get("account_id", 0)), "Account")
             contribution = float(row["contribution"])
-            child = QTreeWidgetItem(item, [description, row["date"].strftime("%Y-%m-%d"),
+            child = QTreeWidgetItem(item, [description, fmt_day(row["date"]),
                                           _money(float(row["ledger_amount"])),
                                           _money(contribution)])
             child.setData(0, Qt.ItemDataRole.UserRole, int(row.get("id", 0)))

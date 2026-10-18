@@ -1,0 +1,64 @@
+\chapter{Goals and the location of savings}\label{ch:goals}
+\index{goals}\index{earmarks}\index{unlocated savings}\index{priority ladder}
+\section{Choose what the goal measures}
+Open \ui{Plan > Goals}. A goal can represent savings for a purchase or reserve, a cash-balance milestone, or a net-worth milestone. The choice determines the source of progress.
+
+\begin{tabularx}{\textwidth}{@{}p{0.28\textwidth}Y@{}}
+\toprule Goal type & Meaning of progress\\\midrule
+Savings for a purchase or reserve & Money explicitly set aside for this goal, plus qualifying purchases already recorded toward it.\\
+Cash balance milestone & A priority-based share of household net cash; this is not a separate earmark.\\
+Net worth milestone & A priority-based share of assets less debt, which can include investments and goal savings.\\
+\bottomrule
+\end{tabularx}
+
+Use a savings goal for a baseline that should have its own identifiable funds. A cash milestone can measure a household balance, but does not identify which account contains a protected reserve. Milestones may overlap savings already earmarked for another purpose, so they are shown separately in the funding map.
+
+\section{Create a savings goal}
+Choose \ui{Add goal}, enter a recognizable name and goal amount, and select the progress type. Enter Already saved only for money that has actually been set aside. Creating the goal does not move that money or create an additional asset.
+
+An opening saved amount without a source remains \ui{Account not assigned}. After saving, select the goal and use \ui{Locate savings} to assign all or part of that already-counted amount to an account. Doug does not guess the account. If only part can be located, assign that part and retain the remainder as unassigned.
+
+An emergency-fund helper sizes a proposed savings goal from recorded needs and the selected number of months. Check its amount and priority against your circumstances. The selected month count is a modeling input, not a conclusion that the resulting amount is sufficient for a household.
+
+\section{Read the funding map}
+At the top of Goals, \ui{Where your goal savings live} connects recorded savings with their account sources. Account bars share a dollar scale, so equal lengths represent equal dollar amounts across accounts. Each goal's progress bar instead uses that goal's own target; a full \money{1,000} goal and a full \money{1,500} goal can both have full-width progress bars.
+
+Selecting a savings goal or an account segment highlights its locations and selects it in the priority ladder. Selecting a savings row in the ladder updates the map. Clearing the selection disables actions that require a selected goal. A loan or household milestone remains a ladder target without acquiring a savings-account allocation.
+
+Solid progress represents located savings; patterned progress identifies savings without an assigned account. Recorded purchases contribute to progress but no longer appear as money held in account segments. Read the exact amounts and source names as well as the shapes.
+
+\begin{notebox}{A purpose is not another balance}
+If four accounts each contain \money{1,000}, total holdings are \money{4,000}. A \money{1,000} baseline and a \money{1,500} funded goal describe purposes within those holdings. They are not added to the \money{4,000}. The complete worked allocation in \seeref{sec:example-goals} locates the remaining \money{1,500} in a partially funded goal.
+\end{notebox}
+
+Investment accounts are included at their tracked value. A CD marked as Investment remains an investment in Forecast. The map does not sell it, unlock it, or infer withdrawal availability. If an account's value falls below its recorded earmarks, the shortfall remains visible rather than silently reducing the recorded goal allocations.
+
+\section{Record what actually happened}
+Open \ui{Goal activity} for the selected savings goal. Choose an activity, its account or unassigned location, amount, and date. An optional transaction link supplies evidence for a contribution or purchase; an optional note records context.
+
+\begin{description}
+\item[Set aside money.] Add a new earmark of existing holdings. This increases saved progress but creates no income or transfer.
+\item[Locate existing savings.] Assign part of an already-recorded unlocated amount to an account. Total saved progress is unchanged.
+\item[Spend toward goal.] Reduce savings still held and increase purchases recorded toward the goal. Buying the planned computer therefore need not make the purchase goal appear unfunded again.
+\item[Release savings.] Reduce savings and progress. Use this when drawing on a reserve that should be rebuilt, or making its funds available for a different purpose.
+\end{description}
+
+After activity exists, use these activities rather than directly editing the saved total or changing the goal's kind. This preserves the history that explains its funding. A failed save retains entered fields for correction or retry. If a write succeeded but the view could not refresh, the dialog distinguishes that result from a failed write; reload the records rather than repeating the contribution.
+
+\section{Understand the funding checks}
+A new contribution must fit both household unassigned funding and the selected account's unassigned balance. Household funding includes tracked checking, savings, and investments, after credit-card balances and existing goal claims. It is not a spendable-cash measure. A purchase or release cannot remove more than the selected goal bucket holds.
+
+Linked records must have the appropriate account, sign, date, and remaining personal amount. One deposit can be divided among several goals only within its usable amount. A link does not itself create another bank transaction. Removing an imported transaction retains the activity's reference evidence; deleting an account makes its remaining earmarks unlocated.
+
+\section{Set the monthly priority}
+The priority ladder places loans and goals in one order. Regular loan payments continue as existing obligations. The Monthly allowance supplies additional funding, divided by Focus, Weighted, or Custom. Focus funds the first unfinished target. Weighted gives more to higher-priority unfinished targets. Custom uses relative shares, not fixed dollar commitments.
+
+For a \money{350} allowance, shares of 100 and 100 give the same equal split as 1 and 1: \money{175} for each before target-completion effects. The arrow beside an input shows the calculated extra dollars in the first plan month. All-zero custom shares fall back to the first unfinished target. Existing loan payments remain separate from these extra amounts.
+
+Use Higher and Lower to change priority. Selection is retained by target identity when the ladder is reordered or refreshed. Completion dates and rollover estimates change with the plan; they do not update actual saved progress. Add contributions or purchases only when they occur.
+
+\section{Delete a goal deliberately}
+Delete goal names the selected goal and explains that its activity history is removed. Keep goal is the default and Escape choice. A confirmed deletion and its priority update are saved together; Undo restores the goal, its activity, and priority state. Account balances are separate records, so deleting an earmark is not a transfer of money.
+
+\source{finfore/ui/goals_page.py; finfore/ui/goal_funding_map.py; finfore/ui/goal_funding.py; finfore/goals.py; finfore/funding.py}
+

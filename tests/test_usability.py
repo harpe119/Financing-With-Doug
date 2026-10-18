@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pandas as pd
-from PyQt6.QtCore import QDate, QPoint, QSettings, Qt, QTimer
+from PyQt6.QtCore import QDate, QEvent, QPoint, QSettings, Qt, QTimer
 from PyQt6.QtGui import QFont, QFontDatabase, QValidator
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication, QDialog, QLabel, QPushButton
@@ -26,7 +26,7 @@ from finfore.store import Store
 from finfore.ui import prefs
 from finfore.ui.main_window import MainWindow
 from finfore.ui.widgets import MoneySpinBox
-from finfore.ui import video
+from finfore.ui import manual, video
 
 
 def desktop_test_app():
@@ -253,6 +253,43 @@ class VideoTests(unittest.TestCase):
             self.assertIn(str(video.video_path()), warning.call_args.args[2])
 
 
+class ManualTests(unittest.TestCase):
+    def test_source_manual_is_a_pdf_and_opens_in_the_system_reader(self):
+        path = manual.manual_path()
+        self.assertTrue(path.read_bytes().startswith(b"%PDF-"))
+        with patch.object(manual.QDesktopServices, "openUrl", return_value=True) as opener:
+            self.assertTrue(manual.open_manual())
+            url = opener.call_args.args[0]
+            self.assertTrue(url.isLocalFile())
+            self.assertEqual(Path(url.toLocalFile()), path)
+
+    def test_frozen_installation_opens_its_own_manual_with_spaces_and_unicode(self):
+        with tempfile.TemporaryDirectory() as folder:
+            bundle = Path(folder) / "Doug & family é"
+            expected = bundle / "docs" / "manual" / "financing_with_doug_manual.pdf"
+            expected.parent.mkdir(parents=True)
+            expected.write_bytes(manual.manual_path().read_bytes())
+            with patch.object(sys, "_MEIPASS", str(bundle), create=True), \
+                    patch.object(manual.QDesktopServices, "openUrl", return_value=True) as opener:
+                self.assertTrue(manual.open_manual())
+                self.assertEqual(Path(opener.call_args.args[0].toLocalFile()), expected)
+
+    def test_missing_manual_reports_the_problem_without_opening_a_reader(self):
+        with tempfile.TemporaryDirectory() as folder:
+            with patch.object(sys, "_MEIPASS", folder, create=True), \
+                    patch.object(manual.QDesktopServices, "openUrl") as opener, \
+                    patch.object(manual.QMessageBox, "warning") as warning:
+                self.assertFalse(manual.open_manual())
+                opener.assert_not_called()
+                self.assertIn("missing", warning.call_args.args[2])
+
+    def test_reader_failure_provides_the_file_to_open_directly(self):
+        with patch.object(manual.QDesktopServices, "openUrl", return_value=False), \
+                patch.object(manual.QMessageBox, "warning") as warning:
+            self.assertFalse(manual.open_manual())
+            self.assertIn(str(manual.manual_path()), warning.call_args.args[2])
+
+
 class BackupTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -352,7 +389,12 @@ class WorkflowTests(unittest.TestCase):
 
     def tearDown(self):
         self.win.close()
+        # Finish zero-delay editor/focus callbacks while their widgets and
+        # database are still alive, then dispose of the native window.
+        QTest.qWait(1)
         self.win.store.close()
+        self.win.deleteLater()
+        QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
         self.app.processEvents()
         self.prefs_patch.stop()
         self.hook_patch.stop()
@@ -370,8 +412,16 @@ class WorkflowTests(unittest.TestCase):
             player.reset_mock()
             self.win.show_page("Progress")
             progress = self.win.current_page()
-            progress.video_btn.click()
+            progress.video_action.trigger()
             player.assert_called_once_with(progress, kind="progress")
+
+    def test_help_menu_opens_the_bundled_manual(self):
+        help_menu = next(a.menu() for a in self.win.menuBar().actions()
+                         if a.text().replace("&", "") == "Help")
+        action = next(a for a in help_menu.actions() if a.text() == "User manual (PDF)")
+        with patch.object(manual.QDesktopServices, "openUrl", return_value=True) as opener:
+            action.trigger()
+            self.assertEqual(Path(opener.call_args.args[0].toLocalFile()), manual.manual_path())
 
     def test_spending_help_opens_category_and_transaction_evidence(self):
         from finfore.ui.spending_details import SpendingDetailsDialog
@@ -396,7 +446,7 @@ class WorkflowTests(unittest.TestCase):
             dialog = opened[0]
             self.assertEqual(dialog.tabs.currentIndex(), 0)
             essentials = dialog.tree.topLevelItem(1)
-            self.assertEqual(essentials.text(0), "Necessities")
+            self.assertEqual(essentials.text(0), "Needs")
             self.assertEqual(essentials.text(3), "$1,950.00")
             housing = essentials.child(0)
             self.assertEqual(housing.childCount(), 0)  # load transaction children on demand
@@ -535,7 +585,7 @@ class WorkflowTests(unittest.TestCase):
         self.win.store.add_goal(Goal("Vacation", 2000, "savings"))
         self.win.show_page("Plan")
         page = self.win.current_page()
-        self.assertIn("No complete months", page.source.text())
+        self.assertIn("one complete month of your statements", page.setup.text())
         self.assertEqual(page.verdict.text(), "Monthly plan not ready")
         self.assertEqual(page.table.item(0, 1).text(), "—")
         self.assertFalse(page.save_btn.isEnabled())
@@ -545,7 +595,8 @@ class WorkflowTests(unittest.TestCase):
         page.boxes["income"].setValue(4000)
         page.checks["essential"].setChecked(True)
         page.boxes["essential"].setValue(2000)
-        page.goal_budget.setValue(600)
+        self.win.store.set_setting("plan_surplus", 600)
+        page.refresh()
         self.assertIn("1,400.00", page.verdict.text())
         self.assertIn("Unsaved", page.state.text())
         self.win.show_page("Accounts")
@@ -607,11 +658,17 @@ class WorkflowTests(unittest.TestCase):
 
     def test_sections_and_nested_pages_refresh(self):
         self.assertEqual([self.win.nav.item(i).text() for i in range(self.win.nav.count())],
-                         ["Dashboard", "Accounts", "Transactions", "Bills & payday", "Plan", "Goals", "Forecast"])
-        for name, page_type, parent in (("Spending", "InsightsPage", "Dashboard"),
+                         ["Home", "Accounts", "Bills & payday", "Plan", "Forecast"])
+        for name, page_type, parent in (("Spending", "InsightsPage", "Home"),
                 ("Recurring", "RecurringPage", "Bills & payday"),
                 ("Progress", "ProgressPage", "Forecast"),
-                ("Calendar", "CalendarPage", "Bills & payday")):
+                ("Calendar", "CalendarPage", "Bills & payday"),
+                ("Transactions", "TransactionsPage", "Accounts"),
+                ("Balances", "AccountsPage", "Accounts"),
+                ("Accounts", "AccountsPage", "Accounts"),
+                ("Goals", "GoalsPage", "Plan"),
+                ("Monthly budget", "PlanPage", "Plan"),
+                ("Plan", "PlanPage", "Plan")):
             self.win.show_page(name)
             self.assertEqual(type(self.win.current_page()).__name__, page_type)
             self.assertEqual(self.win.nav.currentItem().text(), parent)
@@ -639,7 +696,7 @@ class WorkflowTests(unittest.TestCase):
                     and legend_top >= chart_bottom):
                 break
         self.assertGreaterEqual(self.fc.chart_split.height(), self.fc.chart_split.minimumHeight())
-        for button in (self.fc.video_btn, self.fc.reset_btn):
+        for button in (self.fc.explain_btn, self.fc.reset_btn):
             self.assertGreaterEqual(button.width(), button.sizeHint().width(), button.text())
         chart_bottom = self.fc.plot_cash.mapTo(self.fc.cash_card, QPoint(0, self.fc.plot_cash.height())).y()
         legend_top = self.fc.cash_legend.mapTo(self.fc.cash_card, QPoint(0, 0)).y()
@@ -671,7 +728,9 @@ class WorkflowTests(unittest.TestCase):
         self.assertTrue(page.forecast_split.isVisibleTo(page))
         self.assertTrue(page.setup_import_btn.isVisibleTo(page))
         self.assertIn("Everyday spending is omitted", page.setup_description.text())
-        self.assertIn("Day-to-day spending is omitted", page.risk.text())
+        # One account and no statements: good news is held back, and the page says why.
+        self.assertEqual(page.risk.text(), "Too early to say where your cash is headed.")
+        self.assertIn("fewer than four weeks of statements", page.risk_detail.text())
 
     def test_forecast_demo_opens_separate_ledger_and_returns_to_empty_setup(self):
         self.win.show_page("Forecast")
@@ -748,6 +807,7 @@ class WorkflowTests(unittest.TestCase):
         load_demo(self.win.store, "balanced")
         self.win.show_page("Forecast")
         page = self.fc
+        page.open_controls()            # in Simple view the controls are a drawer
         self.assertTrue(page.comparison_tip.isVisibleTo(page))
         page.dismiss_tip_btn.click()
         self.assertFalse(page.comparison_tip.isVisibleTo(page))
@@ -795,6 +855,7 @@ class WorkflowTests(unittest.TestCase):
         for warning in page._res.warnings:
             self.assertIn(warning, page.forecast_warning.text())
             self.assertTrue(page.forecast_warning.isVisible())
+        page.open_controls()
         page.event_card.set_expanded(True)
         for width, height in ((980, 620), (1280, 900)):
             self.win.resize(width, height)
@@ -901,9 +962,9 @@ class WorkflowTests(unittest.TestCase):
         legend_bottom = page.cash_legend.mapTo(page.chart_scroll.viewport(),
             QPoint(0, page.cash_legend.height())).y()
         self.assertLessEqual(legend_bottom, page.chart_scroll.viewport().height())
-        for label in (page.data_quality.status, page.data_quality.detail):
-            self.assertGreaterEqual(label.height(), label.heightForWidth(label.width()))
-            self.assertLessEqual(label.y() + label.height(), page.data_quality.height())
+        label = page.data_quality.status
+        self.assertGreaterEqual(label.height(), label.heightForWidth(label.width()))
+        self.assertLessEqual(label.y() + label.height(), page.data_quality.height())
         page.view_pick.setCurrentIndex(page.view_pick.findData("analysis"))
         page._set_analysis("backtest")
         self.win.resize(980, 620)
@@ -997,7 +1058,10 @@ class WorkflowTests(unittest.TestCase):
         page.overlay.setChecked(True)
         page._reset_scenario()
         page.run()
-        self.assertTrue(page.cash_compare.isHidden())
+        # Resetting temporary controls keeps the saved funding mode, whose
+        # effect is still compared with existing habits without that plan.
+        self.assertTrue(page.cash_compare.isVisible())
+        self.assertIn('without the plan', page.cash_compare.text())
         page.follow_goals.setChecked(False)
         page.snowball.setChecked(False)
         page.run()
@@ -1209,6 +1273,7 @@ class WorkflowTests(unittest.TestCase):
         eid = store.add_event(e)
         self.win.show_page("Forecast")
         page = self.fc
+        page.open_controls()
         self.win.resize(980, 620)
         page.forecast_split.setSizes([240,900])
         page._edit_event(eid, store, e)
@@ -1432,6 +1497,7 @@ class WorkflowTests(unittest.TestCase):
         self.win.store.add_event(OneOffEvent(name, date.today() + timedelta(days=10), -999999.99))
         self.win.show_page("Forecast")
         page = self.fc
+        page.open_controls()
         page.event_card.set_expanded(True)
         from PyQt6.QtWidgets import QSplitter, QScrollArea
         outer = next(s for s in page.findChildren(QSplitter)
@@ -1452,15 +1518,18 @@ class WorkflowTests(unittest.TestCase):
         control_scroll = next(s for s in page.findChildren(QScrollArea) if s is not page.chart_scroll)
         self.assertEqual(control_scroll.horizontalScrollBar().maximum(), 0)
 
-    def test_forecast_extreme_comparison_stays_inside_chart_bounds(self):
+    def test_forecast_update_preserves_axes_and_reset_fits_extreme_comparison(self):
         from finfore.demo import load_demo
         load_demo(self.win.store, "balanced")
         self.win.show_page("Forecast")
         page = self.fc
+        before = [plot.viewRange() for plot in (page.plot_cash, page.plot_nw)]
         page.extra_invest.setValue(1_000_000)
         page.run()
         self.assertIsNotNone(page._res)
+        self.assertEqual([plot.viewRange() for plot in (page.plot_cash, page.plot_nw)], before)
         for plot, registry in ((page.plot_cash, page.cash_series), (page.plot_nw, page.nw_series)):
+            plot.reset_axes_btn.click()
             line = registry._groups["baseline"][0]
             low, high = plot.viewRange()[1]
             self.assertGreaterEqual(float(line.yData.min()), low)
@@ -1516,7 +1585,7 @@ class WorkflowTests(unittest.TestCase):
                 self.assertLessEqual(start + control.width(), content.width())
                 self.assertGreaterEqual(control.height(), control.sizeHint().height())
         button = next(b for b in self.fc.history_card.findChildren(QPushButton)
-                      if b.text() == "Review recurring patterns")
+                      if b.text() == "Review detected bills and pay")
         button.click()
         self.assertEqual(type(self.win.current_page()).__name__, "RecurringPage")
 
@@ -1802,7 +1871,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertTrue(add_btn.isVisible())
         self.assertFalse(import_btn.isVisible())
         self.assertFalse(dash.stats_w.isVisible())
-        self.assertFalse(dash.split.isVisible())
+        self.assertFalse(dash.hist_card.isVisible())
         self.add_account()
         dash.refresh()
         self.assertTrue(dash.welcome.isVisible())
@@ -1811,14 +1880,14 @@ class WorkflowTests(unittest.TestCase):
         # Exactly one primary action at each stage.
         self.assertEqual(import_btn.objectName(), "primary")
         self.assertTrue(dash.stats_w.isVisible())
-        self.assertFalse(dash.split.isVisible(), "a flat one-point history is not a chart")
+        self.assertFalse(dash.hist_card.isVisible(), "a flat one-point history is not a chart")
         self.win.store.add_transactions(pd.DataFrame([{
             "account_id": 1, "date": date.today(), "description": "Income",
             "amount": 100, "category": "Income", "import_hash": "setup",
         }]))
         dash.refresh()
         self.assertFalse(dash.welcome.isVisible())
-        self.assertTrue(dash.split.isVisible())
+        self.assertTrue(dash.hist_card.isVisible())
 
     def test_empty_dashboard_shows_no_fake_zeroes(self):
         dash = self.win.pages[0]
@@ -1856,12 +1925,16 @@ class WorkflowTests(unittest.TestCase):
         self.assertAlmostEqual(span(), 90, delta=2)
         self.assertIn("last 3 months", dash.hist_note.text())
         # A category bar leads to that category's transactions.
-        name = dash._cats.index[1]
-        dash._open_category(name)
+        # The category chart now lives, folded, on the Spending tab.
+        self.win.show_page("Spending")
+        spending = self.win.current_page()
+        spending.refresh()
+        name = spending.charts._cats.index[1]
+        spending.charts._open_category(name)
         self.assertEqual(self.win.current_page().f_category.currentData(), name)
         self.assertEqual(self.win.current_page().f_since.currentData(), 90)
 
-    def test_net_worth_chart_can_take_the_page_and_refits_to_visible_layers(self):
+    def test_net_worth_chart_preserves_axes_until_reset_and_can_expand(self):
         from finfore.demo import load_demo
         load_demo(self.win.store, "balanced")
         self.win.show()
@@ -1871,15 +1944,20 @@ class WorkflowTests(unittest.TestCase):
         vb = dash.plot_hist.getViewBox()
         y_span = lambda: vb.viewRange()[1][1] - vb.viewRange()[1][0]
         full = y_span()
-        # Hiding the debt line and the reference floors stretches the axis
-        # onto the lines that are left.
+        before = vb.viewRange()
+        # Layer changes retain both axes; reset fits the remaining layers.
         for key in ("debt", "zero", "starter", "emergency"):
             if key in dash.hist_legend.actions:
                 dash.hist_legend.actions[key].setChecked(False)
+        self.assertEqual(vb.viewRange(), before)
+        dash.plot_hist.reset_axes_btn.click()
         self.assertLess(y_span(), full * 0.6)
+        before = vb.viewRange()
         for key in ("debt", "zero", "starter", "emergency"):
             if key in dash.hist_legend.actions:
                 dash.hist_legend.actions[key].setChecked(True)
+        self.assertEqual(vb.viewRange(), before)
+        dash.plot_hist.reset_axes_btn.click()
         self.assertAlmostEqual(y_span(), full, delta=full * 0.01)
         # Expanding hands the chart the whole page; restoring puts it back.
         small = dash.plot_hist.height()
@@ -1888,7 +1966,6 @@ class WorkflowTests(unittest.TestCase):
         self.assertTrue(dash._expanded)
         self.assertFalse(dash.verdict_band.isVisible())
         self.assertFalse(dash.stats_w.isVisible())
-        self.assertFalse(dash.split.widget(1).isVisible())
         self.assertGreater(dash.plot_hist.height(), small + 32)
         dash.refresh()                      # a tab switch must not undo it
         self.assertFalse(dash.stats_w.isVisible())
@@ -1897,7 +1974,6 @@ class WorkflowTests(unittest.TestCase):
         self.assertFalse(dash._expanded)
         self.assertTrue(dash.verdict_band.isVisible())
         self.assertTrue(dash.stats_w.isVisible())
-        self.assertTrue(dash.split.widget(1).isVisible())
         self.assertEqual(dash.expand_btn.text(), "Expand")
 
     # ---- Accounts page ---------------------------------------------------
@@ -2150,7 +2226,7 @@ class WorkflowTests(unittest.TestCase):
         QTest.qWait(50)
         self.assertFalse(dash._stats_narrow)
 
-    def test_dashboard_history_leads_and_keeps_its_height_with_secondary_charts_open(self):
+    def test_home_leads_with_the_verdict_and_keeps_a_readable_chart_below_the_figures(self):
         from finfore.demo import load_demo
         load_demo(self.win.store, "balanced")
         self.win.show_page("Dashboard")
@@ -2159,23 +2235,12 @@ class WorkflowTests(unittest.TestCase):
         for width, height in ((1280,900),(980,620)):
             self.win.resize(width,height)
             QTest.qWait(60)
-            self.assertFalse(dash.flow_card.expanded)
-            self.assertFalse(dash.cat_card.expanded)
-            self.assertGreaterEqual(dash.plot_hist.height(),320)
-            self.assertLess(dash.hist_card.mapTo(dash.body,QPoint(0,0)).y(),
-                            dash.stats_w.mapTo(dash.body,QPoint(0,0)).y())
-            self.assertLess(dash.hist_card.mapTo(dash.body,QPoint(0,0)).y(),
-                            dash.verdict_band.mapTo(dash.body,QPoint(0,0)).y())
+            self.assertGreaterEqual(dash.plot_hist.height(),280)
+            self.assertLessEqual(dash.plot_hist.minimumHeight(),320)
+            top = lambda w: w.mapTo(dash.body,QPoint(0,0)).y()
+            self.assertLess(top(dash.verdict_band), top(dash.stats_w))
+            self.assertLess(top(dash.stats_w), top(dash.hist_card))
             self.assertEqual(dash.scroll.horizontalScrollBar().maximum(),0)
-            dash.flow_card.set_expanded(True)
-            dash.cat_card.set_expanded(True)
-            dash._sync_split()
-            QTest.qWait(40)
-            self.assertGreaterEqual(dash.plot_hist.height(),320)
-            self.assertTrue(dash.plot_flow.isVisibleTo(dash))
-            dash.flow_card.set_expanded(False)
-            dash.cat_card.set_expanded(False)
-            dash._sync_split()
 
     def test_dashboard_warning_stays_visible_with_details_available_on_demand(self):
         from finfore.history import LedgerIssue
@@ -2221,7 +2286,13 @@ class WorkflowTests(unittest.TestCase):
     def test_sliders_debounce_and_reset_is_available_in_simple_view(self):
         self.add_account()
         self.win.show_page("Forecast")
+        # Simple view opens on the answer: the controls are one click away, and the
+        # button that re-runs what already updates by itself is not offered.
+        self.assertFalse(self.fc.control_scroll.isVisibleTo(self.fc))
+        self.assertTrue(self.fc.try_btn.isVisible())
+        self.fc.try_btn.click()
         self.assertTrue(self.fc.reset_btn.isVisible())
+        self.assertFalse(self.fc.run_btn.isVisibleTo(self.fc))
         self.assertFalse(self.fc.debt_card.isVisible())
         calls = []
         self.fc._update_timer.timeout.disconnect()
@@ -2642,11 +2713,12 @@ class WorkflowTests(unittest.TestCase):
             self.assertEqual(cash_import.call_args.kwargs["account_id"], 1)
         self.win.show_page("Forecast")
         self.fc.manage_goals_btn.click()
-        self.assertEqual(self.win.nav.currentItem().text(), "Goals")
+        self.assertEqual(self.win.nav.currentItem().text(), "Plan")
+        self.assertEqual(type(self.win.current_page()).__name__, "GoalsPage")
         file_menu = self.win.menuBar().actions()[0].menu()
         self.assertTrue(any(a.text() == "Back up data…" for a in file_menu.actions()))
         self.assertFalse(any("Import balance history" in a.text() for a in file_menu.actions()))
-        self.assertEqual(self.fc.e_when.displayFormat(), "d MMM yyyy")
+        self.assertEqual(self.fc.e_when.displayFormat(), "MMM d, yyyy")
         self.assertGreater(self.fc.e_when.minimumDate(), QDate.currentDate())
 
     def test_layer_choices_survive_forecast_updates(self):
@@ -2662,10 +2734,12 @@ class WorkflowTests(unittest.TestCase):
 
     def test_goal_controls_remain_usable_at_minimum_window_size(self):
         self.add_account()
+        self.win.store.add_goal(Goal("Vacation", 2000, "savings"))
         self.win.resize(980, 620)
         self.win.show_page("Goals")
         self.app.processEvents()
         goals = self.win.current_page()
+        self.assertTrue(goals.ladder.isVisible())
         self.assertGreaterEqual(goals.table.height(), 100)
         self.assertGreaterEqual(goals.by_date.height(), goals.by_date.sizeHint().height())
         for button in goals.findChildren(QPushButton):
@@ -2685,7 +2759,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(dlg.values(), ("Vacation", 2000, "savings", 500))
         dlg.saved.setValue(2001)
         dlg._ok()
-        self.assertIn("exceeds", dlg.error.text())
+        self.assertIn("more than the goal amount", dlg.error.text())
         legacy = GoalDialog(self.win, Goal("Cash milestone", 5000, "cash"))
         self.assertEqual(legacy.kind.currentData(), "cash")
         self.assertTrue(legacy.saved.isHidden())
@@ -2708,7 +2782,52 @@ class WorkflowTests(unittest.TestCase):
         page._split_boxes[f"goal:{store.goals()[0].id}"].setValue(100)
         self.assertNotEqual(page.table.item(0, 6).text(), first_eta)
         self.assertIn("$300/mo existing + $0.00/mo extra", page.payment_note.text())
-        self.assertEqual(page.table.horizontalHeaderItem(5).text(), "Extra /mo")
+        self.assertEqual(page.table.horizontalHeaderItem(5).text(), "Share → Extra /mo")
+
+    def test_custom_goal_shares_display_the_calculated_monthly_dollars(self):
+        store = self.win.store
+        first = store.add_goal(Goal("House", 10000, "savings"))
+        second = store.add_goal(Goal("Car", 10000, "savings"))
+        store.set_plan_order([f"goal:{first}", f"goal:{second}"])
+        store.set_setting("plan_surplus", 350)
+        self.win.show_page("Goals")
+        page = self.win.current_page()
+        page.policy.setCurrentIndex(page.policy.findData("custom"))
+        for box in page._split_boxes.values():
+            self.assertEqual(box.prefix(), "")
+            box.setValue(100)
+        for key in (f"goal:{first}", f"goal:{second}"):
+            self.assertEqual(page._plan.by_key(key).monthly, 175)
+            self.assertIn("$175.00", page._split_amounts[key].text())
+            self.assertEqual(store.plan_allocations()[key], 100)
+        # Changing a share must update the visible dollar result without
+        # replacing the input the user is editing.
+        editor = page._split_boxes[f"goal:{first}"]
+        editor.setValue(0)
+        self.assertIs(page._split_boxes[f"goal:{first}"], editor)
+        self.assertIn("$0.00", page._split_amounts[f"goal:{first}"].text())
+        self.assertIn("$350.00", page._split_amounts[f"goal:{second}"].text())
+        page.surplus.setValue(400)
+        self.assertIn("$400.00", page._split_amounts[f"goal:{second}"].text())
+
+    def test_goal_planner_distinguishes_no_targets_from_all_targets_complete(self):
+        self.win.show_page("Goals")
+        page = self.win.current_page()
+        self.assertIn("No goals or loans yet", page.faster.text())
+        self.assertFalse(page.by_date.isEnabled())
+        self.assertFalse(page.edit_btn.isEnabled())
+        self.assertFalse(page.delete_btn.isEnabled())
+        gid = self.win.store.add_goal(Goal("Completed reserve", 100, "savings", saved_amount=100))
+        page.refresh()
+        self.assertIn("already met", page.faster.text())
+        self.assertIn("already complete", page.cascade.text())
+        self.assertTrue(page.edit_btn.isEnabled())
+        self.assertTrue(page.delete_btn.isEnabled())
+        self.assertFalse(page.by_date.isEnabled())
+        self.assertIn("Completed reserve", page.selection_note.text())
+        page.funding_map.select_goal(gid)
+        self.assertIn("Completed reserve", page.funding_map.selection_note.text())
+        self.assertIn("Completed reserve", page.edit_btn.accessibleName())
 
     def test_forecast_directs_purchase_goals_to_the_plan_without_wrong_balance_eta(self):
         self.add_account()

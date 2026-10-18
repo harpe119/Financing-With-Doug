@@ -1,0 +1,58 @@
+\chapter{Accounts and balance reconciliation}\label{ch:accounts}
+\index{accounts}\index{balance anchor}\index{reconciliation}
+\section{Choose the account type}
+Open \ui{Accounts > Balances} and choose \ui{Add account}. Enter a recognizable name, its type, a balance, and the observation date. Account type determines how records are interpreted; it is more than a display label.
+
+\begin{tabularx}{\textwidth}{@{}lYY@{}}
+\toprule Type & Enter & Review\\\midrule
+Checking or savings & Posted closing balance and date & Ledger completeness; whether negative closes are permitted.\\
+Credit card & Amount owed, normally positive in the form & Posting dates, payment transfers, and the bank's sign convention.\\
+Loan & Amount owed, APR, regular payment, payment day & Current terms and linked payment patterns.\\
+Investment & Account value and date; return, volatility, contribution assumptions & Valuation history and whether assumptions suit the holding.\\
+\bottomrule
+\end{tabularx}
+
+A money market account entered as Savings follows the cash-ledger treatment. A CD entered as Investment follows the investment-value treatment. Its balance can be located within a goal, but Doug does not infer its maturity date, withdrawal penalty, or whether additional contributions are allowed. Review those restrictions outside the model before interpreting the holding as available money.
+
+\section{Use an observation you can verify}
+For a cash ledger, enter the posted balance at the end of the selected date. An available balance may already reflect pending holds and can therefore disagree with a ledger containing only posted transactions. If today's posting is unfinished, use the most recent completed date and its closing balance instead.
+
+The observation anchors reconstruction: Doug moves backward or forward through the ledger around that amount. An incorrect observation date shifts which flows are included at the anchor. Entering a new balance changes the reference; it does not create an explanatory transaction for a discrepancy.
+
+For checking and savings that cannot go below zero, leave \ui{Allow this account to go below \$0} unchecked. A flagged negative reconstructed daily close then identifies a balance or ledger segment to examine. It does not establish that the bank charged an overdraft fee.
+
+\section{Update transactions and balances separately}
+\ui{Update from CSV} imports additional records using the account's saved mapping. Overlap with a previous export is expected and is checked for duplicates. \ui{Update balance} records a newer observed balance. Importing transactions does not require replacing a correct anchor with an amount guessed from the export.
+
+Loan and investment accounts accept dated balance histories, or supported activity exports integrated around an anchor. The activity route reconstructs principal changes; it cannot invent interest or valuation changes that are absent from the records. Use actual balance observations when available. Between observations the history uses interpolation, which should not be interpreted as an observed market price on every intervening day.
+
+\section{Investigate a difference}\label{sec:reconcile}
+A reconciliation begins with a statement interval whose opening and closing balances are known. For posted amounts, the check is
+\begin{equation}
+ B_{\mathrm{close}}=B_{\mathrm{open}}+\sum\text{deposits}-\sum\text{withdrawals}.
+\end{equation}
+Include fees, interest, transfers, refunds, and business expenses that moved the account. Their exclusion from a spending score does not exclude them from the bank ledger.
+
+\begin{enumerate}
+\item Confirm the account, balance date, and posted closing figure. Compare dates as well as amounts.
+\item Open Transactions for that account. Enable the running account-balance column when needed.
+\item Remove display filters that hide relevant records, while remembering that the balance calculation itself uses the full ledger.
+\item Compare the interval's opening balance, net posted flow, and closing balance with the statement.
+\item Inspect the earliest date where the difference appears. Check missing rows, repeated imports, reversed signs, posting-date migrations, and duplicated transfers.
+\item Use the balance-check and duplicate-review tools to examine candidate discrepancies. Review proposed removals before confirming them.
+\end{enumerate}
+
+An unexplained difference should remain unexplained until its source is found. Adding a balancing transaction merely to make a chart agree conceals whether the original issue was an omitted fee, an incorrect anchor, or a duplicate posting.
+
+\section{Read running balances carefully}
+The balance shown after a transaction is reconstructed from the complete ledger. Search, category, time-period filters, and paging do not redefine that history. A filtered list can therefore jump between displayed balances because intermediate transactions are hidden.
+
+Entries on the same date can have an unknown bank posting order. A balance marked \textbf{approximately} or with \(\approx\) reflects an ordering qualification. An intermediate negative row does not establish a negative closing balance for that day. Use the daily-close check and the statement when investigating an actual overdraft.
+
+Pending or unposted CSV entries are retained separately from the posted ledger. A missing pending item in Doug is not evidence that it is safe to spend the corresponding money. The application has no live connection through which to discover a hold omitted from an export.
+
+\section{Edit or remove an account}
+Review the selected account's name and type before editing it. An account deletion affects its associated records and can remove evidence used by historical calculations. Goal savings previously located in a deleted account become unlocated rather than being assigned to another account automatically. Make a backup before a large restructuring, and use Undo promptly if a deletion was unintended.
+
+\source{finfore/ui/accounts.py; finfore/ui/account_dialog.py; finfore/history.py; finfore/store.py; tests/test_posted_ledger.py}
+

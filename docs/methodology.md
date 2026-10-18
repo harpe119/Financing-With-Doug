@@ -74,7 +74,7 @@ linearly in time through balance snapshots. Net worth is
 $N(t) = C(t) + \sum_i V_i(t) - \sum_j L_j(t)$ for cash $C$, investments $V$,
 and debts $L$.
 
-Accounts totals, Dashboard cards, the header, Goals milestones and new
+Accounts totals, Home cards, the header, Goals milestones and new
 checkpoints use these balances calculated through today. Forecast starts cash,
 loans and investments from the same current values. The stored dated balance
 remains an observation, rather than being overwritten after an import. An
@@ -181,7 +181,7 @@ distinguishable from the rest, they are drawn by **recency** instead — the sam
 3-month half-life the habits score uses — so someone who halved their spending
 five months ago is projected as who they are now rather than as the average of
 who they were and who they are. Before this, that person was forecast into a
-deficit at 99% shortfall risk while the Insights page, reading the same ledger,
+deficit at 99% shortfall risk while the Spending tab (then the Insights page), reading the same ledger,
 correctly reported a surplus.
 
 The bar for "changed" is deliberately high: a large effect (Cohen's
@@ -217,7 +217,7 @@ gets a date and an amount, because a fortnight of bounced payments matters even
 when the year after it is excellent. The wording lives in the engine rather than
 the page, because the wording *is* the finding.
 
-**The goal ladder.** The Goals page puts loans and savings goals in one ordered
+**The goal ladder.** The Goals tab puts loans and savings goals in one ordered
 list and runs a debt snowball past the end of the debts. Required loan payments
 flow regardless of position — they are already-committed spending, and a small
 loan can retire before a large top-priority goal. Everything *spare* (income
@@ -234,9 +234,9 @@ The account payment is the fallback when no such schedule exists. Missing or
 interest-only payments are reported explicitly.
 
 Savings goals record their own user-entered `saved_amount`, independent of
-priority and total checking balances. These amounts earmark existing cash;
-they do not create an asset or trigger transfers. The page warns when recorded
-savings exceed current net cash. Users update actual progress themselves;
+priority and total checking balances. These amounts earmark existing holdings;
+they do not create an asset or trigger transfers or sales. The page warns when recorded
+savings exceed current funding balances. Users update actual progress themselves;
 projected contributions do not silently become actual savings. Goal activity
 records contributions, account assignments, purchases and releases. Purchase
 activity reduces `saved_amount` and increases `spent_amount`; progress equals
@@ -245,7 +245,7 @@ reserves to be rebuilt. Existing saved totals remain unlocated opening savings.
 Once activity exists, direct edits to the saved total or goal kind are refused.
 
 Earmarks are conserved globally and by source account. New contributions cannot
-exceed current reconstructed checking/savings balances, net of credit balances
+exceed current reconstructed checking, savings and investment balances, net of credit balances
 and existing goal savings. Account-specific claims are also subtracted before
 accepting a contribution or assignment. Purchases and releases cannot overdraw
 the goal's selected funding bucket. This does not move money or create ledger
@@ -255,12 +255,28 @@ Transaction hashes retain allocation evidence after row deletion. Account
 deletion makes its remaining earmarks unlocated. Undo restores the complete
 activity and goal state together.
 
+The Goals funding map uses the same reconstructed account balances and
+recorded activity buckets. Account segments represent located savings only;
+unlocated savings are shown explicitly in each goal and deducted from the
+household unassigned total without being placed in an account. Account bars
+share a dollar scale. Goal bars use individual targets and distinguish located
+savings, unlocated savings and purchases. Purchases contribute to progress but
+not to account segments. Cash and net worth milestones appear separately and
+make no additional earmark claims. A falling investment value or account balance
+can leave recorded earmarks larger than the holding; the map reports the
+difference without rewriting the recorded allocation. Investment earmarks
+retain their investment classification in Forecast. Neither maturity nor
+withdrawal availability is inferred from an investment balance.
+
 The monthly spending plan uses the same complete-month weighted evidence as
 spending analytics. Recorded debt payments are carved out of the floored
 essentials total. The detected debt line is the larger of this amount and
 current regular loan payments, rather than their sum. Investment contributions
 use Accounts settings; additional irregular reserves default to zero. Each
-line can be overridden. Remaining monthly money is income minus spending,
+line can be overridden. Individual essentials and wants categories can also be
+overridden; their signed, weighted contributions are replaced before flooring
+the group total at zero. A group override takes precedence. Category rows are
+components of those totals, not additional expenses. Remaining monthly money is income minus spending,
 reserves, investing and the goal/extra-debt allowance. Negative results remain
 visible. The allowance shares `plan_surplus` with Goals; the detected spare
 amount uses the saved plan when one exists. Saving a plan is one atomic,
@@ -268,20 +284,46 @@ undoable action. Its income and spending overrides do not change forecast
 sliders or schedule bank transfers. Historical purchases covered by a reserve may require a spending
 override; Doug does not automatically remove those transactions from analytics.
 
-With **Use Goals funding plan** selected, Forecast reuses the Goals planner's
+With **Use Goals funding plan** selected, Forecast applies the saved monthly
+budget as well as the Goals ladder. For each spending group, its planned total
+is distributed using the plan's category mix, falling back to the forecast's
+mix when complete-month evidence is absent. Group refunds remain reflected in
+the total. Recurring and sampled-week amounts for each category are scaled by
+planned monthly spending divided by their combined monthly reference; income
+is scaled in the same way. Existing dates and cross-category weekly samples
+are retained. With no positive reference, the amount becomes a uniform daily
+flow using 30.44 days/month. This supplies a planning assumption without
+inventing a bill date or historical variability. Scenario multipliers apply on
+top. Investment contributions follow the saved budget across existing investment
+accounts, in proportion to their configured contributions (the first account
+receives them if all configured contributions are zero). No investment account
+means those contributions are omitted with a warning. Reserves and savings
+earmarks retain their underlying holdings; future purchases require explicit events or recorded
+spending. The model assumes the budget is followed; it does not establish that
+the household can sustain those changes.
+
+Forecast reuses the Goals planner's
 monthly loan payment amounts, including regular payments, allocated extras,
 priority changes and payments freed after payoff. It uses the saved allowance
 when present and detected spare money otherwise. Required loan amounts retain
 the forecast's selected recurring-history inputs; linked payments are summed
-at their monthly cadence without adding the Accounts fallback again.
+at their monthly cadence without adding the Accounts fallback again. A saved
+regular-debt budget above these obligations adds payments in proportion to the
+existing commitments, or balances if no commitments exist. Both Goals and
+Forecast use that allocation. A lower budget never reduces existing loan
+obligations; the shortfall remains visible on Plan and is flagged in Forecast.
 Each loan's monthly cycles are placed on its next future payment date, then
 the same day in subsequent months. The monthly Goals chart is an allocation
 estimate; Forecast supplies the dated cash/debt steps. Each payment reduces cash
-and the loan balance once, with interest included. Goal savings remain cash,
+and the loan balance once, with interest included. Goal earmarks retain their holdings,
 and completion does not invent a future purchase. Separate extra-loan and
 rollover controls are disabled while the Goals plan supplies those decisions.
-Other scenario controls still apply. The unchanged-controls overlay uses the
-same Goals mode. Dashboard outlooks, reports and new checkpoints use the saved
+When this mode is enabled, the cash-dip explanation uses the same dated flows
+as the forecast engine, including planned bill amounts, loan extras and
+investment contributions. Smooth daily budget assumptions are not presented
+as individually scheduled bills.
+Other scenario controls still apply. The unchanged-controls overlay disables
+the saved budget and Goals funding for comparison. Home outlooks, reports and new checkpoints use the saved
 mode too; historical backtests never use today's funding choices.
 
 Legacy cash goals draw from
@@ -302,7 +344,7 @@ are excluded. Recorded loan payments are already part of spending; the
 calculation does not establish that every planned payment was imported.
 The page shows the weighted income, spending and resulting surplus. Automatic
 detection stays automatic after refreshes and imports. Only editing the amount
-creates a manual override; Use detected clears that override even when the
+creates a manual override; Use Plan / history clears that override even when the
 spinner's value stays the same. Existing saved amounts are treated as manual
 because older versions did not distinguish intentional overrides from values
 that were accidentally saved during refresh.
@@ -388,7 +430,7 @@ indistinguishable from a real one once stored, and a projection built knowing
 how it turned out would make this page report the model as far better than it
 is.
 
-The Progress page then draws an old fan against what actually happened, and
+The Track record tab then draws an old fan against what actually happened, and
 reports the share of days that landed inside the 80% and 50% bands. Those are
 the numbers to read: a well-calibrated forecast should sit near 80% and 50%.
 Much higher means it was too timid; much lower means it was overconfident. Cash
@@ -407,7 +449,7 @@ its fixed monthly timing would violate the independence the test needs.
 Beside the p-value sits a bootstrap 95% interval on the dollar difference,
 because that is the number that answers the question — a p-value says only
 "distinguishable from noise", the interval says how much and how sure. Neither
-is on the page: Forecast's Projection and Progress tabs and Dashboard's Spending
+is on the page: Forecast's Projection and Track record tabs and Home's Spending
 tab each carry a **How
 this works** button (`widgets.InfoDialog`, built at click time from the results
 currently on screen), and everything quantitative lives behind it. The page
@@ -448,7 +490,10 @@ scenario, not sampling noise.
 **Spending insights.** Every category is sorted by a taxonomy (in
 `insights.py`, kept as a plain editable mapping) into *essential*,
 *discretionary*, or *incidental*; income and internal transfers are excluded
-from spending. Monthly figures average the last three **complete** calendar
+from spending. In the app these groups read as **Needs** (essential) and
+**Wants** (frivolous, discretionary), beside **Giving** and **Uncategorized**;
+the plain names are used on every screen and the technical ones only in this
+document and the code. Monthly figures average the last three **complete** calendar
 months (the current partial month is dropped). Let $I$ be average monthly
 income, $S$ total spending, $D$ discretionary spending, and define the
 savings rate $r=(I-S)/I$ and discretionary burden $b=D/I$.
@@ -521,7 +566,7 @@ large purchase silently stopped counting.
 
 Both numbers matter and quoting either alone misleads: the lookback is 24
 months, but the decay means **the last 3 months are about 50% of the score**,
-the last 6 about 75%, and everything beyond a year about 6%. The Insights page
+the last 6 about 75%, and everything beyond a year about 6%. The Spending tab
 states this in a line generated from the constants, so the description cannot
 drift from the arithmetic.
 
@@ -739,7 +784,7 @@ not a fabricated adjustment or an automatic transaction deletion. Negative
 values are never clipped to zero. Acknowledgements include the minimum balance
 and observation gaps so a changed interior dip reopens a dismissed warning.
 
-Separate Dashboard account lines reuse the cash and snapshot history routines.
+Separate Home account lines reuse the cash and snapshot history routines.
 Loans are negative amounts owed and credit cards keep their signed balance.
 The chart's account selection changes neither household totals nor forecast
 inputs. Investment and loan values between dated snapshots remain interpolated,

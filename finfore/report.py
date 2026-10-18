@@ -33,7 +33,7 @@ from .alerts import BillChange, bill_changes
 from .history import headline_stats
 from .insights import bucket_of, monthly_aggregates, spending_score
 from .store import Store
-from .util import add_months, fmt_money
+from .util import add_months, fmt_money, fmt_day
 
 
 @dataclass
@@ -245,7 +245,7 @@ def render_html(rep: MonthReport) -> str:
         f"<style>{_CSS}</style></head><body><div class='wrap'>",
         f"<h1>{_e(rep.label)}</h1>",
         f"<p class='sub'>A month in review · prepared "
-        f"{rep.generated.strftime('%d %B %Y')} from your own records</p>",
+        f"{fmt_day(rep.generated)} from your own records</p>",
 
         "<h2>Where you stand today</h2><div class='grid'>",
         _tile("Net worth", fmt_money(rep.networth),
