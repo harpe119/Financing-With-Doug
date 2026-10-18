@@ -411,6 +411,13 @@ be split between goals only within its available amount; business reimbursements
 are excluded. Removing an imported row retains the activity and its transaction
 reference. Goal activity and saved plans support Undo/Redo.
 
+The line under **Activity** says what the chosen activity does. To remove an
+entry recorded by mistake, select it in the list and choose **Delete
+activity…**. Its effect on the goal is undone as if it had never been recorded.
+Doug refuses when later activity depends on it, such as a purchase made from the
+money a contribution set aside; delete the later entry first. Releasing savings
+is different: it records that money left the goal, and keeps the history.
+
 New contributions must fit both unassigned funding balances after credit-card
 balances and the selected account's unassigned balance. Investment values are
 included in this funding check; that total is not a measure of spendable cash.

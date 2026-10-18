@@ -28,6 +28,10 @@
   "Oct 20, 2026". Spending is grouped as Needs, Wants and Giving everywhere. The
   Monthly cash flow chart no longer slides up and down when you drag it. The Tab
   key no longer gets stuck on a chart or a hidden tab bar.
+- **Fix a goal entry made by mistake.** In Goal activity, select an entry and
+  choose **Delete activity…** to remove it as if it was never recorded. Each kind
+  of activity (Set aside money, Locate existing savings, Spend toward goal,
+  Release savings) now says in one sentence what it does.
 - **A user manual.** **Help → User manual (PDF)** opens the complete manual,
   with worked examples, in your PDF reader. The Track record video is shorter
   and plainer.

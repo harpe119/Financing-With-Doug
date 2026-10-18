@@ -13,6 +13,14 @@ onboard, harden, polish, extract, colorize), each checked at the window's
 smallest size, and from this release in both themes. The full suite is 633
 tests; `tests/test_core.py` passes.
 
+- Delete a goal activity entry. Goal activity has **Delete activity…** for the
+  selected entry (confirmed, undoable). `funding.delete_activity` reverses the
+  entry's effect on Still saved and Purchases and refuses when later activity
+  depends on it (any account location, the unlocated remainder, saved or spent
+  would go below zero). Each activity is now explained in one sentence under its
+  name (and as its tooltip) from `funding.ACTION_HELP`, instead of a paragraph
+  further down, and the dialog writes dates the app's way. Tests in
+  `tests/test_goal_activity_delete.py`.
 - Add the user manual. **Help → User manual (PDF)** opens
   `docs/manual/financing_with_doug_manual.pdf` (revision 1.9, 71 pages: setup,
   task chapters, worked examples, the calculation methods, troubleshooting and

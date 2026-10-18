@@ -6,12 +6,13 @@ import sqlite3
 
 from PyQt6.QtCore import QDate, Qt
 from PyQt6.QtWidgets import (QComboBox, QDateEdit, QDialog, QDialogButtonBox,
-    QFormLayout, QFrame, QHeaderView, QLineEdit, QScrollArea, QTableWidget,
-    QTableWidgetItem, QVBoxLayout, QWidget)
+    QFormLayout, QFrame, QHBoxLayout, QHeaderView, QLineEdit, QPushButton, QScrollArea,
+    QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
 from ..categorize import BUSINESS_CATEGORY
-from ..funding import ACTIONS, FUNDING_TYPES, funding_capacity, goal_buckets
+from ..funding import ACTION_HELP, ACTIONS, FUNDING_TYPES, funding_capacity, goal_buckets
 from ..models import AccountType
+from ..util import fmt_day
 from . import theme
 from .account_dialog import _money_spin
 from .widgets import WrappingLabel
@@ -48,6 +49,13 @@ class GoalFundingDialog(QDialog):
         self.action = QComboBox()
         for key, label in ACTIONS.items():
             self.action.addItem(label, key)
+            self.action.setItemData(self.action.count() - 1, ACTION_HELP[key],
+                                    Qt.ItemDataRole.ToolTipRole)
+        # What the chosen activity does, in one sentence, right under its name:
+        # the four read alike, and the difference used to be in a paragraph below.
+        self.action_help = WrappingLabel()
+        self.action_help.setObjectName('hint')
+        self.action_help.setTextFormat(Qt.TextFormat.PlainText)
         self.account = QComboBox()
         self.account.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
         self.account.setMinimumContentsLength(16)
@@ -65,7 +73,8 @@ class GoalFundingDialog(QDialog):
         self.transaction.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
         self.note = QLineEdit()
         self.note.setPlaceholderText('Optional note')
-        for label, widget in [('Activity', self.action), ('Account holding savings', self.account),
+        for label, widget in [('Activity', self.action), ('', self.action_help),
+            ('Account holding savings', self.account),
             ('Amount', self.amount), ('Date', self.when), ('Link imported transaction', self.transaction),
             ('Note', self.note)]:
             form.addRow(label, widget)
@@ -89,6 +98,17 @@ class GoalFundingDialog(QDialog):
         self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
         self.table.setMinimumHeight(150)
         layout.addWidget(self.table, 1)
+        row = QHBoxLayout()
+        self.delete_btn = QPushButton('Delete activity…')
+        self.delete_btn.setObjectName('dangerSmall')
+        self.delete_btn.setToolTip('Remove the selected entry and undo its effect on this goal')
+        self.delete_btn.setEnabled(False)
+        self.delete_btn.clicked.connect(self._delete)
+        row.addWidget(self.delete_btn)
+        row.addStretch(1)
+        layout.addLayout(row)
+        self.table.itemSelectionChanged.connect(
+            lambda: self.delete_btn.setEnabled(self._selected_activity() is not None))
         self.buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Close)
         self.buttons.button(QDialogButtonBox.StandardButton.Save).setText('Record activity')
         self.record_btn = self.buttons.button(QDialogButtonBox.StandardButton.Save)
@@ -139,12 +159,14 @@ class GoalFundingDialog(QDialog):
         entries = self.store.goal_activity(self.goal_id)
         self.table.setRowCount(len(entries))
         for i, entry in enumerate(entries):
-            values = [entry['when_date'], ACTIONS[entry['action']], dollars(entry['amount']),
+            values = [fmt_day(entry['when_date']), ACTIONS[entry['action']], dollars(entry['amount']),
                       self.accounts.get(entry['account_id'], 'Account not assigned'), entry['note']]
             for j, value in enumerate(values):
                 item = QTableWidgetItem(value)
                 item.setToolTip(value)
+                item.setData(Qt.ItemDataRole.UserRole, entry['id'])
                 self.table.setItem(i, j, item)
+        self.delete_btn.setEnabled(self._selected_activity() is not None)
         self._sync()
 
     def _sync(self):
@@ -159,6 +181,7 @@ class GoalFundingDialog(QDialog):
 
     def _sync_inner(self):
         action, aid = self.action.currentData(), self.account.currentData()
+        self.action_help.setText(ACTION_HELP[action])
         buckets = goal_buckets(self.store, self.goal_id)
         capacities, free = funding_capacity(self.store)
         location = (f'Savings with no account assigned: {dollars(buckets.get(aid, 0))}. '
@@ -166,10 +189,8 @@ class GoalFundingDialog(QDialog):
         self.context.setText(
             location
             + (f'Unassigned across funding accounts, after card balances: {dollars(free)}. ' if action == 'contribute' else '')
-            + ('Locate money already counted in “Still saved”; this adds no new savings.' if action == 'assign'
-               else 'Purchases count toward this goal and reduce savings held. For a reserve you intend to rebuild, use Release savings.' if action == 'purchase'
-               else 'Release reduces progress so you can rebuild this reserve later.' if action == 'release'
-               else 'Earmarks existing money at its tracked value. No transfer, sale or new income is created.')
+            + ('No transfer, sale or new income is created; this only records where the money is.'
+               if action in ('contribute', 'assign') else '')
             + (f' This account has {dollars(capacities.get(aid, 0))} before unlocated earmarks.'
                if aid is not None and action in ('assign', 'contribute') else ''))
         account = self.store.account(aid) if aid is not None else None
@@ -187,7 +208,7 @@ class GoalFundingDialog(QDialog):
             tx = tx[(tx.date.dt.date <= date.today()) & (tx.category != BUSINESS_CATEGORY)]
             tx = tx[tx.amount > 0] if action == 'contribute' else tx[(tx.amount < 0) & (tx.category != 'Transfer')]
             for row in tx.sort_values(['date', 'id'], ascending=False).itertuples():
-                self.transaction.addItem(f'{row.date:%Y-%m-%d} · {row.description} · {dollars(row.amount)}', int(row.id))
+                self.transaction.addItem(f'{fmt_day(row.date)} · {row.description} · {dollars(row.amount)}', int(row.id))
         self.transaction.setCurrentIndex(max(0, self.transaction.findData(previous)))
         self.transaction.setEnabled(self.transaction.count() > 1)
         self.transaction.blockSignals(False)
@@ -230,3 +251,36 @@ class GoalFundingDialog(QDialog):
         self._refresh()
         if self._read_failed:
             self.error.setText('Activity saved. ' + self.error.text())
+
+    def _selected_activity(self):
+        rows = {i.row() for i in self.table.selectedItems()}
+        if len(rows) != 1:
+            return None
+        item = self.table.item(rows.pop(), 0)
+        return item.data(Qt.ItemDataRole.UserRole) if item is not None else None
+
+    def _delete(self):
+        activity_id = self._selected_activity()
+        if activity_id is None:
+            return
+        row = self.table.currentRow()
+        what = ' · '.join(self.table.item(row, c).text() for c in (0, 1, 2))
+        from .accounts import confirm
+        if not confirm(self, 'Delete activity',
+                       f'Delete “{what}”? Its effect on this goal is undone as if it was '
+                       'never recorded. Your bank records are not changed.',
+                       'Delete activity', 'Keep it'):
+            return
+        try:
+            self.store.delete_goal_activity(activity_id)
+        except ValueError as exc:
+            self.error.setStyleSheet(f'color: {theme.RED};')
+            self.error.setText(str(exc))
+            return
+        except sqlite3.Error:
+            self.error.setStyleSheet(f'color: {theme.RED};')
+            self.error.setText('Activity not deleted. Check access to the database file, then try again.')
+            return
+        self.error.setStyleSheet(f'color: {theme.TEXT};')
+        self.error.setText('Activity deleted. Close this window to use Undo if needed.')
+        self._refresh()

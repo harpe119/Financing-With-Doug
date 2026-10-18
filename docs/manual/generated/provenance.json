@@ -1,9 +1,9 @@
 {
   "schema": 1,
-  "generated_at": "2026-10-17T20:17:09.040715-04:00",
+  "generated_at": "2026-10-17T22:02:49.647510-04:00",
   "example_date": "2026-10-17",
   "application_version": "1.22.0",
-  "commit": "1d1e0f8",
+  "commit": "25b025e",
   "source_snapshot": "Temporary copy of individually read working-tree Python files; hashes identify the exact bytes.",
   "python": "3.12.3 (main, Aug 31 2026, 10:18:26) [GCC 13.3.0]",
   "dependencies": {
@@ -24,7 +24,7 @@
     "finfore/events.py": "009cfc80d02112fbf99a8ed4b9bcf55e7e89601465905cb0fd90e8457dd1c359",
     "finfore/forecast.py": "9d7d2fe4ca01db84c675453f860a322314a5bea38ebbbcc96f3c1f7f5874fe06",
     "finfore/forecast_history.py": "5941d47a215fe549075685188fb16dde5b2a0ac2d5387f123a90e240620d18d4",
-    "finfore/funding.py": "2915ff783ec0b88d952a43081d7f56be749cf090935eb6013ed4aea84d22fce4",
+    "finfore/funding.py": "2f6e51f452e651e301f66581fc0799977a96a4ddd723ea7fcfff8fcb1f4adedb",
     "finfore/goals.py": "02d2da7c44273b38c199585d2fe13e4e1cc4e6279349081876ecbd1cbd754a2c",
     "finfore/history.py": "00254cce45fb902ff64f109e7599072e44cb6996e6b81112c396928993302f02",
     "finfore/import_matching.py": "806247e26f5cf8db119841ff9b659e5d3413cfe3895d5230ab2ef1f6dde38d83",
@@ -37,7 +37,7 @@
     "finfore/recurrence.py": "567ef08ce3aa144689ffb9922eb96b7757124da4a1cd05ba8a5829a9626364db",
     "finfore/report.py": "074bce2308b213ff4cf3c74513f816a307db5411c29c42584a6402fe2409686b",
     "finfore/spending_plan.py": "a7717be1d4682cf3f0e3ac9ca5d8b1c2c12eeec686bad56dc7072fad4b2428df",
-    "finfore/store.py": "d81740705101ec7bf52ac98b4369b8881af51410651fe00a1b94a67fc66a1d3c",
+    "finfore/store.py": "8dd7926b0cae3a944fc3f344e384ae417ca6459cae1f5d50483a6e8691714d9a",
     "finfore/ui/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "finfore/ui/account_dialog.py": "bb8d6fe5de0e53655e8fb4b2c4efa71af4615b68aa26b1831c9bbe64f5cffae1",
     "finfore/ui/accounts.py": "d65e0403b5a52438383202be62322a6c2d4dd5ec7ac735e6e9aaee9bfaebd5e4",
@@ -47,7 +47,7 @@
     "finfore/ui/data_quality.py": "d626ff92752aa0dbafc2faffef3dcbb152284cb66779ab7906f0315992138da5",
     "finfore/ui/first_use.py": "69114ca480b01c3d43414d7e89879beb316a2cbae167140063f86152af9a91b3",
     "finfore/ui/forecast_page.py": "0b1530c458cef7cf2bb98cdc6b5b422d1af7e6f6f87e80b153114fcbb5ddcd7b",
-    "finfore/ui/goal_funding.py": "fbd6ad9fadc4b19d0825aa0a9bf007da321aadd4b070d92014043d1b6da49563",
+    "finfore/ui/goal_funding.py": "f15ac5826e1992a00b0abcff368ff005753bc05be3172ec23c864761147ab445",
     "finfore/ui/goal_funding_map.py": "f72dbb1cf4951f72da9d07e5255cae6730557e5be4d8318365b2ffda4cedcbfc",
     "finfore/ui/goals_page.py": "efd528b2555f2037d371d93f896c00fbd0aa3cd582a647fae4c16eceeb326f69",
     "finfore/ui/guide.py": "9226339e6c6562300d413480af891b6313106fb60865a3559a971f2f12622aaa",
@@ -73,15 +73,15 @@
     "finfore/util.py": "eb3ee850996a32380232b8a305364c10e40e84b0c0436b50d0d0dd349cb3a5b3",
     "run.py": "29b47ebd5accc36050e9dedc97a41e5f8d535e4dd564734ef51d1f946bda5997",
     "requirements.txt": "73e448fb55f61df8a447511dc4530c1ea32e1f63f110af79468f815f7678d63c",
-    "docs/getting-started.md": "c62c9876d08a2fbdf3dfb7c22c0493fbc886f5840670951c1aa7f419796cce16",
-    "docs/methodology.md": "884d7f018b723eff000c74933608a637d5783fe2bd172165176ab7a7480333c2"
+    "docs/getting-started.md": "915d850ebc41ef55263449a3072179a1de01cec7419cef13d5a1f8dff56a2c9f",
+    "docs/methodology.md": "be51f4f7dd6c7f93e066695d89bebd6b759a60cead8a2f8d7c9600b13e8498e2"
   },
   "generator_sha256": "51ea2fd0a61a2581bb2f1857539065affeaaa311afd621c8cfe6236c588f66db",
   "output_hashes": {
     "goal_table.tex": "5454d5753624d2829f396ea95a34e4f632bdf9100deaf8ce25a64b5ffc61ae20",
     "credit_qualification.tex": "434433a9f657c6f55011c0e50107c71762f9517d5e6b03665f92afc5690383ab",
     "forecast.dat": "648108a51f1f35da435de2a5ec92ce7d9e2523fd6274fb0c92cecf2c104e7159",
-    "version.tex": "5376eb97146c6e3c0dba3be245675aa799d79e1639d4a05ed6960cd58f0f8d5c",
+    "version.tex": "3351dea53b9143f840a007381876e02705424fa60311212ab29a1bbd99ac38e7",
     "balance_table.tex": "b819c3eec7feb1805dcda431c9d2bc9dc99d0f2f85e2b8038914e295ee85ef38",
     "budget_table.tex": "ef23d8aadc6eeae0b866908a7c472a1114f37ed9f06dd99826c69d6d3bf89efd",
     "results.json": "18bf060445bd93b017f3014efeb4608bb1399801a4b22fb9b21b82c5a2cf6a68"

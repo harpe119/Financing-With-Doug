@@ -149,6 +149,50 @@ def validate_goal_edit(store, goal_id, amount, kind, saved):
         raise ValueError('The target cannot be below money saved plus purchases already recorded.')
 
 
+ACTION_HELP = {
+    'contribute': 'New money you are putting toward this goal. Adds to Still saved and '
+                  'claims that amount in the account you choose.',
+    'assign': 'Says which account holds money already counted in Still saved. Moves it '
+              'from "no account" to that account; Still saved does not change.',
+    'purchase': 'You bought what you were saving for. Moves the amount from Still saved '
+                'to Purchases, so the goal keeps counting it as progress.',
+    'release': 'Takes money back out of the goal without buying anything, for example to '
+               'cover something else. Lowers Still saved and progress; set aside again to rebuild.',
+}
+
+
+def delete_activity(store, activity_id):
+    """Remove one activity entry and undo its effect on the goal's totals.
+
+    Refused when later activity rests on it: deleting a contribution whose money
+    was since spent or released, or a location the money has since left, would
+    leave the goal holding less than nothing somewhere.
+    """
+    row = store.con.execute('SELECT * FROM goal_activity WHERE id=?', (int(activity_id),)).fetchone()
+    if row is None:
+        raise ValueError('This activity no longer exists.')
+    entry = dict(row)
+    goal = next((g for g in store.goals() if g.id == entry['goal_id']), None)
+    if goal is None:
+        raise ValueError('This goal no longer exists.')
+    value, action = float(entry['amount']), entry['action']
+    saved = goal.saved_amount + (-value if action == 'contribute' else
+                                 value if action in ('purchase', 'release') else 0)
+    spent = goal.spent_amount - (value if action == 'purchase' else 0)
+    buckets = goal_buckets(store, goal.id)
+    aid = entry['account_id']
+    if aid is not None:
+        buckets[aid] = buckets.get(aid, 0.0) + (value if action in ('purchase', 'release') else -value)
+    buckets[None] = saved - sum(v for k, v in buckets.items() if k is not None)
+    if saved < -.005 or spent < -.005 or any(v < -.005 for v in buckets.values()):
+        raise ValueError('Later activity depends on this entry: some of this money was since '
+                         'spent, released or moved. Delete that later activity first.')
+    with store.con:
+        store.con.execute('DELETE FROM goal_activity WHERE id=?', (int(activity_id),))
+        store.con.execute('UPDATE goals SET saved_amount=?,spent_amount=? WHERE id=?',
+                          (round(max(0.0, saved), 2), round(max(0.0, spent), 2), goal.id))
+
+
 def record_activity(store, goal_id, action, amount, when, account_id, transaction_id, note):
     value = money(amount)
     goal = next((g for g in store.goals() if g.id == goal_id), None)

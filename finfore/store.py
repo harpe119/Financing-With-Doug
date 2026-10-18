@@ -1055,6 +1055,11 @@ class Store:
         return record_activity(self, goal_id, action, amount, when,
                                account_id, transaction_id, note)
 
+    @undoable("Delete goal activity")
+    def delete_goal_activity(self, activity_id: int) -> None:
+        from .funding import delete_activity
+        delete_activity(self, activity_id)
+
     @undoable("Save spending plan")
     def save_spending_plan(self, overrides: dict[str, float], goal_budget: float) -> None:
         from .spending_plan import validate_overrides, money
