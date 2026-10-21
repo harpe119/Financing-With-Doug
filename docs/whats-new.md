@@ -9,6 +9,29 @@ available, so it's worth keeping them readable.
 
 ---
 
+## 1.22.2 — clearer cash forecasts and faster transaction review
+
+- **Cash and net worth on one graph.** On Forecast → Projection, choose
+  **Cash + net worth** to compare both on the same dates and dollar scale.
+  Changing the display keeps your zoom; **Reset axes** fits the selected data.
+- **See bank cash or free cash.** Under Forecast's **Goals → Cash to show**,
+  **Bank cash** includes money set aside for goals. **Free cash after goal
+  funding** subtracts cash earmarks and planned reserves. With your plan
+  enabled, spending less increases projected bank cash; setting money aside
+  for a goal leaves that money in the bank. Cash warnings always use bank cash.
+- **Protect your transaction reviews.** Automatic category updates now preserve
+  reviewed categories and review dates. CSV import summaries distinguish
+  existing reviews kept from new transactions needing review. A remembered
+  category can classify a new purchase, but that purchase still needs review.
+- **Review transactions with the same name together.** In Accounts →
+  Transactions, select one entry and choose **Review same name…**. Inspect the
+  matching entries, check the ones that belong together, and apply a category.
+  Chipotle purchases can be reviewed together as Dining, while Delta's Travel
+  and Business entries can stay separate. Existing reviews are kept, and the
+  batch can be undone in one step. Remembering a category for future imports
+  is optional and is disabled when matching merchant descriptions have
+  conflicting categories or business entries.
+
 ## 1.22.0 — easier to find your way, and a light mode
 
 - **Five places instead of seven.** The sidebar is now Home, Accounts, Bills &

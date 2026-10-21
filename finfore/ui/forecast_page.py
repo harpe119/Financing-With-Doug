@@ -473,6 +473,7 @@ class ForecastPage(QWidget):
         # with a fresh seed would quote different numbers to the ones the page
         # is showing, which is worse than useless in an explanation).
         self._res: ForecastResult | None = None
+        self._base: ForecastResult | None = None
         self._bt = None
         self._sens: list = []
         self._ef_target = 0.0
@@ -754,6 +755,21 @@ class ForecastPage(QWidget):
         goals.body.addWidget(hint('Uses your saved Plan income, spending and investment contributions, '
             'plus Goals loan repayments. Turn this off to forecast existing habits with the separate '
             'extra-loan and rollover controls.'))
+        self.cash_view = QComboBox()
+        self.cash_view.setAccessibleName("Cash to show")
+        self.cash_view.addItem("Bank cash", "bank")
+        self.cash_view.addItem("Free cash after goal funding", "free")
+        self.cash_view.setToolTip(
+            "Bank cash includes savings set aside for goals. Free cash subtracts recorded cash "
+            "earmarks and, when the plan is enabled, future savings-goal funding and the Plan's "
+            "irregular-expense reserve. Investment earmarks and balance milestones are not "
+            "subtracted from cash. Planned goal funding is reserved on the first of each month; "
+            "no future purchases are assumed. This changes the display, not your plan.")
+        cash_view_label = QLabel("Cash to show")
+        cash_view_label.setBuddy(self.cash_view)
+        goals.body.addWidget(cash_view_label)
+        goals.body.addWidget(self.cash_view)
+        self.cash_view.currentIndexChanged.connect(self._cash_view_changed)
         self.goal_box = QVBoxLayout()
         self.goal_box.setSpacing(8)
         goals.body.addLayout(self.goal_box)
@@ -799,9 +815,8 @@ class ForecastPage(QWidget):
                          ("Net worth only", "networth"),
                          ("Analysis only", "analysis")):
             self.view_pick.addItem(lbl, key)
-        self.view_pick.setCurrentIndex(1)     # "Cash only" by default
-        self.view_pick.setToolTip("Hide charts you aren't using to give the "
-                                  "rest more room")
+        self.view_pick.setToolTip("Show cash and net worth together on the same axes, "
+                                  "or focus on one measure")
         self.view_pick.currentIndexChanged.connect(self._apply_view)
         vrl.addWidget(self.view_pick)
         picker.addWidget(self.view_row)
@@ -835,20 +850,24 @@ class ForecastPage(QWidget):
         # Cash leads. It is the account that actually runs out, and the floors
         # below (zero, starter buffer, emergency fund) are cash concepts — net
         # worth can look healthy while the chequing account is empty.
-        cash_card = Card("Net cash position — projection")
+        cash_card = Card("Cash + net worth — projection")
+        self.cash_view_note = hint("")
+        self.cash_view_note.setTextFormat(Qt.TextFormat.PlainText)
+        cash_card.body.addWidget(self.cash_view_note)
         self.cash_compare = hint("")
         self.cash_compare.setTextFormat(Qt.TextFormat.PlainText)
         self.cash_compare.hide()
-        cash_card.body.addWidget(self.cash_compare)
         self.plot_cash = charts.new_plot()
         self.plot_cash.setAccessibleName("Cash projection chart")
         self.plot_cash.setMinimumHeight(180 + charts.AXIS_ALLOWANCE)
         cash_card.body.addWidget(self.plot_cash)
+        # Both measures share one plot, date axis and dollar axis.
+        self.plot_nw = self.plot_cash
         self.cash_series = SeriesRegistry()
         self.cash_legend = LegendToggles(
             _forecast_legend_entries(theme.BLUE, extras=[
-                ("history", "history", theme.MUTED, "line"),
-                ("baseline", "unchanged controls · middle outcome", theme.COMPARISON, "dash"),
+                ("history", "bank cash history", theme.BLUE, "line"),
+                ("baseline", "unchanged controls · middle outcome", theme.BLUE, "dash"),
                 ("zero", "$0 · debt below this", theme.REFERENCE, "line"),
                 ("starter", "starter buffer", theme.AMBER, "dash"),
                 ("emergency", "cash buffer · essential spending", theme.ACCENT, "dash"),
@@ -856,6 +875,8 @@ class ForecastPage(QWidget):
             ]),
             on_toggle=lambda k, on: self.cash_series.set_visible(k, on))
         cash_card.body.addWidget(self.cash_legend)
+        self.cash_legend_title = hint("Bank cash")
+        cash_card.body.insertWidget(cash_card.body.indexOf(self.cash_legend), self.cash_legend_title)
 
         # Keep the cash answer above the scrolling charts. The headline and
         # next action lead; the supporting figures remain available on demand.
@@ -910,27 +931,24 @@ class ForecastPage(QWidget):
         self.risk_panel.hide()
         self.cash_card = cash_card
 
-        nw_card = Card("Net worth — projection")
         self.nw_compare = hint("")
         self.nw_compare.setTextFormat(Qt.TextFormat.PlainText)
         self.nw_compare.hide()
-        nw_card.body.addWidget(self.nw_compare)
-        self.plot_nw = charts.new_plot()
-        self.plot_nw.setAccessibleName("Net worth projection chart")
-        self.plot_nw.setMinimumHeight(110 + charts.AXIS_ALLOWANCE)
-        nw_card.body.addWidget(self.plot_nw)
+        self.nw_legend_title = hint("Net worth")
+        cash_card.body.addWidget(self.nw_legend_title)
         self.nw_series = SeriesRegistry()
         self.nw_legend = LegendToggles(
             _forecast_legend_entries(theme.ACCENT, extras=[
-                ("history", "history", theme.MUTED, "line"),
+                ("history", "net worth history", theme.ACCENT, "line"),
                 ("det", "average inputs · no random variation", theme.AMBER, "dash"),
-                ("baseline", "unchanged controls · middle outcome", theme.COMPARISON, "dash"),
+                ("baseline", "unchanged controls · middle outcome", theme.ACCENT, "dash"),
                 ("zero", "$0 · net worth", theme.RED, "line"),
                 ("goals", "saved goals", theme.AMBER, "dash"),
             ]),
             on_toggle=lambda k, on: self.nw_series.set_visible(k, on))
-        nw_card.body.addWidget(self.nw_legend)
-        self.nw_card = nw_card
+        cash_card.body.addWidget(self.nw_legend)
+        cash_card.body.addWidget(self.cash_compare)
+        cash_card.body.addWidget(self.nw_compare)
         for legend in (self.cash_legend, self.nw_legend):
             meanings = {
                 "Middle 80% of outcomes": "At each date, 10% of simulated balances are "
@@ -978,12 +996,9 @@ class ForecastPage(QWidget):
         an.body.addWidget(self.analysis_note)
         self.analysis_card = an
 
-        # Dividers between the three charts, so any one of them can be given
-        # the column at the cost of the others without hiding them outright.
-        self.chart_split = vsplit(cash_card, nw_card, an,
-                                  sizes=[420, 280, 260])
+        self.chart_split = vsplit(cash_card, an, sizes=[700, 260])
         self.chart_split.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Ignored)
-        for c in (cash_card, nw_card, an):
+        for c in (cash_card, an):
             c.setMinimumHeight(300 if c is cash_card else 260)
             c.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
         right.addWidget(self.chart_split, 1)
@@ -1057,8 +1072,8 @@ class ForecastPage(QWidget):
         self._layout_timer = QTimer(self)
         self._layout_timer.setSingleShot(True)
         self._layout_timer.timeout.connect(self._fit_chart_content)
-        for widget in (chart_scroll.viewport(), chart_col, self.risk_details,
-                       self.data_quality, cash_card, nw_card, an):
+        for widget in (chart_scroll.viewport(), chart_col, self.risk_panel, self.risk_details,
+                       self.data_quality, cash_card, an):
             widget.installEventFilter(self)
 
         # Coalesce keyboard/spinner edits. Mouse drags update on release so a
@@ -1185,6 +1200,14 @@ class ForecastPage(QWidget):
     def _fit_chart_content(self) -> None:
         column = self.chart_scroll.widget()
         width = self.chart_scroll.viewport().width()
+        # The fixed verdict sits outside the chart scroller. Reserve all its
+        # wrapped lines when the controls leave a narrow result column.
+        risk_height = max(0, self.risk.heightForWidth(self.risk.width()))
+        if self.risk.minimumHeight() != risk_height:
+            self.risk.setMinimumHeight(risk_height)
+        panel_height = self._column_height(self.risk_panel.layout(), self.risk_panel.width())
+        if self.risk_panel.minimumHeight() != panel_height:
+            self.risk_panel.setMinimumHeight(panel_height)
         for label in (self.forecast_warning, self.risk_detail, self.summary):
             height = max(0, label.heightForWidth(width))
             if label.minimumHeight() != height:
@@ -1195,12 +1218,11 @@ class ForecastPage(QWidget):
         if self.risk_details.minimumHeight() != details_height:
             self.risk_details.setMinimumHeight(details_height)
         for card, base, plot in ((self.cash_card, 300, self.plot_cash),
-                                (self.nw_card, 260, self.plot_nw),
                                 (self.analysis_card, 260, self.plot_analysis)):
             required = max(base, self._column_height(card.layout(), card.width(), plot))
             if card.minimumHeight() != required:
                 card.setMinimumHeight(required)
-        visible = [card for card in (self.cash_card, self.nw_card, self.analysis_card)
+        visible = [card for card in (self.cash_card, self.analysis_card)
                    if card.isVisibleTo(self)]
         minimum = (sum(card.minimumHeight() for card in visible)
                    + self.chart_split.handleWidth() * max(0, len(visible) - 1))
@@ -1322,6 +1344,10 @@ class ForecastPage(QWidget):
         self.follow_goals.blockSignals(True)
         self.follow_goals.setChecked(goal_plan_enabled(self.store))
         self.follow_goals.blockSignals(False)
+        self.cash_view.blockSignals(True)
+        cash_view = self.store.get_setting('forecast_cash_view', 'bank')
+        self.cash_view.setCurrentIndex(max(0, self.cash_view.findData(cash_view)))
+        self.cash_view.blockSignals(False)
         self._sync_goal_plan_controls()
         # rebuild category sliders, preserving positions by name
         prev = {s.name: s.slider.value() for s in self._cat_sliders}
@@ -1418,13 +1444,14 @@ class ForecastPage(QWidget):
         self.comparison_tip.hide()
         self.setup_guidance.hide()
         self._res = self._bt = None
+        self._base = None
         self._sens = []
         for label in (self.cash_compare, self.nw_compare):
             label.clear()
             label.hide()
         for row in (self.income_slider, *self._cat_sliders):
             row.set_monthly_reference(None)
-        for plot in (self.plot_cash, self.plot_nw, self.plot_analysis):
+        for plot in (self.plot_cash, self.plot_analysis):
             plot.clear()
         self.cash_series.reset()
         self.nw_series.reset()
@@ -1499,6 +1526,19 @@ class ForecastPage(QWidget):
         self._sync_goal_plan_controls()
         self.main.refresh_header()
         self._schedule_run()
+
+    def _cash_view_changed(self, *_args) -> None:
+        try:
+            self.store.set_setting('forecast_cash_view', self.cash_view.currentData())
+        except Exception as error:
+            self.cash_view.blockSignals(True)
+            saved = self.store.get_setting('forecast_cash_view', 'bank')
+            self.cash_view.setCurrentIndex(max(0, self.cash_view.findData(saved)))
+            self.cash_view.blockSignals(False)
+            self._forecast_failed(error, 'The cash view could not be saved. Refresh the forecast to try again.')
+            return
+        if self._res is not None:
+            self._draw_projection()
 
     def _load_history(self) -> None:
         history = ForecastHistory.from_setting(self.store.get_setting(HISTORY_SETTING))
@@ -1772,29 +1812,33 @@ class ForecastPage(QWidget):
         else:
             show_cash = key in ("both", "cash")
             show_nw = key in ("both", "networth")
-        self.cash_card.setVisible(show_cash)
+        self.cash_card.setVisible(show_cash or show_nw)
         self.risk_panel.setVisible(show_cash and self._res is not None
                                    and self._res.shortfall is not None)
         self.risk_details.setVisible(self.risk_toggle.isChecked()
                                      and self.risk_panel.isVisibleTo(self))
-        self.nw_card.setVisible(show_nw)
+        for widget in (self.cash_legend_title, self.cash_legend, self.cash_view_note):
+            widget.setVisible(show_cash)
+        for widget in (self.nw_legend_title, self.nw_legend):
+            widget.setVisible(show_nw)
         self.analysis_card.setVisible(show_analysis)
         visible_cards = [card for card, visible in zip(
-            (self.cash_card, self.nw_card, self.analysis_card),
-            (show_cash, show_nw, show_analysis)) if visible]
+            (self.cash_card, self.analysis_card),
+            (show_cash or show_nw, show_analysis)) if visible]
         self.chart_split.setMinimumHeight(
             sum(card.minimumHeight() for card in visible_cards)
             + self.chart_split.handleWidth() * max(0, len(visible_cards) - 1))
         # Hidden panes take no space. The weights divide the visible charts;
         # minimum card heights keep plots and notes readable. The scroll area
         # absorbs overflow instead of changing the main window's minimum size.
-        weights = [3 if show_nw else 5, 2 if show_cash else 5,
-                   5 if key == "analysis" else 2]
+        weights = [5, 5 if key == "analysis" else 2]
         total = max(1, self.chart_split.height())
         live = [w if vis else 0 for w, vis in
-                zip(weights, (show_cash, show_nw, show_analysis))]
+                zip(weights, (show_cash or show_nw, show_analysis))]
         s = sum(live) or 1
         self.chart_split.setSizes([int(total * w / s) for w in live])
+        if self._res is not None:
+            self._draw_projection()
         self._maybe_run_analysis()
 
     # ---------------- analysis panel ----------------
@@ -2171,6 +2215,135 @@ class ForecastPage(QWidget):
             self.run_btn.setEnabled(self._refresh_needed or self._res is not None)
             self.unsetCursor()
 
+    def _draw_projection(self) -> None:
+        """Draw the selected measures together without changing the simulation."""
+        res, base = self._res, self._base
+        if res is None:
+            return
+        key = self.view_pick.currentData()
+        show_cash, show_nw = key in ("cash", "both"), key in ("networth", "both")
+        free = self.cash_view.currentData() == "free"
+        noun = "Free cash" if free else "Bank cash"
+        cash_pct = res.free_cash_pct if free else res.cash_pct
+        base_cash = (base.free_cash_pct if free else base.cash_pct) if base else None
+        title = f"{noun} + net worth" if show_cash and show_nw else noun if show_cash else "Net worth"
+        self.cash_card.title.setText(f"{title} — projection".upper())
+        self.plot_cash.setAccessibleName(
+            "Cash and net worth projection chart" if show_cash and show_nw else
+            "Cash projection chart" if show_cash else "Net worth projection chart")
+        self.cash_legend_title.setText(noun)
+        self.cash_view_note.setText(
+            "After goal earmarks and planned reserves. Cash warnings use bank cash."
+            if free else "Bank cash includes money set aside for goals.")
+        self.cash_view_note.setToolTip(self.cash_view.toolTip() +
+            " Bank cash history and buffer lines are hidden in the free-cash view.")
+        self.cash_legend.actions["zero"].setText(
+            "$0 · no free cash left" if free else "$0 · debt below this")
+        self.cash_legend.actions["history"].setEnabled(not free)
+        for name in ("starter", "emergency", "goals"):
+            self.cash_legend.actions[name].setEnabled(not free)
+        # On shared axes there is only one zero line, owned by the cash
+        # layers. Do not offer a second control that has no item to toggle.
+        self.nw_legend.actions["zero"].setEnabled(not show_cash)
+        self.nw_legend.actions["zero"].setToolTip(
+            "Use the cash Layers menu for the shared zero line." if show_cash else "")
+
+        hist = networth_history(self.store)
+        tail = hist.tail(min(len(hist), history_window(len(res.dates) - 1)))
+        hx, fx = charts.to_ts(tail.index), charts.to_ts(res.dates)
+        goals = self.store.goals()
+        p = self.plot_cash
+        p.clear()
+        self.cash_series.reset()
+        self.nw_series.reset()
+        values, include = [], [0.0]
+        if show_cash:
+            reg = self.cash_series
+            reg.add("zero", charts.zero_floor(p, "$0 · no free cash left" if free
+                                              else "$0 · debt below this"))
+            if not free:
+                if not self._simple:
+                    reg.add("starter", charts.soft_floor(
+                        p, STARTER_BUFFER, f"{charts._short(STARTER_BUFFER)} · starter buffer",
+                        theme.AMBER, slot="starter"))
+                if self._ef_target > STARTER_BUFFER * 1.05:
+                    reg.add("emergency", charts.soft_floor(
+                        p, self._ef_target,
+                        f"{charts._short(self._ef_target)} · {self._ef_months}-month cash buffer",
+                        theme.ACCENT, slot="emergency"))
+                if len(tail) > 1:
+                    reg.add("history", charts.line(p, hx, tail["cash"].values, theme.BLUE, 1.2))
+                    values.append(tail["cash"].values)
+                for g in goals:
+                    if g.kind == "cash":
+                        reg.add("goals", charts.target_line(p, g.amount, f"Goal: {g.name} (cash)"))
+                        include.append(g.amount)
+                include.extend([STARTER_BUFFER, self._ef_target or None])
+            outer, inner, med = charts.fan_parts(p, fx, cash_pct, theme.BLUE,
+                                                f"{noun} · middle outcome")
+            reg.add("band80", outer)
+            reg.add("band50", inner)
+            reg.add("median", med)
+            if base_cash is not None:
+                reg.add("baseline", charts.line(p, fx, base_cash[50], theme.BLUE, 1.2,
+                                                f"{noun} · without plan / unchanged controls",
+                                                dashed=True))
+                values.append(base_cash[50])
+            values.extend([cash_pct[10], cash_pct[90]])
+            reg.apply()
+        if show_nw:
+            reg = self.nw_series
+            if not show_cash:
+                reg.add("zero", charts.zero_floor(p, "$0 · net worth"))
+            if len(tail) > 1:
+                reg.add("history", charts.line(p, hx, tail["networth"].values, theme.ACCENT, 1.2))
+                values.append(tail["networth"].values)
+            outer, inner, med = charts.fan_parts(p, fx, res.networth_pct, theme.ACCENT,
+                                                "Net worth · middle outcome")
+            reg.add("band80", outer)
+            reg.add("band50", inner)
+            reg.add("median", med)
+            reg.add("det", charts.line(p, fx, res.networth_det, theme.AMBER, 1.4, dashed=True))
+            if base is not None:
+                reg.add("baseline", charts.line(p, fx, base.networth_pct[50], theme.ACCENT, 1.2,
+                                                "Net worth · without plan / unchanged controls",
+                                                dashed=True))
+                values.append(base.networth_pct[50])
+            for g in goals:
+                if g.kind == "networth":
+                    reg.add("goals", charts.target_line(p, g.amount, f"Goal: {g.name} (net worth)"))
+                    include.append(g.amount)
+            values.extend([res.networth_pct[10], res.networth_pct[90], res.networth_det])
+            reg.apply()
+        if show_cash or show_nw:
+            charts.today_line(p)
+            # One home range includes both metrics. Redraws preserve the user's
+            # current pan and zoom; Reset axes applies the updated home range.
+            charts.lock_view(p, float(hx[0]) if len(hx) else float(fx[0]),
+                             float(fx[-1]), values, include_y=include)
+
+        following = res.goal_plan_budget is not None
+        for label, series, original, name, visible in (
+                (self.cash_compare, cash_pct[50], base_cash[50] if base_cash else None,
+                 noun.lower(), show_cash),
+                (self.nw_compare, res.networth_pct[50], base.networth_pct[50] if base else None,
+                 "net worth", show_nw)):
+            label.setVisible(visible and original is not None)
+            if original is not None:
+                ending, unchanged = float(series[-1]), float(original[-1])
+                comparison = "without the plan" if following else "unchanged"
+                label.setText(
+                    f"Middle {name} outcome on {fmt_day(res.dates[-1])}: "
+                    f"{fmt_money(ending)} with these controls · {fmt_money(unchanged)} {comparison} "
+                    f"({fmt_money(ending - unchanged, signed=True)}).\n"
+                    f"Solid: these controls · dashed: unchanged controls"
+                    + (" without the plan." if following else "."))
+                label.setToolTip(
+                    "The middle outcome is the median: half the simulated balances are "
+                    "above it on that date and half below. It is not a guaranteed balance. "
+                    + self.overlay.toolTip())
+        self._layout_timer.start(0)
+
     def _calculate(self) -> None:
         self._update_timer.stop()
         self.data_quality.refresh(self.store)
@@ -2218,111 +2391,9 @@ class ForecastPage(QWidget):
                                 emergency_target=ef_target,
                                 essential_monthly=ess)
 
-        hist = networth_history(store)
-        tail = hist.tail(min(len(hist), history_window(H)))
-        hx = charts.to_ts(tail.index)
-        fx = charts.to_ts(res.dates)
-        x_min = float(hx[0]) if len(hx) else float(fx[0])
-        x_max = float(fx[-1])
-        goals = store.goals()
+        self._base = base
+        self._draw_projection()
 
-        # ----- cash chart (primary) -----
-        p = self.plot_cash
-        p.clear()
-        if p.plotItem.legend:
-            p.plotItem.legend.clear()
-        reg = self.cash_series
-        reg.reset()
-        reg.add("zero", charts.zero_floor(p))
-        if not self._simple:
-            # The starter buffer sits a few pixels above $0 on most charts, so the
-            # two labels fought for the same corner; Simple view keeps $0 and the
-            # cash buffer, which are the two lines that answer "do I run out?".
-            reg.add("starter", charts.soft_floor(
-                p, STARTER_BUFFER, f"{charts._short(STARTER_BUFFER)} · starter buffer",
-                theme.AMBER, slot="starter"))
-        if ef_target and ef_target > STARTER_BUFFER * 1.05:
-            reg.add("emergency", charts.soft_floor(
-                p, ef_target,
-                f"{charts._short(ef_target)} · {months}-month cash buffer",
-                theme.ACCENT, slot="emergency"))
-        if len(tail) > 1:
-            reg.add("history",
-                    charts.line(p, hx, tail["cash"].values, theme.MUTED, 1.6,
-                                "History"))
-        outer, inner, med = charts.fan_parts(p, fx, res.cash_pct, theme.BLUE,
-                                             "These controls · middle outcome")
-        reg.add("band80", outer)
-        reg.add("band50", inner)
-        reg.add("median", med)
-        if base is not None:
-            reg.add("baseline",
-                    charts.line(p, fx, base.cash_pct[50], theme.COMPARISON, 1.2,
-                                "Without plan / unchanged controls · middle outcome", dashed=True))
-        charts.today_line(p)
-        for g in goals:
-            if g.kind == "cash":
-                reg.add("goals", charts.target_line(p, g.amount, f"Goal: {g.name}"))
-        reg.apply()
-        charts.lock_view(
-            p, x_min, x_max,
-            [res.cash_pct[10], res.cash_pct[90],
-             base.cash_pct[50] if base is not None else None,
-             tail["cash"].values if len(tail) > 1 else None],
-            include_y=[0.0, STARTER_BUFFER, ef_target or None]
-            + [g.amount for g in goals if g.kind == "cash"])
-
-        # ----- net worth chart -----
-        p = self.plot_nw
-        p.clear()
-        reg = self.nw_series
-        reg.reset()
-        reg.add("zero", charts.zero_floor(p, "$0 · net worth"))
-        if len(tail) > 1:
-            reg.add("history", charts.line(p, hx, tail["networth"].values,
-                                           theme.MUTED, 1.4))
-        outer, inner, med = charts.fan_parts(p, fx, res.networth_pct, theme.ACCENT)
-        reg.add("band80", outer)
-        reg.add("band50", inner)
-        reg.add("median", med)
-        reg.add("det", charts.line(p, fx, res.networth_det, theme.AMBER, 1.4,
-                                   dashed=True))
-        if base is not None:
-            reg.add("baseline", charts.line(p, fx, base.networth_pct[50],
-                                            theme.COMPARISON, 1.4, dashed=True))
-        charts.today_line(p)
-        for g in goals:
-            if g.kind == "networth":
-                reg.add("goals", charts.target_line(p, g.amount, f"Goal: {g.name}"))
-        reg.apply()
-        charts.lock_view(
-            p, x_min, x_max,
-            [res.networth_pct[10], res.networth_pct[90], res.networth_det,
-             base.networth_pct[50] if base is not None else None,
-             tail["networth"].values if len(tail) > 1 else None],
-            include_y=[0.0] + [g.amount for g in goals if g.kind == "networth"])
-
-        # ----- shortfall risk + analysis -----
-        for label, values, original, noun in (
-                (self.cash_compare, res.cash_pct[50], base.cash_pct[50] if base else None, "cash"),
-                (self.nw_compare, res.networth_pct[50], base.networth_pct[50] if base else None,
-                 "net worth")):
-            label.setVisible(original is not None)
-            if original is not None:
-                ending, unchanged = float(values[-1]), float(original[-1])
-                difference = ending - unchanged
-                comparison = 'without the plan' if scenario.follow_goal_plan else 'unchanged'
-                baseline_label = ('unchanged controls without the plan' if scenario.follow_goal_plan
-                                  else 'unchanged controls')
-                label.setText(
-                    f"Middle {noun} outcome on {fmt_day(res.dates[-1])}: "
-                    f"{fmt_money(ending)} with these controls · {fmt_money(unchanged)} {comparison} "
-                    f"({fmt_money(difference, signed=True)}).\n"
-                    f"Solid: these controls · dashed: {baseline_label}.")
-                label.setToolTip(
-                    "The middle outcome is the median: half the simulated balances are "
-                    "above it on that date and half below. It is not a guaranteed balance. "
-                    + self.overlay.toolTip())
         self._render_risk(res, ef_target, months)
         self._maybe_run_analysis()
 

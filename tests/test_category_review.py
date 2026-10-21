@@ -11,12 +11,12 @@ from unittest.mock import patch
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from finfore.category_review import needs_attention, reviewed_dataset
+from finfore.category_review import matching_merchant_transactions, needs_attention, reviewed_dataset
 from finfore.categorize import BUSINESS_CATEGORY
 from finfore.learning import (apply_chain, feedback_key, full_chain, record_corrections,
     recategorize_all, uncategorized_clusters)
 from finfore.models import Account, AccountType
-from finfore.pipeline import refresh_derived
+from finfore.pipeline import import_csv, import_summary, reimport_with_saved_mapping, refresh_derived
 from finfore.store import Store
 
 
@@ -194,6 +194,75 @@ class CategoryReviewTests(unittest.TestCase):
         self.assertEqual(self.row(txid).category, 'Groceries')
         self.assertEqual(self.row(txid).category_source, 'manual')
         self.assertTrue(self.row(txid).category_reviewed)
+
+    def test_automatic_writes_cannot_clear_reviews_even_with_stale_row_ids(self):
+        personal = self.add('CHIPOTLE MEXICAN GRILL')
+        business = self.add('DELTA')
+        automatic = self.add('UNKNOWN')
+        self.store.review_transactions([personal, business],
+            {personal: 'Dining', business: BUSINESS_CATEGORY}, remember=False)
+        before = self.store.transactions().set_index('id').loc[[personal, business]].copy()
+        for source in ('keyword', 'saved_rule', 'similarity', 'fallback', 'transfer_pair', 'model'):
+            with self.subTest(source=source):
+                self.store.set_categories_bulk({personal: 'Shopping', business: 'Travel', automatic: 'Dining'},
+                                                source=source)
+                self.store.set_category([personal, business], 'Transfer', source=source)
+                after = self.store.transactions().set_index('id')
+                pd.testing.assert_frame_equal(after.loc[[personal, business]], before)
+                self.assertEqual(after.loc[automatic, 'category'], 'Dining')
+                self.assertEqual(after.loc[automatic, 'category_reviewed'], 0)
+        # An explicit later correction still works.
+        self.store.set_category([personal], 'Groceries')
+        self.assertEqual(self.row(personal).category, 'Groceries')
+        self.assertTrue(self.row(personal).category_reviewed)
+
+    def test_model_chain_never_replaces_reviewed_decisions(self):
+        old = self.add('DELTA')
+        self.store.review_transactions([old], BUSINESS_CATEGORY, remember=False)
+        new = self.add('MYSTERY')
+        before = self.store.transactions()
+        result = apply_chain(before, full_chain(self.store))
+        pd.testing.assert_series_equal(result.loc[result.id.eq(old)].iloc[0],
+                                       before.loc[before.id.eq(old)].iloc[0])
+        self.assertEqual(result.loc[result.id.eq(new), 'category_reviewed'].iloc[0], 0)
+        self.assertNotEqual(result.loc[result.id.eq(new), 'category_source'].iloc[0], 'manual')
+
+    def test_overlapping_new_csv_and_refresh_keep_reviews_timestamps_and_one_off_business(self):
+        path = Path(self.temp.name) / 'bank.csv'
+        initial = pd.DataFrame([
+            dict(Date=(date.today()-timedelta(days=3)).isoformat(), Description='CHIPOTLE MEXICAN GRILL', Amount=-20),
+            dict(Date=(date.today()-timedelta(days=2)).isoformat(), Description='DELTA', Amount=-300)])
+        initial.to_csv(path, index=False)
+        self.assertEqual(import_csv(self.store, str(path), self.aid), (2, 0))
+        ids = self.store.transactions().id.tolist()
+        self.store.review_transactions(ids, {ids[0]: 'Dining', ids[1]: BUSINESS_CATEGORY}, remember=False)
+        before = self.store.transactions().set_index('id').copy()
+        incoming = initial.copy()
+        incoming.loc[0, 'Description'] = ' chipotle mexican grill  '
+        pd.concat([incoming, pd.DataFrame([dict(Date=date.today().isoformat(),
+            Description='CHIPOTLE MEXICAN GRILL', Amount=-25)])], ignore_index=True).to_csv(path, index=False)
+        self.store.enable_undo()
+        with self.store.undo_group('Import CSV'):
+            self.assertEqual(reimport_with_saved_mapping(self.store, self.aid, str(path)), (1, 2))
+            refresh_derived(self.store, checkpoint=False)
+        after = self.store.transactions().set_index('id')
+        pd.testing.assert_frame_equal(after.loc[ids], before)
+        self.assertEqual(int(after.loc[~after.index.isin(ids), 'category_reviewed'].sum()), 0)
+        self.assertIn('Previously reviewed entries kept: 2', import_summary(self.store, self.aid))
+        self.assertIn('New entries to review: 1', import_summary(self.store, self.aid))
+        self.store.undo.undo()
+        pd.testing.assert_frame_equal(self.store.transactions().set_index('id'), before)
+        self.store.undo.redo()
+        self.store.close()
+        self.store = Store(self.path)
+        pd.testing.assert_frame_equal(self.store.transactions().set_index('id').loc[ids], before)
+
+    def test_matching_names_allow_case_and_spacing_without_merging_different_merchants(self):
+        a = self.add('Chipotle Mexican Grill', category='Dining')
+        b = self.add('  CHIPOTLE   mexican grill ', category='Dining')
+        self.add('Chipotle Mexican Grill #123', category='Dining')
+        self.add('Chipotle Catering', category='Shopping')
+        self.assertEqual(set(matching_merchant_transactions(self.store, a).id), {a, b})
 
     def test_migration_preserves_legacy_rules_without_inventing_human_reviews(self):
         path = Path(self.temp.name)/'old.db'

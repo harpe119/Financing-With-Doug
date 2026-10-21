@@ -29,6 +29,7 @@ from ..category_review import SOURCES, needs_attention, reviewed_dataset
 from ..history import transaction_balances
 from ..account_view import money_exact
 from .review_dialog import ReviewUncategorizedDialog
+from .merchant_review import MerchantReviewDialog
 from ..store import Store
 from ..util import fmt_date, fmt_money, fmt_day
 from . import theme
@@ -207,6 +208,7 @@ class TransactionsPage(QWidget):
         self.tools_menu.addAction('Import CSV…', lambda: self.main.open_import())
         self.tools_menu.addAction('Latest CSV import…', self._import_details)
         self.tools_menu.addAction('Review uncategorized merchants…', self._review_uncategorized)
+        self.review_merchant_action = self.tools_menu.addAction('Review same name…', self._review_selected_merchant)
         self.tools_menu.addSeparator()
         self.f_account = QComboBox()
         self.f_category = QComboBox()
@@ -304,6 +306,9 @@ class TransactionsPage(QWidget):
         self.confirm_btn = QPushButton('Mark reviewed')
         self.confirm_btn.setObjectName('primary')
         self.confirm_btn.clicked.connect(self._confirm_selected)
+        self.review_merchant_btn = QPushButton('Review same name…')
+        self.review_merchant_btn.setToolTip('Select one transaction to preview and review other entries with the exact same name.')
+        self.review_merchant_btn.clicked.connect(self._review_selected_merchant)
         self.selection_more = QPushButton('More…')
         self.selection_menu = QMenu(self.selection_more)
         self.selection_more.setMenu(self.selection_menu)
@@ -395,6 +400,7 @@ class TransactionsPage(QWidget):
         self.selected_lbl = QLabel('')
         selection.addWidget(self.selected_lbl)
         selection.addWidget(self.confirm_btn)
+        selection.addWidget(self.review_merchant_btn)
         self.scope_note = hint('Category changes apply only to the selected entries.')
         self.scope_note.setWordWrap(True)
         summary.addWidget(self.scope_note)
@@ -538,6 +544,8 @@ class TransactionsPage(QWidget):
         count = len(self._selected_ids())
         self.confirm_btn.setEnabled(count > 0)
         self.why_btn.setEnabled(count == 1)
+        self.review_merchant_btn.setEnabled(count == 1)
+        self.review_merchant_action.setEnabled(count == 1)
         self.bulk_actions.setVisible(count > 0)
         self.selected_lbl.setText(f"{count} transaction{'s' if count != 1 else ''} selected")
         self.scope_note.setText('Category changes will also be remembered for future imports.'
@@ -1074,6 +1082,10 @@ class TransactionsPage(QWidget):
         menu = QMenu(self)
         menu_store = self.store
         if len(ids) == 1:
+            action = menu.addAction('Review same name…')
+            action.triggered.connect(lambda _checked=False, tx_id=ids[0]:
+                self._for_store(menu_store, lambda: self._review_merchant(tx_id)))
+            menu.addSeparator()
             rows = self._df[self._df["id"] == ids[0]] if not self._df.empty else pd.DataFrame()
             if rows.empty:
                 menu.deleteLater()
@@ -1171,6 +1183,23 @@ class TransactionsPage(QWidget):
         finally:
             if dlg is not None:
                 dlg.deleteLater()
+            self._refresh_after_action()
+
+    def _review_selected_merchant(self):
+        ids = self._selected_ids()
+        if len(ids) == 1:
+            self._review_merchant(ids[0])
+
+    def _review_merchant(self, transaction_id):
+        dialog = None
+        try:
+            dialog = MerchantReviewDialog(self.store, transaction_id, self._cats, self)
+            dialog.exec()
+        except Exception as exc:
+            self._show_action_error('Could not open matching transaction review', exc)
+        finally:
+            if dialog is not None:
+                dialog.deleteLater()
             self._refresh_after_action()
 
     def _apply_category(self) -> None:

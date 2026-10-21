@@ -638,6 +638,9 @@ class Store:
         from .import_matching import unseen_transactions
         from .learning import apply_chain, full_chain
         with self.con:
+            reviewed = self.con.execute(
+                'SELECT COUNT(*) FROM transactions WHERE account_id=? AND category_reviewed=1',
+                (account_id,)).fetchone()[0]
             for repair in repairs:
                 self.con.execute('UPDATE transactions SET date=?,transaction_date=?,posting_date=?,source_reference=?,date_basis=? WHERE id=?',
                     (repair['date'], repair['transaction_date'], repair['posting_date'],
@@ -647,6 +650,7 @@ class Store:
                 fresh = apply_chain(fresh, full_chain(self))
             added, _ = self.add_transactions(fresh, _commit=False)
             report = dict(report, added=added, skipped=len(df)-added,
+                          reviewed_preserved=reviewed,
                           corrected=sum(r['old_date'] != r['date'] for r in repairs))
             for key, value in ((f'import_map:{account_id}', mapping), (f'import_report:{account_id}', report)):
                 self.con.execute('INSERT OR REPLACE INTO settings (key,value) VALUES (?,?)',
@@ -730,9 +734,12 @@ class Store:
     @undoable("Recategorise transactions")
     def set_category(self, tx_ids: list[int], category: str,
                      source: str = 'manual', reason: str = '') -> None:
+        # Enforce this at the write boundary, even if an automatic caller has
+        # an old selection or forgets to filter out human-reviewed entries.
+        protection = '' if source == 'manual' else ' AND category_reviewed=0'
         self.con.executemany(
             "UPDATE transactions SET category=?,category_source=?,category_reason=?,"
-            "category_reviewed=?,category_reviewed_at=? WHERE id=?",
+            "category_reviewed=?,category_reviewed_at=? WHERE id=?" + protection,
             [(category, source, reason, int(source == 'manual'),
               datetime.now().isoformat(timespec='microseconds') if source == 'manual' else None,
               int(i)) for i in tx_ids],
@@ -742,9 +749,10 @@ class Store:
     @undoable("Recategorise transactions")
     def set_categories_bulk(self, ids_to_cat: dict[int, str], source: str = 'manual',
                             reasons: dict[int, str] | None = None) -> None:
+        protection = '' if source == 'manual' else ' AND category_reviewed=0'
         self.con.executemany(
             "UPDATE transactions SET category=?,category_source=?,category_reason=?,"
-            "category_reviewed=?,category_reviewed_at=? WHERE id=?",
+            "category_reviewed=?,category_reviewed_at=? WHERE id=?" + protection,
             [(c, source, (reasons or {}).get(i, ''), int(source == 'manual'),
               datetime.now().isoformat(timespec='microseconds') if source == 'manual' else None,
               int(i)) for i, c in ids_to_cat.items()],

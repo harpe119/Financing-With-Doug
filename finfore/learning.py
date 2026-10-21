@@ -126,12 +126,17 @@ def predict_one(chain: list[CategoryModel], description: str,
 
 
 def apply_chain(df: pd.DataFrame, chain: list[CategoryModel]) -> pd.DataFrame:
-    """Add/overwrite a 'category' column using the model chain."""
+    """Categorize automatic entries while retaining human-reviewed decisions."""
     out = df.copy()
+    protected = (out.category_reviewed.fillna(0).eq(1) if 'category_reviewed' in out
+                 else pd.Series(False, index=out.index))
+    pending = out.loc[~protected]
     decisions = [explain_category(chain, d, a)
-                 for d, a in zip(out["description"], out["amount"])]
+                 for d, a in zip(pending["description"], pending["amount"])]
     for i, column in enumerate(("category", "category_source", "category_reason")):
-        out[column] = [decision[i] for decision in decisions]
+        if column not in out:
+            out[column] = 'manual' if column == 'category_source' else ''
+        out.loc[~protected, column] = [decision[i] for decision in decisions]
     return out
 
 

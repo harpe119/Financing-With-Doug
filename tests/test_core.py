@@ -2994,6 +2994,16 @@ def main() -> None:
     if not run_category_review_tests().wasSuccessful():
         raise AssertionError('category review regressions failed')
 
+    print('same-name merchant review and per-transaction scope regressions')
+    from test_merchant_review import run_tests as run_merchant_review_tests
+    if not run_merchant_review_tests().wasSuccessful():
+        raise AssertionError('merchant review regressions failed')
+
+    print('bank cash, goal commitments and shared forecast chart regressions')
+    from test_forecast_cash_views import run_tests as run_cash_view_tests
+    if not run_cash_view_tests().wasSuccessful():
+        raise AssertionError('forecast cash view regressions failed')
+
     print('calculation reuse and invalidation regressions')
     from test_performance import run_tests as run_performance_tests
     if not run_performance_tests().wasSuccessful():

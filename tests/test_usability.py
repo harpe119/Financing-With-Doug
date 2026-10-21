@@ -1523,6 +1523,7 @@ class WorkflowTests(unittest.TestCase):
         load_demo(self.win.store, "balanced")
         self.win.show_page("Forecast")
         page = self.fc
+        page.view_pick.setCurrentIndex(page.view_pick.findData("both"))
         before = [plot.viewRange() for plot in (page.plot_cash, page.plot_nw)]
         page.extra_invest.setValue(1_000_000)
         page.run()

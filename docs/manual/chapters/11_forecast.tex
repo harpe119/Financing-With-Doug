@@ -16,6 +16,8 @@ The displayed percentile curves summarize simulated paths at each date. P50 is t
 
 Cash and net worth answer different questions. Investment growth can improve net worth while contributions reduce cash. Debt repayment reduces cash and debt together, with interest affecting the result. Review both quantities before interpreting an improvement in one as increased room to pay a bill.
 
+In Everything view, choose \ui{Cash + net worth} to place both measures on one graph with a shared date axis and dollar axis. Blue represents cash; green represents net worth. The Show control can also isolate either measure. Changing the displayed measures preserves the current axes; use \ui{Reset axes} to fit the selected data.
+
 \section{Check data quality as evidence}
 The review identifies matters such as old or future-dated balance observations, old transactions, a short history, apparently empty months, uncertain categories, and scheduled outflows without an assigned account. Open the relevant records and compare them with statements.
 
@@ -41,6 +43,12 @@ With Goals funding enabled, saved budget amounts replace the corresponding month
 The Goals ladder supplies loan payments, including existing obligations, allocated extras, and payment rollovers. Separate extra-loan and rollover controls are disabled in this mode to avoid conflicting decisions. Other scenario adjustments remain additional assumptions. Without this mode, Forecast uses its independent extra-loan and rollover controls.
 
 Goal earmarks retain their cash or investment holdings. Their schedule describes intended allocations; it does not create a sale, transfer, or future purchase. The forecast can therefore improve because a budget lowers spending while an earmark by itself changes no cash path.
+
+Under Goals, \ui{Cash to show} selects \ui{Bank cash} or \ui{Free cash after goal funding}. Bank cash includes money set aside for goals. Free cash subtracts recorded cash earmarks and, with Goals funding enabled, planned additions to savings goals and the monthly Plan's irregular-expense reserve. For example, putting \money{200} aside for a vacation reduces free cash by \money{200}, while bank cash and net worth retain that money. Reducing spending increases bank cash under the same income and payment assumptions.
+
+Future savings-goal allocations are reserved on each future first of the month; the irregular-expense reserve accumulates daily at its monthly amount divided by 30.44. Goal savings without a recorded account are conservatively treated as cash claims. Earmarks in investment accounts do not reduce cash, and cash or net-worth balance milestones do not create additional earmarks. Recorded purchases remain goal progress rather than cash still reserved. Free cash can be negative when the intended commitments exceed cash holdings; this alone does not mean the bank balance is negative.
+
+Cash-shortfall warnings always use bank cash, regardless of this display choice. Historical bank cash and bank-cash buffer lines are hidden in the free-cash view because they describe a different quantity. The display choice is saved separately for each database and does not change the funding plan.
 
 \section{Add a hypothetical expense or income}
 Expand What-if events. Enter a recognizable name, the amount per occurrence, and its date. A negative amount represents a cost and a positive amount represents income. Choose Once or a repeat interval and, for a repeating event, an optional inclusive end date.

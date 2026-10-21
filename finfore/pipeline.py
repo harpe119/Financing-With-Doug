@@ -85,7 +85,11 @@ def reimport_with_saved_mapping(store: Store, account_id: int,
 def import_summary(store, account_id):
     r = store.get_setting(f'import_report:{account_id}', {})
     pending = r.get('pending', [])
+    review = (f"Previously reviewed entries kept: {r['reviewed_preserved']}. "
+              f"New entries to review: {r.get('added', 0)}. "
+              if 'reviewed_preserved' in r else '')
     return (f"Posted transactions added: {r.get('added', 0)}. Already imported: {r.get('skipped', 0)}. "
+            + review +
             f"Older posting dates corrected: {r.get('corrected', 0)}. "
             f"Unposted entries excluded from balances: {len(pending)}. "
             f"Cancelled/declined entries: {r.get('excluded', 0)}. Zero amounts: {r.get('zero', 0)}.")

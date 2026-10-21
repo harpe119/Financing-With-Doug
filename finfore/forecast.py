@@ -97,6 +97,20 @@ class ForecastResult:
     goal_plan_budget: float | None = None
     spending_plan_applied: bool = False
     scheduled: list["ScheduledFlow"] = field(default_factory=list)
+    # Earmarks change what is available to spend, not the bank balance or net
+    # worth. Keep them separate so every cash-risk measure still uses holdings.
+    reserved_cash: np.ndarray | None = None
+
+    @property
+    def free_cash_det(self) -> np.ndarray:
+        return self.cash_det - (self.reserved_cash if self.reserved_cash is not None else 0.0)
+
+    @property
+    def free_cash_pct(self) -> dict[int, np.ndarray]:
+        reserved = self.reserved_cash if self.reserved_cash is not None else 0.0
+        # The allocation schedule is deterministic, so translating each
+        # percentile is equivalent to translating the underlying cash paths.
+        return {p: values - reserved for p, values in self.cash_pct.items()}
 
 
 def token_set(s: str) -> set[str]:
@@ -488,6 +502,38 @@ def _goal_payment_plan(store, required, horizon_months):
              for t in targets(store)]
     return build_plan(store, target_overrides=items, surplus=store.get_setting('plan_surplus'),
                       horizon_months=max(PLAN_HORIZON_MONTHS, horizon_months))
+
+
+def _reserved_cash(store, dates, goal_plan, spending_plan) -> np.ndarray:
+    """Recorded cash earmarks plus intended future savings, without outflows.
+
+    Unlocated savings are conservatively treated as cash claims. Located
+    investment holdings stay outside cash. Balance milestones overlap household
+    holdings and do not create a second earmark. Purchases already recorded are
+    progress toward the target, not money still reserved.
+    """
+    from .funding import goal_buckets
+    investments = {a.id for a in store.accounts() if a.type == AccountType.INVESTMENT}
+    reserved = sum(amount for g in store.goals() if g.kind == 'savings'
+                   for aid, amount in goal_buckets(store, g.id).items()
+                   if aid not in investments)
+    result = np.full(len(dates), reserved, dtype=float)
+    if spending_plan is not None:
+        # Match the daily treatment of budget amounts without a bill date.
+        result += np.arange(len(dates)) * spending_plan.amounts['reserve'] / 30.44
+    if goal_plan is not None:
+        firsts = month_firsts_between(dates[0], dates[-1])
+        for allocation in goal_plan.allocations:
+            target = allocation.target
+            if target.kind != 'goal' or target.goal_kind != 'savings':
+                continue
+            progress = goal_plan.progress[target.key]
+            previous = target.progress
+            for when, fraction in zip(firsts, progress):
+                funded = target.amount * fraction
+                result[(when - dates[0]).days:] += max(0.0, funded - previous)
+                previous = funded
+    return result
 
 
 @cached_read
@@ -954,6 +1000,9 @@ def run_forecast(store: Store, horizon_days: int, n_paths: int,
         scheduled=sorted(scheduled, key=lambda flow: (flow.when, flow.amount)),
         monthly_income_reference=monthly_income_reference,
         monthly_spending_reference=monthly_spending_reference,
+        # Past cutoffs must not inherit today's earmarks or saved budget.
+        reserved_cash=(_reserved_cash(store, dates, goal_plan, spending_plan)
+                       if as_of is None else np.zeros(n)),
     )
 
 

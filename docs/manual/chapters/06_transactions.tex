@@ -14,6 +14,8 @@ The review state alongside a description distinguishes confirmed entries from en
 
 Changing a category or confirming it records a human review. Financial amounts and category changes are different operations; a correct category cannot compensate for an incorrect sign or a missing transaction.
 
+Importing an overlapping CSV retains existing categories, review status, review dates, and one-off business decisions. The import summary distinguishes previously reviewed entries kept from new entries needing review. A remembered category can classify a new purchase, but that new transaction remains unreviewed until confirmed. Automatic category updates cannot replace a human-reviewed decision.
+
 \section{Keep one-off decisions separate from merchant rules}
 By default, a correction applies to the selected entries. Enable the preference for remembering category changes only when the merchant should normally use that category in future imports. A grocery order from a general retailer does not establish that all purchases from that retailer are groceries.
 
@@ -25,6 +27,12 @@ Several rows can be reviewed or corrected together. Inspect the selection before
 The uncategorized-merchant review tool groups candidate records by merchant. Select a merchant to inspect the affected transactions and choose a category. Suggestions begin unselected; their presence is not an instruction to accept them.
 
 The default scope concerns unknown records in the chosen period. An option can extend the review to older matching entries. Known or human-reviewed entries are preserved by that flow. Check the proposed number of merchants and transactions before saving, and distinguish a purchase from an incoming payment with a similar description.
+
+For a name that already has a category, select one transaction and choose \ui{Review same name}. The action appears beside Mark reviewed, in Tools, and in the row's context menu. Its preview lists exact matching names across all accounts and dates, ignoring case and extra spaces. Store numbers and other changes to the name remain distinct. Existing reviews are locked and preserved.
+
+Only unreviewed entries in the selected transaction's category start checked. Choose the category for the checked entries, inspect their dates and accounts, and uncheck exceptions before applying the review. \ui{Select this category} adds matching categories to the selection; \ui{Select uncategorized} adds entries without a resolved category; \ui{Clear selection} removes the checks. For example, Chipotle purchases can be reviewed together as Dining. Delta purchases classified as Travel and Business (reimbursable) can be reviewed in separate selections without changing each other's categories.
+
+Remembering is off by default. Remembered rules can also match variants of a merchant's name beyond the exact-name preview. If those rule matches include conflicting categories, business entries, or a mixed reimbursement, this preview cannot create a future-import rule. Checking or correcting the selected transactions still records their individual reviews. Applying a batch is one undoable action; changing a transaction after the preview was opened requires the preview to be reloaded before that selection can be saved.
 
 Similarity scores measure the match produced by the method; they are not calibrated probabilities that a category is correct. A close name match with conflicting previous labels is a reason for further review.
 
@@ -47,5 +55,5 @@ The reviewed-data export is a local CSV for subsequent examination. It contains 
 
 The export covers the relevant ledger rather than only the rows currently visible through display filters. Exporting does not train a model or send records to a service. The file still contains financial descriptions, so choose and protect its location accordingly.
 
-\source{finfore/ui/transactions.py; finfore/categorize.py; finfore/learning.py; finfore/store.py}
+\source{finfore/ui/transactions.py; finfore/ui/merchant_review.py; finfore/categorize.py; finfore/learning.py; finfore/store.py}
 

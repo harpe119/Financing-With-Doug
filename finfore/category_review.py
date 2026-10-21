@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import date
+import unicodedata
 
 import pandas as pd
 import numpy as np
@@ -15,6 +16,33 @@ SOURCES = {'legacy': 'Older category', 'keyword': 'Keyword rule',
     'transfer_pair': 'Possible transfer', 'manual': 'Reviewed by you',
     'model': 'Model suggestion'}
 ATTENTION = {'legacy', 'fallback', 'similarity', 'broad_merchant', 'transfer_pair', 'model'}
+
+
+def merchant_name(description: str) -> str:
+    """Exact name matching, allowing only case and whitespace differences."""
+    return ' '.join(unicodedata.normalize('NFC', str(description)).casefold().split())
+
+
+def matching_merchant_transactions(store, transaction_id: int) -> pd.DataFrame:
+    tx = store.transactions()
+    source = tx.loc[tx.id.eq(transaction_id)]
+    if source.empty:
+        raise ValueError('The selected transaction no longer exists. Refresh the ledger and select it again.')
+    key = merchant_name(source.iloc[0].description)
+    if not key:
+        raise ValueError('This transaction has no merchant name to match.')
+    return tx.loc[tx.description.map(merchant_name).eq(key)].sort_values(
+        ['date', 'id'], ascending=False).copy()
+
+
+def merchant_rule_transactions(store, transaction_ids) -> pd.DataFrame:
+    """The broader name and payment-direction matches a remembered rule uses."""
+    from .learning import feedback_key
+    tx = store.transactions()
+    selected = tx.loc[tx.id.isin(transaction_ids)]
+    keys = {feedback_key(row.description, row.amount) for row in selected.itertuples()}
+    mask = [feedback_key(row.description, row.amount) in keys for row in tx.itertuples()]
+    return tx.loc[mask].copy()
 
 
 def needs_attention(tx: pd.DataFrame) -> pd.Series:
