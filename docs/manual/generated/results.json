@@ -2,9 +2,9 @@
   "values": {
     "GoalHeldBefore": "4,000.00",
     "HouseHeldAfter": "1,300.00",
-    "BaseFinal": "17,684.20",
-    "PlanFinal": "18,698.15",
-    "ForecastWeeks": "53",
+    "BaseFinal": "17,811.38",
+    "PlanFinal": "19,124.24",
+    "ForecastWeeks": "54",
     "ForecastPaths": "600"
   },
   "checks": [
@@ -24,7 +24,7 @@
   "qualification": {
     "check": "opening net worth with a $250 credit-card debt",
     "ledger_networth": 750.0,
-    "forecast_networth": 1000.0,
-    "difference": 250.0
+    "forecast_networth": 750.0,
+    "difference": 0.0
   }
 }

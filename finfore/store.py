@@ -397,8 +397,24 @@ class Store:
 
     @undoable("Delete account")
     def delete_account(self, account_id: int) -> None:
-        self.con.execute("DELETE FROM accounts WHERE id=?", (account_id,))
-        self.con.commit()
+        # SQLite reuses the highest id, so state keyed by this id would attach
+        # itself to the next account added: its import mapping, suppressed
+        # rows, loan links and Goals priority.
+        key = f'loan:{account_id}'
+        order = [k for k in self.plan_order() if k != key]
+        allocations = {k: v for k, v in self.plan_allocations().items() if k != key}
+        with self.con:
+            self.con.execute("DELETE FROM accounts WHERE id=?", (account_id,))
+            self.con.execute("DELETE FROM suppressed WHERE account_id=?", (account_id,))
+            self.con.execute("UPDATE recurring SET linked_account_id=NULL WHERE linked_account_id=?",
+                             (account_id,))
+            self.con.executemany("DELETE FROM settings WHERE key=?",
+                                 [(f'{name}:{account_id}',) for name in
+                                  ('import_map', 'import_report', 'prehistory')])
+            self.con.executemany(
+                "INSERT INTO settings(key,value) VALUES (?,?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                [('plan_order', json.dumps(order)), ('plan_allocations', json.dumps(allocations))])
 
     def accounts(self) -> list[Account]:
         rows = self.con.execute("SELECT * FROM accounts ORDER BY id").fetchall()
@@ -1017,11 +1033,13 @@ class Store:
     @undoable("Delete goal")
     def delete_goal(self, goal_id: int) -> None:
         order = [key for key in self.plan_order() if key != f'goal:{goal_id}']
+        allocations = {k: v for k, v in self.plan_allocations().items() if k != f'goal:{goal_id}'}
         with self.con:
             self.con.execute("DELETE FROM goals WHERE id=?", (goal_id,))
-            self.con.execute(
-                "INSERT INTO settings(key,value) VALUES ('plan_order',?) "
-                "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (json.dumps(order),))
+            self.con.executemany(
+                "INSERT INTO settings(key,value) VALUES (?,?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                [('plan_order', json.dumps(order)), ('plan_allocations', json.dumps(allocations))])
 
     def goals(self) -> list[Goal]:
         rows = self.con.execute("SELECT * FROM goals ORDER BY amount").fetchall()

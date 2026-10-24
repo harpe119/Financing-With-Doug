@@ -187,6 +187,15 @@ def delete_activity(store, activity_id):
     if saved < -.005 or spent < -.005 or any(v < -.005 for v in buckets.values()):
         raise ValueError('Later activity depends on this entry: some of this money was since '
                          'spent, released or moved. Delete that later activity first.')
+    if action == 'release':
+        # Undoing a release claims the money again, so it must still be
+        # unclaimed, exactly as a new contribution must. A purchase is different:
+        # its money has usually left the account already.
+        capacities, free = funding_capacity(store)
+        if value > max(0.0, free) + .005 or (
+                aid is not None and value > max(0.0, capacities.get(aid, 0.0)) + .005):
+            raise ValueError('This money is no longer free: other goals or spending now use '
+                             'it. Release it from another goal or check the account balance first.')
     with store.con:
         store.con.execute('DELETE FROM goal_activity WHERE id=?', (int(activity_id),))
         store.con.execute('UPDATE goals SET saved_amount=?,spent_amount=? WHERE id=?',

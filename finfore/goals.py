@@ -252,13 +252,20 @@ def build_plan(store, policy: str | None = None,
     policy = policy or store.plan_policy()
     custom = custom if custom is not None else store.plan_allocations()
     items = targets(store) if target_overrides is None else target_overrides
-    if debt_budget is None and store.get_setting('spending_plan') is not None:
+    detected_debt = 0.0
+    if debt_budget is not None or store.get_setting('spending_plan') is not None:
         from .spending_plan import calculate_plan
-        debt_budget = calculate_plan(store).amounts['debt']
+        saved = calculate_plan(store)
+        detected_debt = saved.detected['debt']
+        if debt_budget is None:
+            debt_budget = saved.amounts['debt']
     if debt_budget is not None:
         loans = [t for t in items if t.kind == LOAN and not t.complete]
         minimum = sum(t.required for t in loans)
-        extra = max(0.0, debt_budget - minimum)
+        # Recorded debt payments can include debts that are not tracked loans,
+        # such as a card minimum. Only a budget above what is already paid is
+        # extra principal; an unchanged debt line must not invent prepayments.
+        extra = max(0.0, debt_budget - max(minimum, detected_debt))
         weights = minimum or sum(t.amount for t in loans)
         if extra and weights:
             items = [replace(t, required=t.required + extra *
@@ -523,10 +530,10 @@ def _cut_candidates(store) -> list[Cut]:
     it is certainly essential and the app simply does not know which.
     """
     from .categorize import categorize
-    from .insights import SUBSCRIPTION_CAT, bucket_of, category_monthly
+    from .insights import bucket_of, category_monthly
 
     cuts: list[Cut] = []
-    seen_recurring = 0.0
+    seen_recurring: dict[str, float] = {}
     from .recurrence import personal_recurring
     for it in personal_recurring(store.transactions(), store.recurring()):
         if not it.active or it.amount >= 0 or it.kind in ("ignore", "loan_payment"):
@@ -540,8 +547,7 @@ def _cut_candidates(store) -> list[Cut]:
         cuts.append(Cut(name=it.name.title(), monthly=amount,
                         bucket="frivolous", source="subscription",
                         recurring=True))
-        if cat == SUBSCRIPTION_CAT:
-            seen_recurring += amount
+        seen_recurring[cat] = seen_recurring.get(cat, 0.0) + amount
 
     # Whole categories, minus whatever the named recurring items already cover,
     # so a $16 streaming charge is not counted once by name and again inside
@@ -551,7 +557,7 @@ def _cut_candidates(store) -> list[Cut]:
         b = bucket_of(cat)
         if b not in ("frivolous", "unknown"):
             continue
-        rest = amount - (seen_recurring if cat == SUBSCRIPTION_CAT else 0.0)
+        rest = amount - seen_recurring.get(cat, 0.0)
         if rest < 5.0:
             continue
         cuts.append(Cut(name=cat, monthly=rest, bucket=b, source="category"))

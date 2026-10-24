@@ -379,13 +379,25 @@ class ImportDialog(QDialog):
             self._grow()
             return
         n = len(df)
+        report = df.attrs.get("import_report", {})
+        pending = len(report.get("pending", []))
+        if df.empty:
+            # Nothing posted to import: there are no dates to describe, so say
+            # which rows were left out and why.
+            skipped = [f"{count:,} {what}" for count, what in (
+                (pending, "still pending"), (report.get("excluded", 0), "cancelled or declined"),
+                (report.get("zero", 0), "for $0")) if count]
+            self.read_summary.setText("0 transactions to import"
+                                      + (" · left out: " + ", ".join(skipped) if skipped else ""))
+            self.read_table.setRowCount(0)
+            self.read_table.hide()
+            return
         out_rows = int((df["amount"] < 0).sum())
         in_rows = int((df["amount"] > 0).sum())
         first, last = df["date"].min(), df["date"].max()
         summary = (f"{n:,} transaction{'s' if n != 1 else ''}"
                    f" · {first:%b} {first.day}, {first.year} to {last:%b} {last.day}, {last.year}"
                    f" · {out_rows:,} money out, {in_rows:,} money in")
-        pending = len(df.attrs.get("import_report", {}).get("pending", []))
         if pending:
             summary += f" · {pending:,} still pending, left out"
         self.read_summary.setText(summary)

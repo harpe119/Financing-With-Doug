@@ -144,13 +144,35 @@ def guess_mapping(columns: list[str],
     rest = [c for c in columns if c != g["indicator"]]
     g["debit"] = _match(rest, _DEBIT_HDRS)
     g["credit"] = _match(rest, _CREDIT_HDRS)
-    # 'balance' must never be mistaken for the amount
-    if g["amount"] and "balance" in g["amount"].lower():
+    # 'balance' must never be mistaken for the amount, nor may a date column
+    # ("Value Date" substring-matches "value")
+    if g["amount"] and ("balance" in g["amount"].lower() or "date" in g["amount"].lower()):
         g["amount"] = ""
     return g
 
 
 _num_re = re.compile(r"[^0-9.,]")
+_lead_re = re.compile(r"^[^\d(+\-.,]+")       # currency code or symbol before a sign
+_trail_re = re.compile(r"[^\d)\-.,]+$")
+_numeric_date_re = re.compile(r"^\s*(\d{1,2})[/.\-](\d{1,2})[/.\-]\d{2,4}\b")
+
+
+def parse_dates(values: pd.Series, dayfirst: bool) -> pd.Series:
+    """Parse a date column, refusing one read in the wrong day/month order.
+
+    Mixed formats are allowed, but ``format="mixed"`` parses each cell alone,
+    so 13/01 became 13 January while 05/02 stayed 2 May: the order was
+    silently swapped row by row instead of reported.
+    """
+    parts = values.astype(str).str.extract(_numeric_date_re).dropna().astype(int)
+    if len(parts):
+        if not dayfirst and (parts[0] > 12).any():
+            raise ValueError("Some dates only make sense day first (for example 31/12). "
+                             "Select Day-first dates and try again.")
+        if dayfirst and (parts[1] > 12).any():
+            raise ValueError("Some dates only make sense month first (for example 12/31). "
+                             "Clear Day-first dates and try again.")
+    return pd.to_datetime(values, errors="coerce", dayfirst=dayfirst, format="mixed")
 _NULLS = frozenset({"nan", "none", "null", "n/a", "na", "-", "--", "."})
 
 
@@ -169,6 +191,9 @@ def parse_amount(s) -> float:
     if t == "" or t.lower() in _NULLS:
         return float("nan")
 
+    # A currency code or symbol around the number must not hide its sign:
+    # '$-45.00', '$(45.00)' and 'USD -45.00' are all negative.
+    t = _trail_re.sub("", _lead_re.sub("", t)).strip()
     neg = False
     if t.startswith("(") and t.endswith(")"):
         neg, t = True, t[1:-1].strip()
@@ -225,14 +250,12 @@ def parse_transactions(cfg: ImportConfig) -> pd.DataFrame:
         if not col or col not in raw.columns:
             raise ValueError(f"Select which column holds the {label}.")
 
-    dates = pd.to_datetime(raw[cfg.col_date], errors="coerce",
-                           dayfirst=cfg.dayfirst, format="mixed")
+    dates = parse_dates(raw[cfg.col_date], cfg.dayfirst)
     guessed = guess_mapping(list(raw.columns), raw.head(50))
     def text_column(name):
         return raw[name].astype(str).str.strip() if name in raw else pd.Series('', index=raw.index)
     transaction_col = cfg.col_transaction_date or guessed['transaction_date']
-    transaction_dates = pd.to_datetime(text_column(transaction_col), errors='coerce',
-                                      dayfirst=cfg.dayfirst, format='mixed')
+    transaction_dates = parse_dates(text_column(transaction_col), cfg.dayfirst)
     status = text_column(cfg.col_status or guessed['status']).str.casefold()
     pending = status.isin({'pending', 'authorized', 'authorised', 'authorization', 'unposted', 'processing'})
     # A blank posting date is unposted, not a reason to silently use purchase
@@ -331,7 +354,7 @@ def parse_snapshots(path: str, col_date: str, col_balance: str,
     raw = read_raw(path, delimiter)
     if col_date not in raw.columns or col_balance not in raw.columns:
         raise ValueError("Pick both a date column and a balance column.")
-    dates = pd.to_datetime(raw[col_date], dayfirst=dayfirst, errors="coerce",format='mixed')
+    dates = parse_dates(raw[col_date], dayfirst)
     bals = raw[col_balance].map(parse_amount)
     invalid = dates.isna() | ~bals.map(math.isfinite)
     if invalid.any():

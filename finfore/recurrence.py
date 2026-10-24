@@ -218,7 +218,8 @@ def occurrences(item: RecurringItem, start: date, end: date) -> list[date]:
         for _ in range(0, 12 * 30):
             for dd in sorted((d1, d2)):
                 cand = clamp_day(y, m, dd)
-                if cand > last and start < cand <= end:
+                # A slot a few days after an early posting is the one it paid.
+                if (cand - last).days > 7 and start < cand <= end:
                     out.append(cand)
             nxt = add_months(date(y, m, 1), 1)
             y, m = nxt.year, nxt.month
@@ -227,7 +228,15 @@ def occurrences(item: RecurringItem, start: date, end: date) -> list[date]:
     else:
         step_months = {"monthly": 1, "quarterly": 3, "annual": 12}[item.cadence]
         dom = item.days_of_month[0] if item.days_of_month else last.day
-        d = last
+        # Step from the due-day slot the last posting belongs to. A month-end
+        # payday posted on the 2nd otherwise stepped past the next month-end.
+        d = clamp_day(last.year, last.month, dom)
+        if (last - d).days > 15:
+            nxt = add_months(date(last.year, last.month, 1), 1)
+            d = clamp_day(nxt.year, nxt.month, dom)
+        elif (d - last).days > 15:
+            prv = add_months(date(last.year, last.month, 1), -1)
+            d = clamp_day(prv.year, prv.month, dom)
         while True:
             nxt = add_months(d, step_months)
             d = clamp_day(nxt.year, nxt.month, dom)

@@ -476,10 +476,10 @@ class SnapshotManagerDialog(QDialog):
         sid = self._selected_id()
         if sid is None:
             return
-        r = self.table.currentRow()
-        cur_date = date.fromisoformat(self.table.item(r, 0).text())
+        # The cell shows a formatted date; read the stored one.
         df = self.store.snapshots(self.account.id)
-        cur_bal = float(df.loc[df["id"] == sid, "balance"].iloc[0])
+        row = df.loc[df["id"] == sid].iloc[0]
+        cur_date, cur_bal = pd.Timestamp(row["date"]).date(), float(row["balance"])
         dlg = SnapshotEntryDialog(self, when=cur_date, balance=cur_bal)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             d, bal = dlg.get_values()
@@ -844,9 +844,13 @@ class UpdateBalanceDialog(QDialog):
         form = QFormLayout()
         form.setSpacing(12)
         lay.addLayout(form)
-        self.balance = _money_spin(0 if owed else -1e9)
+        # A card can be in credit after a refund or overpayment: a negative
+        # amount owed. Only a loan is floored at zero.
+        self.balance = _money_spin(0 if account.type == AccountType.LOAN else -1e9)
         shown = -account.balance if account.type == AccountType.CREDIT else account.balance
         self.balance.setValue(shown)
+        if account.type == AccountType.CREDIT:
+            self.balance.setToolTip("Enter a negative amount if the card is in credit.")
         label = QLabel("Amount owed" if owed else 'Balance at end of day' if account.type.is_cashlike else "Balance")
         label.setBuddy(self.balance)
         form.addRow(label, self.balance)

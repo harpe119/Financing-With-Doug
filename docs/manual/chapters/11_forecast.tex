@@ -9,7 +9,7 @@ With less than four weeks of history the headline says it is too early to say wh
 
 The model begins from current reconstructed holdings. It replays scheduled flows, models debt payments and investment changes, and samples eligible historical weeks for variable spending and irregular income. The calculation methods are developed in Chapter~\ref{ch:forecast-methods}. The visible result is conditional on these inputs, not a statement that every future cost is known.
 
-For an account carrying card debt, also read the recorded opening net-worth qualification in Chapter~\ref{ch:forecast-methods}. The inspected forecast omits that negative card position from opening net worth. Compare the account components before treating the displayed total as the household's complete position.
+Card debt is included in projected net worth and held at its current balance; card interest and repayment are not modeled. Card payments made from a checking account remain cash outflows. See the opening net-worth check in Chapter~\ref{ch:forecast-methods}.
 
 \section{Read the curve and bands}
 The displayed percentile curves summarize simulated paths at each date. P50 is the median at that date. P10--P90 spans the central 80\% of modeled values at that date, while P25--P75 spans the central 50\%. The bands do not mean that 80\% or 50\% of complete future trajectories must remain inside them at every date.
@@ -33,7 +33,7 @@ A quiet month can be legitimate. An old observation can still be moved forward b
 \item Use Reset scenario to restore temporary controls when finished.
 \end{enumerate}
 
-When Use Goals funding plan is enabled, the unchanged-controls curve omits the saved budget and Goals funding so their combined effect can be examined. Other active inputs, including saved hypothetical events, still require attention. The comparison is not necessarily a universal ``do nothing'' household baseline.
+When Use Goals funding plan is enabled, the unchanged-controls curve omits the saved budget and Goals funding so their combined effect can be examined. Other active inputs, including saved hypothetical events, still require attention. The comparison is not necessarily a universal ``do nothing'' household baseline. Extra loan payments, investment contributions and goal set-asides from the plan lower cash without lowering net worth; the comparison line under the chart names those amounts, so compare net worth for their full effect.
 
 The engine uses common random draws for comparable baseline and scenario runs. This reduces differences caused merely by drawing another random sample. It does not remove uncertainty about future behavior or establish that the proposed plan is achievable.
 

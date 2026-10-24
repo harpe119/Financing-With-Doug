@@ -175,9 +175,9 @@ def account_statuses(store, today: date | None = None) -> dict[int, AccountStatu
     if len(tx):
         tx = tx[tx["date"].notna()]
     try:
-        bad_names = {i.account for i in reconcile_all(store) if not i.ok}
+        bad_ids = {i.account_id for i in reconcile_all(store) if not i.ok}
     except Exception:
-        bad_names = set()
+        bad_ids = set()
     out: dict[int, AccountStatus] = {}
     for a in accounts:
         anchor, _ = cash_anchor(store, a)
@@ -187,7 +187,7 @@ def account_statuses(store, today: date | None = None) -> dict[int, AccountStatu
         level = "ok"
         if a.type.is_cashlike:
             rows = tx[tx["account_id"] == a.id] if len(tx) else tx
-            if a.name in bad_names:
+            if a.id in bad_ids:
                 reasons.append("Doesn’t add up")
                 level, fix = "caution", "check"
             elif rows is None or len(rows) == 0:

@@ -364,8 +364,10 @@ class ProgressPage(QWidget):
         if box.clickedButton() is not go:
             return
         n_tx = len(self.store.transactions())
-        for c in cps:
-            self.store.delete_checkpoint(c.id)
+        # One Undo brings them all back.
+        with self.store.undo_group("Clear checkpoints"):
+            for c in cps:
+                self.store.delete_checkpoint(c.id)
         self.refresh()
         self.main.refresh_header()
         self.main.status(

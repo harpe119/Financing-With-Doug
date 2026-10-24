@@ -182,6 +182,8 @@ class LedgerIssue:
     minimum: float = 0.0
     minimum_date: date | None = None
     snapshot_gaps: list = field(default_factory=list)
+    # Names need not be unique; the id is the account's identity.
+    account_id: int | None = None
 
     @property
     def if_opened_at_zero(self) -> float:
@@ -319,7 +321,8 @@ def reconcile_all(store: Store) -> list[LedgerIssue]:
             inflow=float(sub.loc[sub["amount"] > 0, "amount"].sum()),
             outflow=float(-sub.loc[sub["amount"] < 0, "amount"].sum()),
             kind=a.type.label, allow_overdraft=a.allow_overdraft,
-            minimum=round(float(line.min()),2), minimum_date=line.idxmin().date(),snapshot_gaps=gaps))
+            minimum=round(float(line.min()),2), minimum_date=line.idxmin().date(),snapshot_gaps=gaps,
+            account_id=a.id))
     return out
 
 
@@ -570,12 +573,17 @@ def weekly_category_matrix(tx: pd.DataFrame, exclude_keys: set[str],
         f"{normalize_desc(d)}|{'+' if a > 0 else '-'}"
         for d, a in zip(df["description"], df["amount"])
     ]
+    span = df["date"].min(), df["date"].max()
+    covered = set(df["date"].dt.to_period("W-SUN"))
     df = df[~df["norm_key"].isin(exclude_keys)]
     if df.empty and not bounded:
         return pd.DataFrame(), pd.Series(dtype=float)
     df["week"] = df["date"].dt.to_period("W-SUN")
     if not bounded:
-        weeks = sorted(df["week"].unique())
+        # Every week the ledger covers, so a week with only bills counts as $0
+        # of variable spending instead of vanishing and overstating the
+        # average. A week with no rows at all is an import gap, not a $0 week.
+        weeks = [w for w in pd.period_range(span[0], span[1], freq="W-SUN") if w in covered]
         if len(weeks) > 2:
             weeks = weeks[1:-1]           # drop partial edge weeks
     df = df[df["week"].isin(weeks)]

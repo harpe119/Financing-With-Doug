@@ -91,7 +91,7 @@ class SpendingCharts(QWidget):
                         ("Spending", theme.RED, mc["spending"].values)],
                 label=lambda ts: pd.Timestamp(ts, unit="s").strftime("%B %Y"),
                 tolerance=86400.0 * 16)
-            full = mc[mc["month_start"] < pd.Timestamp.today().replace(day=1)]
+            full = mc[mc["month_start"] < pd.Timestamp.today().normalize().replace(day=1)]
             full = full.tail(3)
             if len(full):
                 self.flow_summary = (

@@ -52,7 +52,10 @@ class SpendingPlan:
 
     @property
     def expenses(self) -> float:
-        return round(sum(self.amounts[k] for k in LABELS if k != "income"), 2)
+        # Loan obligations are paid whatever the override says; budgeting less
+        # would hand the same dollars to the goal allowance as well.
+        return round(sum(max(self.amounts[k], self.required_debt) if k == "debt"
+                         else self.amounts[k] for k in LABELS if k != "income"), 2)
 
     @property
     def available(self) -> float:
@@ -101,15 +104,52 @@ def calculate_plan(store, overrides: dict | None = None) -> SpendingPlan:
     return SpendingPlan(detected, amounts, values, required, details)
 
 
-def forecast_targets(plan, references):
-    """Distribute monthly group totals across categories without counting twice.
+def planned_line(plan, key, reference):
+    """The forecast's monthly amount for one budget line.
 
-    Explicit total overrides take precedence over category amounts. Within a
-    total, use the plan's category mix (or the forecast mix without history).
+    The plan and the forecast estimate the same habits differently (complete
+    months versus bills and recent weeks), so replacing the forecast's figure
+    with the plan's moved an unchanged line, and a cut could raise forecast
+    spending. A line the plan leaves alone keeps the forecast's reference. An
+    override with detected history moves it by the same dollars it moves the
+    plan, matching the allowance that cut frees. Without history on either
+    side, or at $0, the planned amount is taken as the whole budget.
+    """
+    if key not in plan.overrides:
+        return reference
+    amount, detected = plan.amounts[key], plan.detected[key]
+    if amount <= 0:
+        return 0.0
+    if detected <= 0 or reference <= 0:
+        return amount
+    return max(0.0, reference + amount - detected)
+
+
+def forecast_targets(plan, references):
+    """Planned monthly spending for the forecast categories the plan changes.
+
+    Explicit total overrides take precedence over category amounts. A changed
+    total scales its group's forecast mix; a total without detected history is
+    distributed using the plan's category mix (or the forecast mix). Categories
+    left out of the result keep their forecast reference.
     """
     result = {}
     for group in ('essential', 'frivolous', 'giving', 'unknown'):
         cats = {cat for cat in references if cat != 'Debt payment' and bucket_of(cat) == group}
+        if group not in plan.overrides:
+            for key, cat in CATEGORY_LABELS.items():
+                if category_group(key) == group and key in plan.overrides:
+                    result[cat] = planned_line(plan, key, references.get(cat, 0.0))
+            continue
+        current = {cat: references[cat] for cat in sorted(cats) if references[cat] > 0}
+        if plan.detected[group] > 0 or plan.amounts[group] <= 0:
+            total = planned_line(plan, group, sum(current.values()))
+            if current:
+                scale = total / sum(current.values())
+                result.update({cat: value * scale for cat, value in current.items()})
+            elif total > 0:
+                result[f'Planned {LABELS[group].lower()}'] = total
+            continue
         cats.update(cat for key, cat in CATEGORY_LABELS.items() if category_group(key) == group)
         if group == 'giving':
             cats.add('Charitable donation')

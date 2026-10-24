@@ -1080,7 +1080,7 @@ class WorkflowTests(unittest.TestCase):
         for label in page._goal_labels.values():
             self.assertTrue(label.wordWrap())
             self.assertIn("not a probability range", label.toolTip())
-        self.assertIn("$100/month", page.analysis_note.text())
+        self.assertIn("$200/month", page.analysis_note.text())
         self.assertIn("average inputs", page.analysis_note.text())
         self.assertEqual(page.e_amount.accessibleName(), "Event amount")
         with patch.object(page, "_render_tornado", side_effect=RuntimeError("internal detail")):
@@ -1473,7 +1473,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertNotIn("<h3>Sensitivity</h3>", page._nerd_panel()[1])
         page._run_analysis()
         self.assertTrue(page._sens)
-        self.assertIn("$100/month", page._nerd_panel()[1])
+        self.assertIn("$200/month", page._nerd_panel()[1])
 
     def test_forecast_busy_guard_prevents_reentrant_calculations(self):
         from finfore.ui import forecast_page

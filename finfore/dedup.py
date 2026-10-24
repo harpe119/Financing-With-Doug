@@ -155,9 +155,8 @@ def suggest(store: Store, account_id: int | None = None, *, window_days=WINDOW_D
         by_acct.setdefault(p.account_id, []).append(p)
 
     reports: list[DedupReport] = []
-    ids = {a.name: a.id for a in store.accounts()}
     for info in reconcile_all(store):
-        aid = ids.get(info.account)
+        aid = info.account_id
         if aid is None or (account_id is not None and aid != account_id):
             continue
         mine = by_acct.get(aid, [])

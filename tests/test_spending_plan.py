@@ -153,16 +153,106 @@ class SpendingPlanTests(unittest.TestCase):
         self.store.merge_recurring([
             RecurringItem('PAYROLL|+', 'Payroll', 'monthly', 3000, self.today, kind='income'),
             RecurringItem('NETFLIX|-', 'Netflix', 'monthly', -60, self.today)])
+        before = run_forecast(self.store, 90, 20).monthly_spending_reference
         self.save_budget(essential=0, frivolous=150, giving=0,
                          **{'category:Dining': 100, 'category:Subscriptions': 50})
         result = run_forecast(self.store, 90, 20, Scenario(follow_goal_plan=True))
         self.assertGreaterEqual(result.history_weeks, 4)
         self.assertEqual(result.monthly_income_reference, 4000)
-        self.assertAlmostEqual(result.monthly_spending_reference['Dining'], 100)
-        self.assertAlmostEqual(result.monthly_spending_reference['Subscriptions'], 50)
+        # The total's cut from detected history scales bills and sampled weeks
+        # alike, including the Netflix bill complete months have not seen.
+        detected = calculate_plan(self.store).detected['frivolous']
+        current = before['Dining'] + before['Subscriptions']
+        scale = (current + 150 - detected) / current
+        self.assertLess(scale, 1)
+        self.assertAlmostEqual(result.monthly_spending_reference['Dining'], before['Dining'] * scale)
+        self.assertAlmostEqual(result.monthly_spending_reference['Subscriptions'], 60 * scale)
         from finfore.recurrence import occurrences
         count = len(occurrences(self.store.recurring()[0], self.today, result.dates[-1]))
-        self.assertAlmostEqual(result.cash_det[-1], 5000 + count * (4000 - 50) - 100 * 90 / 30.44)
+        self.assertAlmostEqual(result.cash_det[-1], 5000 + count * (4000 - 60 * scale)
+                               - before['Dining'] * scale * 90 / 30.44)
+
+    def test_unchanged_plan_matches_forecast_and_each_cut_raises_it_dollar_for_dollar(self):
+        # Complete months and the forecast's paydays and recent weeks disagree:
+        # the plan detects less income and more dining than the forecast uses.
+        for month in range(1, 4):
+            start = add_months(self.today.replace(day=1), -month)
+            self.tx(3800, 'Income', start + timedelta(days=1), f'pay {month}')
+            self.tx(-400 + 50 * month, 'Utilities', start + timedelta(days=3), f'power {month}')
+        for week in range(1, 13):
+            self.tx(-40 - 5 * week, 'Dining', self.today - timedelta(weeks=week), f'dining {week}')
+        self.store.merge_recurring([
+            RecurringItem('PAYROLL|+', 'Payroll', 'biweekly', 2000, self.today, kind='income')])
+        baseline = run_forecast(self.store, 90, 20)
+        plan = calculate_plan(self.store)
+        self.assertGreater(abs(baseline.monthly_income_reference - plan.detected['income']), 100)
+        self.store.save_spending_plan({}, 0)
+        unchanged = run_forecast(self.store, 90, 20, Scenario(follow_goal_plan=True))
+        np.testing.assert_allclose(unchanged.cash_det, baseline.cash_det)
+        np.testing.assert_allclose(unchanged.networth_pct[50], baseline.networth_pct[50])
+        for key in ('category:Dining', 'category:Utilities'):
+            self.assertGreater(plan.detected[key], 50)
+            self.store.save_spending_plan({key: plan.detected[key] - 50}, 0)
+            cut = run_forecast(self.store, 90, 20, Scenario(follow_goal_plan=True))
+            self.assertAlmostEqual(cut.cash_det[-1] - baseline.cash_det[-1], 50 * 90 / 30.44,
+                                   places=6, msg=key)
+        self.store.save_spending_plan({'frivolous': plan.detected['frivolous'] - 50,
+                                       'income': plan.detected['income'] + 100}, 0)
+        both = run_forecast(self.store, 90, 20, Scenario(follow_goal_plan=True))
+        self.assertGreater(both.cash_det[-1], baseline.cash_det[-1])
+        self.assertAlmostEqual(both.monthly_income_reference,
+                               baseline.monthly_income_reference + 100)
+
+    def test_cash_comparison_names_extra_loan_payments_the_plan_moves_out_of_cash(self):
+        from finfore.ui.forecast_page import moved_money_note
+        loan = self.store.add_account(Account('Loan', AccountType.LOAN, 2000,
+            self.today, monthly_payment=100))
+        self.store.set_plan_order([f'loan:{loan}', f'goal:{self.gid}'])
+        self.save_budget(income=1000, essential=0, debt=100, frivolous=0, giving=0)
+        self.store.set_setting('plan_surplus', 100)
+        base = run_forecast(self.store, 90, 20)
+        planned = run_forecast(self.store, 90, 20, Scenario(follow_goal_plan=True))
+        extra = sum(-f.amount for f in planned.scheduled if f.source == 'loan') - \
+            sum(-f.amount for f in base.scheduled if f.source == 'loan')
+        self.assertGreater(extra, 0)
+        note = moved_money_note(planned, base, free=False)
+        self.assertIn(f'Includes ${extra:,.0f} more in loan payments', note)
+        self.assertEqual(moved_money_note(base, base, free=True), '')
+
+    def test_debt_cut_above_loan_payments_comes_out_of_the_other_debt_payments(self):
+        prior = add_months(self.today.replace(day=1), -1)
+        self.tx(4000, when=prior)
+        self.tx(-100, 'Debt payment', prior, 'loan payment')
+        self.tx(-50, 'Debt payment', prior, 'CARD MIN')
+        loan = self.store.add_account(Account('Loan', AccountType.LOAN, 2000, self.today,
+                                              monthly_payment=100))
+        self.store.merge_recurring([
+            RecurringItem('LOAN PAYMENT|-', 'Loan payment', 'monthly', -100, self.today,
+                          kind='loan_payment'),
+            RecurringItem('CARD MIN|-', 'Card min', 'monthly', -50, self.today, kind='loan_payment')])
+        item = next(it for it in self.store.recurring() if it.key == 'LOAN PAYMENT|-')
+        self.store.update_recurring(item.id, linked_account_id=loan)
+        self.store.save_spending_plan({}, 0)
+        unchanged = run_forecast(self.store, 90, 20, Scenario(follow_goal_plan=True))
+        self.store.save_spending_plan({'debt': 120}, 0)
+        cut = run_forecast(self.store, 90, 20, Scenario(follow_goal_plan=True))
+        self.assertAlmostEqual(cut.monthly_spending_reference['Debt payment'], 20)
+        card = lambda r: sum(f.amount for f in r.scheduled if f.label == 'Card min')
+        self.assertAlmostEqual(card(cut), card(unchanged) * 20 / 50)
+        self.assertEqual(calculate_plan(self.store).available - calculate_plan(self.store, {}).available, 30)
+
+    def test_recorded_payments_to_untracked_debt_are_not_extra_loan_principal(self):
+        prior = add_months(self.today.replace(day=1), -1)
+        self.tx(4000, when=prior)
+        self.tx(-100, 'Debt payment', prior, 'loan payment')
+        self.tx(-50, 'Debt payment', prior, 'card minimum')
+        loan = self.store.add_account(Account('Loan', AccountType.LOAN, 2000,
+            self.today, monthly_payment=100))
+        self.store.save_spending_plan({}, 0)
+        self.assertEqual(calculate_plan(self.store).amounts['debt'], 150)
+        self.assertEqual(build_plan(self.store, surplus=0).loan_payments[f'loan:{loan}'][0], 100)
+        self.store.save_spending_plan({'debt': 200}, 0)
+        self.assertEqual(build_plan(self.store, surplus=0).loan_payments[f'loan:{loan}'][0], 150)
 
     def test_planned_investing_moves_cash_to_assets_once(self):
         self.store.add_account(Account('Investing', AccountType.INVESTMENT, 1000,

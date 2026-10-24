@@ -57,6 +57,28 @@ def history_window(horizon_days: int) -> int:
                    max(HISTORY_MIN_DAYS, horizon_days * HISTORY_FRACTION)))
 
 
+def moved_money_note(res, base, free: bool) -> str:
+    """Name the cash a plan moves to debt, investments or earmarks.
+
+    Extra loan payments and contributions lower cash while raising net worth,
+    so a cash comparison alone reads them as the plan leaving you worse off.
+    """
+    def paid(result, source):
+        return sum(-f.amount for f in result.scheduled if f.source == source)
+
+    changes = [(paid(res, 'loan') - paid(base, 'loan'), 'in loan payments'),
+               (paid(res, 'investment') - paid(base, 'investment'), 'invested')]
+    if free and res.reserved_cash is not None and base.reserved_cash is not None:
+        changes.append((float(res.reserved_cash[-1] - base.reserved_cash[-1]),
+                        'set aside for goals and reserves'))
+    # Smaller totals (a loan cleared sooner pays less interest) explain no drop.
+    parts = [f"{fmt_money(amount)} more {what}" for amount, what in changes if amount >= 1]
+    if not parts:
+        return ""
+    return ("Includes " + ", ".join(parts) + ". Paying down debt, investing and "
+            "setting money aside lower cash without lowering net worth.")
+
+
 def _forecast_legend_entries(color, extras):
     labels = {"band80": "Middle 80% of outcomes", "band50": "Middle 50% of outcomes",
               "median": "Middle outcome"}
@@ -1913,7 +1935,7 @@ class ForecastPage(QWidget):
         self.analysis_note.setText(
             f"Bars show changes in ending net worth over {self.horizon.currentText()}, "
             "with one control changed at a time: income/spending by ±20%, or extra "
-            "payments/investing by $100/month (down to $0). Uses average inputs without "
+            "payments/investing by $200/month (down to $0). Uses average inputs without "
             f"random variation. {top.lever} has the largest spread: {fmt_money(top.swing)}.")
 
     def _render_backtest(self, p) -> None:
@@ -2180,7 +2202,7 @@ class ForecastPage(QWidget):
                     f"<td>{fmt_money(s.best, signed=True)}</td>"
                     f"<td>{fmt_money(s.swing)}</td></tr>")
             rows.append("</table><p class='m'>Each lever is moved ±20% (or "
-                        "±$100/month for the dollar levers, clipped at zero) with everything "
+                        "±$200/month for the dollar levers, clipped at zero) with everything "
                         "else held fixed, on the deterministic path only — "
                         "sensitivity is a question about the mean response, and "
                         "Monte Carlo noise would swamp the small differences "
@@ -2332,11 +2354,13 @@ class ForecastPage(QWidget):
             if original is not None:
                 ending, unchanged = float(series[-1]), float(original[-1])
                 comparison = "without the plan" if following else "unchanged"
+                moved = moved_money_note(res, base, free) if label is self.cash_compare else ""
                 label.setText(
                     f"Middle {name} outcome on {fmt_day(res.dates[-1])}: "
                     f"{fmt_money(ending)} with these controls · {fmt_money(unchanged)} {comparison} "
                     f"({fmt_money(ending - unchanged, signed=True)}).\n"
-                    f"Solid: these controls · dashed: unchanged controls"
+                    + (moved + "\n" if moved else "")
+                    + "Solid: these controls · dashed: unchanged controls"
                     + (" without the plan." if following else "."))
                 label.setToolTip(
                     "The middle outcome is the median: half the simulated balances are "
@@ -2382,7 +2406,8 @@ class ForecastPage(QWidget):
                                       "Choose a longer period or import recent data.")
         if res.spending_plan_applied:
             self.history_note.setText(self.history_note.text() + ' Saved monthly Plan applied. '
-                'Existing bill dates and spending variation are scaled to the budget. '
+                'Lines you changed move this forecast by the same monthly amount; other lines '
+                'keep its own estimates. Bill dates and spending variation are kept. '
                 'Amounts without usable history are spread evenly across days.')
         base: ForecastResult | None = None
         if self.overlay.isChecked() and (scenario.follow_goal_plan or not scenario.is_baseline() or not scenario.snowball):

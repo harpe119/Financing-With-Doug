@@ -93,6 +93,7 @@ class GoalFundingDialog(QDialog):
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.setTabKeyNavigation(False)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self.table.verticalHeader().hide()
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
@@ -252,18 +253,22 @@ class GoalFundingDialog(QDialog):
         if self._read_failed:
             self.error.setText('Activity saved. ' + self.error.text())
 
-    def _selected_activity(self):
+    def _selected_row(self):
         rows = {i.row() for i in self.table.selectedItems()}
-        if len(rows) != 1:
-            return None
-        item = self.table.item(rows.pop(), 0)
+        return rows.pop() if len(rows) == 1 else None
+
+    def _selected_activity(self):
+        row = self._selected_row()
+        item = self.table.item(row, 0) if row is not None else None
         return item.data(Qt.ItemDataRole.UserRole) if item is not None else None
 
     def _delete(self):
         activity_id = self._selected_activity()
         if activity_id is None:
             return
-        row = self.table.currentRow()
+        # Name the same row that is deleted: the current cell can differ from
+        # the selection.
+        row = self._selected_row()
         what = ' · '.join(self.table.item(row, c).text() for c in (0, 1, 2))
         from .accounts import confirm
         if not confirm(self, 'Delete activity',

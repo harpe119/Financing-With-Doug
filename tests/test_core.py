@@ -179,7 +179,8 @@ def main() -> None:
     base_loan = r.loans[0]
     r2 = run_forecast(store, 365 * 3, 200, Scenario(extra_loan_payment=300), seed=3)
     check("extra payment shortens payoff and cuts interest",
-          r2.loans[0].payoff < base_loan.payoff
+          r2.loans[0].payoff is not None
+          and (base_loan.payoff is None or r2.loans[0].payoff < base_loan.payoff)
           and r2.loans[0].interest_paid < base_loan.interest_paid)
     r3 = run_forecast(store, 365 * 3, 200,
                       Scenario(category_multipliers={"Dining": 0.0}), seed=3)
@@ -3033,6 +3034,11 @@ def main() -> None:
     from test_goal_hardening import run_tests as run_goal_hardening_tests
     if not run_goal_hardening_tests().wasSuccessful():
         raise AssertionError("goal hardening regressions failed")
+
+    print("import parsing, schedule, projected debt and deleted-id regressions")
+    from test_integrity import run_tests as run_integrity_tests
+    if not run_integrity_tests().wasSuccessful():
+        raise AssertionError("integrity regressions failed")
 
     print("\nall tests passed")
 

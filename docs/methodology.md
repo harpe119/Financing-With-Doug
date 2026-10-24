@@ -285,13 +285,22 @@ sliders or schedule bank transfers. Historical purchases covered by a reserve ma
 override; Doug does not automatically remove those transactions from analytics.
 
 With **Use Goals funding plan** selected, Forecast applies the saved monthly
-budget as well as the Goals ladder. For each spending group, its planned total
-is distributed using the plan's category mix, falling back to the forecast's
-mix when complete-month evidence is absent. Group refunds remain reflected in
-the total. Recurring and sampled-week amounts for each category are scaled by
-planned monthly spending divided by their combined monthly reference; income
-is scaled in the same way. Existing dates and cross-category weekly samples
-are retained. With no positive reference, the amount becomes a uniform daily
+budget as well as the Goals ladder. The plan's complete-month amounts and the
+forecast's paydays, bills and recent weeks estimate the same habits in
+different ways, so the plan is applied as a change rather than a replacement.
+A line without an override keeps the forecast's own monthly reference: an
+unchanged plan reproduces the forecast without it. An overridden line with
+detected history moves the forecast's reference by the same dollars it moves
+the plan (planned minus detected, floored at zero), which is also what the cut
+adds to the plan's available money. A changed group total scales every
+forecast category in the group by one factor; category overrides change only
+their own category. A planned $0 removes the spending. A line with no detected
+history is a manual budget and replaces the reference; a group total of that
+kind is distributed using the plan's category mix, falling back to the
+forecast's mix. Recurring and sampled-week amounts for each category are
+scaled by its planned amount divided by its monthly reference; income is
+scaled in the same way. Existing dates and cross-category weekly samples are
+retained. With no positive reference, the amount becomes a uniform daily
 flow using 30.44 days/month. This supplies a planning assumption without
 inventing a bill date or historical variability. Scenario multipliers apply on
 top. Investment contributions follow the saved budget across existing investment
@@ -308,8 +317,11 @@ priority changes and payments freed after payoff. It uses the saved allowance
 when present and detected spare money otherwise. Required loan amounts retain
 the forecast's selected recurring-history inputs; linked payments are summed
 at their monthly cadence without adding the Accounts fallback again. A saved
-regular-debt budget above these obligations adds payments in proportion to the
-existing commitments, or balances if no commitments exist. Both Goals and
+regular-debt budget above both these obligations and the detected debt line
+adds payments in proportion to the existing commitments, or balances if no
+commitments exist. Recorded payments to debts that are not tracked loans, such
+as a card minimum, are part of the detected line, so leaving it unchanged never
+adds extra principal. Both Goals and
 Forecast use that allocation. A lower budget never reduces existing loan
 obligations; the shortfall remains visible on Plan and is flagged in Forecast.
 Each loan's monthly cycles are placed on its next future payment date, then

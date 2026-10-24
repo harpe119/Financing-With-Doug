@@ -24,8 +24,8 @@ Layered projection over a daily grid t = 0..H (day 0 = today):
    multipliers, and spread the total evenly over the 7 days. Irregular
    income is bootstrapped the same way.
 
-Net worth = cash + investments - loan balances, with percentile bands taken
-across paths at each t.
+Net worth = cash + investments - loan balances - credit-card balances (held
+flat), with percentile bands taken across paths at each t.
 """
 from __future__ import annotations
 
@@ -36,7 +36,8 @@ import numpy as np
 import pandas as pd
 
 from .categorize import categorize
-from .history import current_accounts, networth_history, weekly_category_matrix
+from .history import (account_balance_history, current_accounts, networth_history,
+                      weekly_category_matrix)
 from .forecast_history import ForecastHistory, SETTING as HISTORY_SETTING
 from .cache import cached_read
 from .models import Account, AccountType, Goal, RecurringItem, Scenario
@@ -491,7 +492,35 @@ def _prepared_history(store, today, history, recurring_override):
     saved = personal_recurring(ledger, saved, as_of=today)
     known_keys = {it.key for it in saved}
     items, warnings = history.patterns(tx, saved, today)
-    return tx, items, known_keys, warnings
+    return tx, items, known_keys, warnings, _pattern_categories(ledger, today)
+
+
+def _pattern_categories(ledger: pd.DataFrame, today: date) -> dict[str, str]:
+    """Each pattern key's most common ledger category, on or before ``today``.
+
+    The plan, sampled weeks and Insights use ledger categories, including your
+    corrections. Guessing a bill's category from its display name instead put
+    a card minimum under Misc while the plan budgeted it as a debt payment.
+    """
+    from .recurrence import normalize_desc
+    rows = ledger[ledger["date"] <= pd.Timestamp(today)]
+    if rows.empty:
+        return {}
+    keys = [f"{normalize_desc(d)}|{'+' if a > 0 else '-'}"
+            for d, a in zip(rows["description"], rows["amount"])]
+    return (pd.DataFrame({"key": keys, "category": rows["category"].values})
+            .groupby("key")["category"].agg(lambda c: c.value_counts().index[0]).to_dict())
+
+
+def _flow_category(it: RecurringItem, categories: dict[str, str]) -> str:
+    """The spending category a recurring flow is reported and scaled under."""
+    from .insights import bucket_of
+    if it.kind == "loan_payment":
+        return "Debt payment"
+    ledger = categories.get(it.key)
+    if ledger and bucket_of(ledger) in ("essential", "frivolous", "giving"):
+        return ledger
+    return categorize(it.name, it.amount)
 
 
 @cached_read
@@ -564,7 +593,7 @@ def run_forecast(store: Store, horizon_days: int, n_paths: int,
     today = as_of or date.today()
     follow_goals = scenario.follow_goal_plan and as_of is None
     history = history or ForecastHistory.from_setting(store.get_setting(HISTORY_SETTING))
-    tx, all_items, known_keys, history_warnings = _prepared_history(
+    tx, all_items, known_keys, history_warnings, pattern_categories = _prepared_history(
         store, today, history, recurring_override)
     H = int(horizon_days)
     n = H + 1                                  # index 0 = today
@@ -586,21 +615,38 @@ def run_forecast(store: Store, horizon_days: int, n_paths: int,
         ts = pd.Timestamp(as_of)
         cash0 = float(hist["cash"].asof(ts)) if ts >= hist.index[0] else \
             float(hist["cash"].iloc[0])
+    # Loans and cards start from what was owed on the start date. A backtest
+    # amortizing today's smaller loan paid it off early and dropped real
+    # payments from the scored cash.
+    if as_of is None:
+        start_balance = {a.id: float(a.balance) for a in accounts}
+    else:
+        frame = account_balance_history(store)
+        ts = pd.Timestamp(as_of)
+        start_balance = {a.id: (float(frame[a.id].asof(ts)) if ts >= frame.index[0]
+                                and a.id in frame else 0.0) for a in accounts}
+    # Card balances are debt in history and the headline. The projection holds
+    # them flat; leaving them out made net worth jump at today.
+    card_debt0 = sum(max(0.0, -start_balance[a.id]) for a in accounts
+                     if a.type == AccountType.CREDIT)
 
     warnings.extend(history_warnings)
     items = [it for it in all_items if it.active and it.kind != "ignore"]
     loan_accounts = {a.id: a for a in accounts if a.type == AccountType.LOAN}
     linked_payments: dict[int, list[RecurringItem]] = {}
     flow_items: list[RecurringItem] = []
+    uncovered = set(loan_accounts) - {it.linked_account_id for it in items
+                                      if it.kind == "loan_payment" and it.amount < 0}
     for it in items:
         if it.kind == "loan_payment" and it.linked_account_id in loan_accounts:
             if it.amount < 0:
                 linked_payments.setdefault(it.linked_account_id, []).append(it)
-        elif it.kind == "loan_payment" and loan_accounts:
+        elif it.kind == "loan_payment" and uncovered:
             # An unlinked loan payment is almost certainly the same money the
-            # amortization engine is already withdrawing for one of the loan
-            # accounts. Replaying it here as well double-charged cash every
-            # month. Drop it and tell the user to link it explicitly.
+            # amortization engine is already withdrawing for a loan account
+            # without a linked payment. Replaying it here as well double-charged
+            # cash every month. Drop it and tell the user to link it explicitly.
+            # When every loan has its payment, it pays something else (a card).
             warnings.append(
                 f"“{it.name}” looks like a loan payment but isn't linked to a "
                 f"loan account, so it was left out of the cash projection to "
@@ -634,7 +680,7 @@ def run_forecast(store: Store, horizon_days: int, n_paths: int,
     monthly_spending_reference: dict[str, float] = {}
     for it in flow_items:
         if it.kind != "income" and it.amount < 0:
-            cat = categorize(it.name, it.amount)
+            cat = _flow_category(it, pattern_categories)
             monthly_spending_reference[cat] = (monthly_spending_reference.get(cat, 0.0)
                                              - it.amount * (30.44 / _cad_days(it)))
     if wts is not None:
@@ -646,22 +692,34 @@ def run_forecast(store: Store, horizon_days: int, n_paths: int,
     category_factors = dict(scenario.category_multipliers)
     base_flow = np.zeros(n)
     if spending_plan is not None:
-        from .spending_plan import forecast_targets
+        from .spending_plan import forecast_targets, planned_line
+        # Lines the plan leaves alone keep this forecast's own estimates, so an
+        # unchanged plan matches the forecast without one and a cut raises it.
         planned = forecast_targets(spending_plan, monthly_spending_reference)
-        # Without tracked loans, a budgeted debt payment is a cash outflow;
-        # tracked loans are handled once by the amortization engine below.
+        # Without tracked loans, a budgeted debt payment is a cash outflow.
+        # Tracked loans are paid once by the amortization engine below, with
+        # any increase as extra principal; their remaining debt flows (a card
+        # payment) stay as forecast, as without a plan.
         if not loan_accounts:
-            planned['Debt payment'] = spending_plan.amounts['debt']
-        else:
-            planned['Debt payment'] = 0.0
-        desired_income = spending_plan.amounts['income']
+            planned['Debt payment'] = planned_line(
+                spending_plan, 'debt', monthly_spending_reference.get('Debt payment', 0.0))
+        elif 'debt' in spending_plan.overrides:
+            # A cut no lower than the loan obligations comes out of the other
+            # debt payments, as it frees the same money on Plan.
+            cut = spending_plan.detected['debt'] - max(spending_plan.amounts['debt'],
+                                                       spending_plan.required_debt)
+            other = monthly_spending_reference.get('Debt payment', 0.0)
+            if cut > 0 and other > 0:
+                planned['Debt payment'] = max(0.0, other - cut)
+        desired_income = planned_line(spending_plan, 'income', monthly_income_reference)
         if monthly_income_reference > 0:
             income_factor *= desired_income / monthly_income_reference
         else:
             base_flow[1:] += desired_income * income_factor / 30.44
-        for cat in sorted(set(planned) | set(monthly_spending_reference)):
-            target = planned.get(cat, 0.0)
+        for cat, target in sorted(planned.items()):
             reference = monthly_spending_reference.get(cat, 0.0)
+            if abs(target - reference) <= _EPS:
+                continue
             adjustment = scenario.category_multipliers.get(cat, 1.0)
             if reference > 0:
                 category_factors[cat] = adjustment * target / reference
@@ -669,7 +727,7 @@ def run_forecast(store: Store, horizon_days: int, n_paths: int,
                 category_factors[cat] = 0.0
                 base_flow[1:] -= target * adjustment / 30.44
         monthly_income_reference = desired_income
-        monthly_spending_reference = planned
+        monthly_spending_reference = {**monthly_spending_reference, **planned}
         if spending_plan.remaining(store.get_setting('plan_surplus') or 0) < -.005:
             warnings.append('The saved monthly Plan allocates more than its income. '
                             'Goal allocations are intentions, not evidence that the cash is available.')
@@ -678,7 +736,7 @@ def run_forecast(store: Store, horizon_days: int, n_paths: int,
     monthly_net = 0.0
     for it in flow_items:
         factor = income_factor if it.kind == 'income' else category_factors.get(
-            categorize(it.name, it.amount), 1.0)
+            _flow_category(it, pattern_categories), 1.0)
         amt = it.amount * factor
         monthly_net += amt * (30.44 / _cad_days(it))
         for d in occurrences(it, today, end):
@@ -700,7 +758,7 @@ def run_forecast(store: Store, horizon_days: int, n_paths: int,
         else:
             pay = a.monthly_payment
             day = a.payment_day
-        b0 = abs(a.balance)
+        b0 = abs(start_balance[a.id])
         if pay <= 0 and b0 > 0 and not follow_goals:
             r = a.apr / 12.0
             pay = b0 * r / (1 - (1 + r) ** -60) if r > 0 else b0 / 60.0
@@ -710,7 +768,7 @@ def run_forecast(store: Store, horizon_days: int, n_paths: int,
             )
         sim_loans.append({
             "acct": a, "bal": b0, "r": a.apr / 12.0, "base": pay, "day": int(day),
-            "payoff": None, "interest": 0.0, "events": [],
+            "payoff": None, "interest": 0.0, "events": [], "b0": b0,
         })
 
     goal_plan = None
@@ -764,7 +822,7 @@ def run_forecast(store: Store, horizon_days: int, n_paths: int,
                 if l["bal"] <= _EPS:
                     continue
                 pdate = clamp_day(y, m, l["day"])
-                if pdate <= today:
+                if pdate <= today or pdate > end:
                     continue
                 interest = l["bal"] * l["r"]
                 l["bal"] += interest
@@ -772,11 +830,10 @@ def run_forecast(store: Store, horizon_days: int, n_paths: int,
                 pay = l["base"] + (pool if l is first_unpaid else 0.0)
                 pay = min(pay, l["bal"])
                 l["bal"] -= pay
-                if pdate <= end:
-                    base_flow[idx(pdate)] -= pay
-                    if pay > _EPS:
-                        scheduled.append(ScheduledFlow(l['acct'].name, pdate, -pay, 'loan'))
-                    l["events"].append((idx(pdate), l["bal"]))
+                base_flow[idx(pdate)] -= pay
+                if pay > _EPS:
+                    scheduled.append(ScheduledFlow(l['acct'].name, pdate, -pay, 'loan'))
+                l["events"].append((idx(pdate), l["bal"]))
                 if l["bal"] <= _EPS and l["payoff"] is None:
                     l["payoff"] = pdate
                     if scenario.snowball:
@@ -784,7 +841,7 @@ def run_forecast(store: Store, horizon_days: int, n_paths: int,
             nxt = add_months(date(y, m, 1), 1)
             y, m = nxt.year, nxt.month
     for l in sim_loans:
-        arr = np.full(n, abs(l["acct"].balance))
+        arr = np.full(n, l["b0"])
         for i, b in sorted(l["events"]):
             arr[i:] = b
         loan_daily_total += arr
@@ -827,7 +884,7 @@ def run_forecast(store: Store, horizon_days: int, n_paths: int,
                      if observed_contributions else float(k == 0))
             planned_contrib = spending_plan.amounts['investing'] * share
         contrib = planned_contrib + (total_extra if k == 0 else 0.0)
-        V0 = float(a.balance)
+        V0 = float(start_balance[a.id])
         mu, sig = a.annual_return, a.volatility
         # deterministic (sigma = 0)
         det_vals = np.empty(n_ev)
@@ -926,8 +983,8 @@ def run_forecast(store: Store, horizon_days: int, n_paths: int,
         [np.zeros((n_paths, 1)),
          np.cumsum(base_flow[None, 1:] + disc_paths, axis=1)], axis=1)
 
-    networth_det = cash_det + inv_det_daily - loan_daily_total
-    networth_paths = cash_paths + inv_paths_daily - loan_daily_total[None, :]
+    networth_det = cash_det + inv_det_daily - loan_daily_total - card_debt0
+    networth_paths = cash_paths + inv_paths_daily - loan_daily_total[None, :] - card_debt0
 
     # Partition each path matrix once for all requested percentiles.
     networth_pct = dict(zip(PCTS, np.percentile(networth_paths, PCTS, axis=0)))
@@ -1078,6 +1135,7 @@ def scheduled_flows(store: Store, start: date, end: date,
     ledger = store.transactions()
     patterns = personal_recurring(ledger, store.recurring())
     patterns, _ = history.patterns(ledger, patterns, date.today())
+    categories = _pattern_categories(ledger, date.today())
 
     # Only *active* patterns count as covering a loan, exactly as the
     # projection decides it. Deactivating a detected payment does not stop the
@@ -1087,30 +1145,51 @@ def scheduled_flows(store: Store, start: date, end: date,
     linked = {it.linked_account_id for it in patterns
               if it.kind == "loan_payment" and it.active
               and it.linked_account_id is not None}
+    # Balances each loan's payments run against, so a schedule stops at payoff
+    # as the projection's amortization does.
+    owed = {a.id: [abs(a.balance), a.apr / 12.0] for a in current_accounts(store)
+            if a.type == AccountType.LOAN}
+
+    def pays(account_id: int, when: date, amount: float) -> float:
+        state = owed.get(account_id)
+        if state is None or when <= date.today():
+            return amount
+        if state[0] <= _EPS:
+            return 0.0
+        state[0] += state[0] * state[1]
+        paid = min(abs(amount), state[0])
+        state[0] -= paid
+        return -paid
     for it in patterns:
         if not it.active or it.kind == "ignore":
             continue
-        if it.kind == "loan_payment" and loans and it.linked_account_id not in loans:
+        if (it.kind == "loan_payment" and it.linked_account_id not in loans
+                and set(loans) - linked):
             continue                 # dropped by the projection too, as a double-count
         if it.kind == "income":
             amt = it.amount * scenario.income_multiplier
         else:
             amt = it.amount * scenario.category_multipliers.get(
-                categorize(it.name, it.amount), 1.0)
+                _flow_category(it, categories), 1.0)
         src = "loan" if it.kind == "loan_payment" else "recurring"
-        for d in occurrences(it, start - timedelta(days=1), end):
-            out.append(ScheduledFlow(it.name, d, amt, src, item_id=it.id))
+        # A loan payment amortizes from today even when the window opens later.
+        first = min(start, date.today()) if it.kind == "loan_payment" else start
+        for d in occurrences(it, first - timedelta(days=1), end):
+            paid = pays(it.linked_account_id, d, amt) if it.kind == "loan_payment" else amt
+            if d >= start and paid:
+                out.append(ScheduledFlow(it.name, d, paid, src, item_id=it.id))
 
     # Loans with no detected payment: the projection amortises them anyway, so
     # they have to appear here or the largest outflow of the month is missing.
     for a in loans.values():
         if a.id in linked or a.monthly_payment <= 0:
             continue
-        d = clamp_day(start.year, start.month, int(a.payment_day))
+        first = min(start, date.today())
+        d = clamp_day(first.year, first.month, int(a.payment_day))
         while d <= end:
-            if d >= start:
-                out.append(ScheduledFlow(a.name, d, -abs(a.monthly_payment),
-                                         "loan"))
+            paid = pays(a.id, d, -abs(a.monthly_payment))
+            if d >= start and paid:
+                out.append(ScheduledFlow(a.name, d, paid, "loan"))
             nxt = add_months(date(d.year, d.month, 1), 1)
             d = clamp_day(nxt.year, nxt.month, int(a.payment_day))
 
@@ -1290,13 +1369,15 @@ def backtest_cash(store: Store, lookback_days: int = 365,
     explicitly: recurring patterns are re-detected from transactions on or
     before the as-of date rather than reusing today's (which were fitted with
     knowledge of the very period being predicted), the behavioural bootstrap is
-    truncated the same way, and the starting cash balance is read from the
-    reconstructed history at that date instead of today's balance.
+    truncated the same way, and starting balances are read from the
+    reconstructed history at that date instead of today's balances. Your own
+    classifications of re-detected patterns (kind and loan link) are kept: they
+    describe what a payment is. Whether it is still active is not kept, since
+    ending a bill is knowledge of how the period turned out.
 
-    A leak that is *not* closed: loan and investment balances are current-day,
-    because the app doesn't retain a full balance history for them. That
-    inflates accuracy for net worth, which is why only cash is scored here —
-    cash is exactly reconstructable from the transaction ledger.
+    Loan and investment history is interpolated between snapshots, so it is
+    less exact than cash, which is reconstructable from the transaction ledger.
+    Only cash is scored here.
     """
     hist = networth_history(store)
     if len(hist) < 60:
@@ -1320,7 +1401,10 @@ def backtest_cash(store: Store, lookback_days: int = 365,
     # Learn known keys from the full past. run_forecast applies an optional
     # refit to the selected period, while still withholding absent known
     # schedules from its random sample. No future transactions enter either.
-    items = detect(past)
+    saved = {it.key: it for it in store.recurring()}
+    items = [replace(it, kind=saved[it.key].kind,
+                     linked_account_id=saved[it.key].linked_account_id)
+             if it.key in saved else it for it in detect(past)]
 
     H = int(horizon_days or lookback_days)
     res = run_forecast(store, H, n_paths, as_of=as_of,

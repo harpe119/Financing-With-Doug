@@ -192,7 +192,8 @@ class PlanPage(QWidget):
             self.checks[key].setChecked(key in overrides)
             self.boxes[key].setValue(draft_plan.amounts[key])
             self.boxes[key].setEnabled(key in overrides)
-        self._default_allowance = max(0.0, plan.available)
+        # What Goals plans with while no allowance is chosen.
+        self._default_allowance = surplus_monthly(self.store)
         self._loading = False
         self._dirty = overrides != plan.overrides
         self._render()
@@ -255,10 +256,13 @@ class PlanPage(QWidget):
         stored = self.store.get_setting('plan_surplus')
         available = max(0.0, plan.available)
         if stored is None:
+            source = ('what your saved budget leaves after spending, reserves and investing'
+                      if self.store.get_setting('spending_plan') is not None else
+                      'income minus spending from history, before reserves and investing')
             self.allowance_line.setText(
                 f'No allowance is chosen yet, so Goals is planning with '
-                f'{dollars(surplus_monthly(self.store))} a month (income minus spending, '
-                f'before reserves and investing). This budget leaves {dollars(available)}.')
+                f'{dollars(surplus_monthly(self.store))} a month ({source}). '
+                f'This budget leaves {dollars(available)}.')
         else:
             self.allowance_line.setText(
                 f'Your allowance is {dollars(budget)} a month. Change it on the Goals tab. '
